@@ -378,7 +378,9 @@ Result SurfaceImpl::acquireNextImage(ITexture** outTexture)
     // Setup queue's next submit for synchronization with the swapchain.
     m_device->m_queue->m_surfaceSync.fence = frameData.fence;
     m_device->m_queue->m_surfaceSync.imageAvailableSemaphore = frameData.imageAvailableSemaphore;
-    m_device->m_queue->m_surfaceSync.renderFinishedSemaphore = frameData.renderFinishedSemaphore;
+    // TextureIndex needs to be used to index the renderFinishedSemaphore to prevent data race caused by acquire the same image
+    auto& renderFinishedSemaphore = m_frameData[m_currentTextureIndex].renderFinishedSemaphore;
+    m_device->m_queue->m_surfaceSync.renderFinishedSemaphore = renderFinishedSemaphore;
 
     // Mark texture to be in swapchain initial state.
     // This is used by the first image barrier to transition the texture from the correct state.
@@ -397,8 +399,9 @@ Result SurfaceImpl::present()
         return SLANG_FAIL;
     }
 
-    FrameData& frameData = m_frameData[m_currentFrameIndex];
     m_currentFrameIndex = (m_currentFrameIndex + 1) % m_frameData.size();
+    // TextureIndex needs to be used to index the renderFinishedSemaphore to prevent data race caused by acquire the same image
+    auto renderFinishedSemaphore = m_frameData[m_currentTextureIndex].renderFinishedSemaphore;
 
     // If no submit has taken place yet, then we need to submit a dummy command buffer to transition the texture to the
     // correct state.
@@ -417,7 +420,7 @@ Result SurfaceImpl::present()
     presentInfo.pSwapchains = &m_swapchain;
     presentInfo.pImageIndices = &m_currentTextureIndex;
     presentInfo.waitSemaphoreCount = 1;
-    presentInfo.pWaitSemaphores = &frameData.renderFinishedSemaphore;
+    presentInfo.pWaitSemaphores = &renderFinishedSemaphore;
     if (m_currentTextureIndex != -1)
     {
         api.vkQueuePresentKHR(m_device->m_queue->m_queue, &presentInfo);
