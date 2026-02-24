@@ -200,10 +200,42 @@ Result ShaderObjectLayoutImpl::Builder::setElementTypeLayout(slang::TypeLayoutRe
 
         m_subObjectRanges.push_back(subObjectRange);
 
-        if (subObjectLayout && slangBindingType != slang::BindingType::ParameterBlock)
+        // Compute the number of buffer/texture/sampler slots consumed by this
+        // sub-object range so that m_totalResourceCount reflects all binding
+        // indices that bindAsRoot / bindAsValue will actually write to.
+        //
+        // For ConstantBuffer ranges, bindAsConstantBuffer writes one buffer
+        // for ordinary data at subObjectRange.offset.buffer, then the element
+        // layout's own resources follow.
+        //
+        // For ParameterBlock ranges, bindAsParameterBlock writes one argument
+        // buffer at subObjectRange.offset.buffer.  The contents of the
+        // argument buffer are indirect and do not occupy additional top-level
+        // binding slots.
+        //
+        uint32_t bindingCount = m_bindingRanges[bindingRangeIndex].count;
+        BindingOffset rangeEnd = subObjectRange.offset;
+
+        if (slangBindingType == slang::BindingType::ParameterBlock)
         {
-            m_totalResourceCount += subObjectLayout->m_totalResourceCount;
+            // Each ParameterBlock uses exactly one buffer slot (the argument buffer).
+            rangeEnd.buffer += bindingCount;
         }
+        else if (subObjectLayout)
+        {
+            // ConstantBuffer / other: one buffer for ordinary data, plus the
+            // sub-object's own resources, per element in the range.
+            BindingOffset perElement;
+            perElement.buffer = 1; // ordinary data buffer
+            perElement += subObjectLayout->m_totalResourceCount;
+            rangeEnd.buffer += perElement.buffer * bindingCount;
+            rangeEnd.texture += perElement.texture * bindingCount;
+            rangeEnd.sampler += perElement.sampler * bindingCount;
+        }
+
+        m_totalResourceCount.buffer = max(m_totalResourceCount.buffer, rangeEnd.buffer);
+        m_totalResourceCount.texture = max(m_totalResourceCount.texture, rangeEnd.texture);
+        m_totalResourceCount.sampler = max(m_totalResourceCount.sampler, rangeEnd.sampler);
     }
     return SLANG_OK;
 }
