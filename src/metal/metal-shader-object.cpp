@@ -57,9 +57,6 @@ Result BindingDataBuilder::bindAsRoot(
     BindingDataImpl*& outBindingData
 )
 {
-    // Create a new set of binding data to populate.
-    // TODO: In the future we should lookup the cache for existing
-    // binding data and reuse that if possible.
     BindingDataImpl* bindingData = m_allocator->allocate<BindingDataImpl>();
     m_bindingData = bindingData;
 
@@ -180,12 +177,24 @@ Result BindingDataBuilder::bindAsParameterBlock(
     if (!m_device->m_hasArgumentBufferTier2)
         return SLANG_FAIL;
 
+    // Check cache for unchanged parameter block sub-objects.
+    // If the entire sub-object tree hasn't changed, we can reuse the previous
+    // argument buffer without creating a new GPU buffer allocation.
+    uint32_t subTreeVersion = shaderObject->getSubTreeVersion();
+    auto* cached = m_bindingCache->lookup(shaderObject->m_uid, subTreeVersion, specializedLayout);
+    if (cached && cached->argumentBuffer)
+    {
+        SLANG_RETURN_ON_FAIL(setBuffer(m_bindingData, inOffset.buffer, cached->argumentBuffer->m_buffer.get()));
+        return SLANG_OK;
+    }
+
     BufferImpl* argumentBuffer = nullptr;
     SLANG_RETURN_ON_FAIL(writeArgumentBuffer(shaderObject, specializedLayout, argumentBuffer));
 
     if (argumentBuffer)
     {
         SLANG_RETURN_ON_FAIL(setBuffer(m_bindingData, inOffset.buffer, argumentBuffer->m_buffer.get()));
+        m_bindingCache->store(shaderObject->m_uid, subTreeVersion, specializedLayout, argumentBuffer);
     }
 
     return SLANG_OK;

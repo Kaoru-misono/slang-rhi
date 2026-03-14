@@ -210,6 +210,11 @@ GPUDescriptorRangeAllocation GPUDescriptorHeap::allocate(uint32_t count)
 
 void GPUDescriptorHeap::free(const GPUDescriptorRangeAllocation& allocation)
 {
+    if (!allocation.isValid())
+    {
+        return;
+    }
+
     std::lock_guard<std::mutex> lock(m_mutex);
 
     SLANG_RHI_ASSERT(allocation.heapOffset);

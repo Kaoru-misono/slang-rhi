@@ -95,11 +95,53 @@ struct BindingDataImpl : BindingData
     uint32_t usedRWResourceCapacity;
 };
 
+/// Cache for parameter block argument buffers to avoid redundant GPU buffer allocations.
+/// Metal's writeArgumentBuffer creates a new MTL::Buffer per call (expensive).
+/// If the entire sub-object tree is unchanged (same `getSubTreeVersion()`), we can
+/// reuse the argument buffer from a previous draw.
 struct BindingCache
 {
+    static constexpr uint32_t kMaxEntries = 16;
+
+    struct Entry
+    {
+        uint32_t objectUid;
+        uint32_t subTreeVersion;
+        ShaderObjectLayoutImpl* layout;
+        BufferImpl* argumentBuffer;
+    };
+
+    Entry entries[kMaxEntries] = {};
+    uint32_t entryCount = 0;
+
+    // Argument buffers must be kept alive for the command buffer's lifetime.
     std::vector<RefPtr<BufferImpl>> buffers;
 
-    void reset() { buffers.clear(); }
+    Entry* lookup(uint32_t objectUid, uint32_t subTreeVersion, ShaderObjectLayoutImpl* layout)
+    {
+        for (uint32_t i = 0; i < entryCount; ++i)
+        {
+            if (entries[i].objectUid == objectUid && entries[i].subTreeVersion == subTreeVersion &&
+                entries[i].layout == layout)
+                return &entries[i];
+        }
+        return nullptr;
+    }
+
+    void store(uint32_t objectUid, uint32_t subTreeVersion, ShaderObjectLayoutImpl* layout,
+               BufferImpl* argumentBuffer)
+    {
+        if (entryCount < kMaxEntries)
+        {
+            entries[entryCount++] = {objectUid, subTreeVersion, layout, argumentBuffer};
+        }
+    }
+
+    void reset()
+    {
+        entryCount = 0;
+        buffers.clear();
+    }
 };
 
 } // namespace rhi::metal
