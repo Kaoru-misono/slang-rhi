@@ -897,6 +897,48 @@ void DebugCommandEncoder::globalBarrier()
     baseObject->globalBarrier();
 }
 
+void DebugCommandEncoder::releaseBufferForQueue(IBuffer* buffer, ResourceState currentState, QueueType dstQueue)
+{
+    SLANG_RHI_API_FUNC;
+    requireOpen();
+    requireNoPass();
+    baseObject->releaseBufferForQueue(buffer, currentState, dstQueue);
+}
+
+void DebugCommandEncoder::releaseTextureForQueue(
+    ITexture* texture,
+    SubresourceRange subresourceRange,
+    ResourceState currentState,
+    QueueType dstQueue
+)
+{
+    SLANG_RHI_API_FUNC;
+    requireOpen();
+    requireNoPass();
+    baseObject->releaseTextureForQueue(texture, subresourceRange, currentState, dstQueue);
+}
+
+void DebugCommandEncoder::acquireBufferFromQueue(IBuffer* buffer, ResourceState desiredState, QueueType srcQueue)
+{
+    SLANG_RHI_API_FUNC;
+    requireOpen();
+    requireNoPass();
+    baseObject->acquireBufferFromQueue(buffer, desiredState, srcQueue);
+}
+
+void DebugCommandEncoder::acquireTextureFromQueue(
+    ITexture* texture,
+    SubresourceRange subresourceRange,
+    ResourceState desiredState,
+    QueueType srcQueue
+)
+{
+    SLANG_RHI_API_FUNC;
+    requireOpen();
+    requireNoPass();
+    baseObject->acquireTextureFromQueue(texture, subresourceRange, desiredState, srcQueue);
+}
+
 void DebugCommandEncoder::pushDebugGroup(const char* name, const MarkerColor& color)
 {
     SLANG_RHI_API_FUNC;

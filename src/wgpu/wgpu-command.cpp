@@ -88,6 +88,10 @@ public:
     void cmdSetBufferState(const commands::SetBufferState& cmd);
     void cmdSetTextureState(const commands::SetTextureState& cmd);
     void cmdGlobalBarrier(const commands::GlobalBarrier& cmd);
+    void cmdReleaseBufferForQueue(const commands::ReleaseBufferForQueue& cmd);
+    void cmdReleaseTextureForQueue(const commands::ReleaseTextureForQueue& cmd);
+    void cmdAcquireBufferFromQueue(const commands::AcquireBufferFromQueue& cmd);
+    void cmdAcquireTextureFromQueue(const commands::AcquireTextureFromQueue& cmd);
     void cmdPushDebugGroup(const commands::PushDebugGroup& cmd);
     void cmdPopDebugGroup(const commands::PopDebugGroup& cmd);
     void cmdInsertDebugMarker(const commands::InsertDebugMarker& cmd);
@@ -794,6 +798,11 @@ void CommandRecorder::cmdGlobalBarrier(const commands::GlobalBarrier& cmd)
     SLANG_UNUSED(cmd);
 }
 
+void CommandRecorder::cmdReleaseBufferForQueue(const commands::ReleaseBufferForQueue& cmd) { SLANG_UNUSED(cmd); }
+void CommandRecorder::cmdReleaseTextureForQueue(const commands::ReleaseTextureForQueue& cmd) { SLANG_UNUSED(cmd); }
+void CommandRecorder::cmdAcquireBufferFromQueue(const commands::AcquireBufferFromQueue& cmd) { SLANG_UNUSED(cmd); }
+void CommandRecorder::cmdAcquireTextureFromQueue(const commands::AcquireTextureFromQueue& cmd) { SLANG_UNUSED(cmd); }
+
 void CommandRecorder::cmdPushDebugGroup(const commands::PushDebugGroup& cmd)
 {
     if (m_renderPassActive)
@@ -973,7 +982,7 @@ Result CommandQueueImpl::getNativeHandle(NativeHandle* outHandle)
 
 Result DeviceImpl::getQueue(QueueType type, ICommandQueue** outQueue)
 {
-    if (type == QueueType::Compute)
+    if (type == QueueType::Compute || type == QueueType::Transfer)
         return SLANG_E_NOT_AVAILABLE;
     if (type != QueueType::Graphics)
         return SLANG_E_INVALID_ARG;

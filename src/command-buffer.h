@@ -370,6 +370,26 @@ public:
 
     virtual SLANG_NO_THROW void SLANG_MCALL globalBarrier() override;
 
+    virtual SLANG_NO_THROW void SLANG_MCALL
+    releaseBufferForQueue(IBuffer* buffer, ResourceState currentState, QueueType dstQueue) override;
+
+    virtual SLANG_NO_THROW void SLANG_MCALL releaseTextureForQueue(
+        ITexture* texture,
+        SubresourceRange subresourceRange,
+        ResourceState currentState,
+        QueueType dstQueue
+    ) override;
+
+    virtual SLANG_NO_THROW void SLANG_MCALL
+    acquireBufferFromQueue(IBuffer* buffer, ResourceState desiredState, QueueType srcQueue) override;
+
+    virtual SLANG_NO_THROW void SLANG_MCALL acquireTextureFromQueue(
+        ITexture* texture,
+        SubresourceRange subresourceRange,
+        ResourceState desiredState,
+        QueueType srcQueue
+    ) override;
+
     virtual SLANG_NO_THROW void SLANG_MCALL pushDebugGroup(const char* name, const MarkerColor& color) override;
     virtual SLANG_NO_THROW void SLANG_MCALL popDebugGroup() override;
     virtual SLANG_NO_THROW void SLANG_MCALL insertDebugMarker(const char* name, const MarkerColor& color) override;

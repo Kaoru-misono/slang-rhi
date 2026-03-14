@@ -46,6 +46,10 @@
     x(SetBufferState) \
     x(SetTextureState) \
     x(GlobalBarrier) \
+    x(ReleaseBufferForQueue) \
+    x(ReleaseTextureForQueue) \
+    x(AcquireBufferFromQueue) \
+    x(AcquireTextureFromQueue) \
     x(PushDebugGroup) \
     x(PopDebugGroup) \
     x(InsertDebugMarker) \
@@ -317,6 +321,36 @@ struct SetTextureState
 struct GlobalBarrier
 {};
 
+struct ReleaseBufferForQueue
+{
+    IBuffer* buffer;
+    ResourceState currentState;
+    QueueType dstQueue;
+};
+
+struct ReleaseTextureForQueue
+{
+    ITexture* texture;
+    SubresourceRange subresourceRange;
+    ResourceState currentState;
+    QueueType dstQueue;
+};
+
+struct AcquireBufferFromQueue
+{
+    IBuffer* buffer;
+    ResourceState desiredState;
+    QueueType srcQueue;
+};
+
+struct AcquireTextureFromQueue
+{
+    ITexture* texture;
+    SubresourceRange subresourceRange;
+    ResourceState desiredState;
+    QueueType srcQueue;
+};
+
 struct PushDebugGroup
 {
     const char* name;
@@ -437,6 +471,10 @@ public:
     void write(commands::SetBufferState&& cmd);
     void write(commands::SetTextureState&& cmd);
     void write(commands::GlobalBarrier&& cmd);
+    void write(commands::ReleaseBufferForQueue&& cmd);
+    void write(commands::ReleaseTextureForQueue&& cmd);
+    void write(commands::AcquireBufferFromQueue&& cmd);
+    void write(commands::AcquireTextureFromQueue&& cmd);
     void write(commands::PushDebugGroup&& cmd);
     void write(commands::PopDebugGroup&& cmd);
     void write(commands::InsertDebugMarker&& cmd);
