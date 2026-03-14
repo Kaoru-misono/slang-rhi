@@ -404,7 +404,7 @@ void DebugCommandEncoder::releaseBufferForQueue(IBuffer* buffer, ResourceState c
     {
         RHI_VALIDATION_ERROR("releaseBufferForQueue: dstQueue must be different from current queue type.");
     }
-    baseObject->releaseBufferForQueue(getInnerObj(buffer), currentState, dstQueue);
+    baseObject->releaseBufferForQueue(buffer, currentState, dstQueue);
 }
 
 void DebugCommandEncoder::releaseTextureForQueue(
@@ -420,7 +420,7 @@ void DebugCommandEncoder::releaseTextureForQueue(
     {
         RHI_VALIDATION_ERROR("releaseTextureForQueue: dstQueue must be different from current queue type.");
     }
-    baseObject->releaseTextureForQueue(getInnerObj(texture), subresourceRange, currentState, dstQueue);
+    baseObject->releaseTextureForQueue(texture, subresourceRange, currentState, dstQueue);
 }
 
 void DebugCommandEncoder::acquireBufferFromQueue(IBuffer* buffer, ResourceState desiredState, QueueType srcQueue)
@@ -431,7 +431,7 @@ void DebugCommandEncoder::acquireBufferFromQueue(IBuffer* buffer, ResourceState 
     {
         RHI_VALIDATION_ERROR("acquireBufferFromQueue: srcQueue must be different from current queue type.");
     }
-    baseObject->acquireBufferFromQueue(getInnerObj(buffer), desiredState, srcQueue);
+    baseObject->acquireBufferFromQueue(buffer, desiredState, srcQueue);
 }
 
 void DebugCommandEncoder::acquireTextureFromQueue(
@@ -447,7 +447,7 @@ void DebugCommandEncoder::acquireTextureFromQueue(
     {
         RHI_VALIDATION_ERROR("acquireTextureFromQueue: srcQueue must be different from current queue type.");
     }
-    baseObject->acquireTextureFromQueue(getInnerObj(texture), subresourceRange, desiredState, srcQueue);
+    baseObject->acquireTextureFromQueue(texture, subresourceRange, desiredState, srcQueue);
 }
 ```
 
@@ -732,6 +732,12 @@ In `src/vulkan/vk-device.cpp`, after the compute queue init block (after line 16
         if (m_computeQueueFamilyIndex == m_transferQueueFamilyIndex)
             usedCount++;
 
+        // Re-query family properties (same pattern as compute queue creation at line 1629)
+        uint32_t numFamilies = 0;
+        m_api.vkGetPhysicalDeviceQueueFamilyProperties(m_api.m_physicalDevice, &numFamilies, nullptr);
+        std::vector<VkQueueFamilyProperties> families(numFamilies);
+        m_api.vkGetPhysicalDeviceQueueFamilyProperties(m_api.m_physicalDevice, &numFamilies, families.data());
+
         uint32_t maxCount = families[m_transferQueueFamilyIndex].queueCount;
         uint32_t transferQueueIndex = (usedCount < maxCount) ? usedCount : 0;
 
@@ -918,10 +924,10 @@ void CommandRecorder::cmdReleaseTextureForQueue(const commands::ReleaseTextureFo
     barrier.srcQueueFamilyIndex = srcFamily;
     barrier.dstQueueFamilyIndex = dstFamily;
     barrier.subresourceRange.aspectMask = getAspectMaskFromFormat(getVkFormat(texture->m_desc.format));
-    barrier.subresourceRange.baseMipLevel = cmd.subresourceRange.mipLevel;
-    barrier.subresourceRange.levelCount = cmd.subresourceRange.mipLevelCount == 0
-        ? VK_REMAINING_MIP_LEVELS : cmd.subresourceRange.mipLevelCount;
-    barrier.subresourceRange.baseArrayLayer = cmd.subresourceRange.baseArrayLayer;
+    barrier.subresourceRange.baseMipLevel = cmd.subresourceRange.mip;
+    barrier.subresourceRange.levelCount = cmd.subresourceRange.mipCount == 0
+        ? VK_REMAINING_MIP_LEVELS : cmd.subresourceRange.mipCount;
+    barrier.subresourceRange.baseArrayLayer = cmd.subresourceRange.layer;
     barrier.subresourceRange.layerCount = cmd.subresourceRange.layerCount == 0
         ? VK_REMAINING_ARRAY_LAYERS : cmd.subresourceRange.layerCount;
 
@@ -968,10 +974,10 @@ void CommandRecorder::cmdAcquireTextureFromQueue(const commands::AcquireTextureF
     barrier.srcQueueFamilyIndex = srcFamily;
     barrier.dstQueueFamilyIndex = dstFamily;
     barrier.subresourceRange.aspectMask = getAspectMaskFromFormat(getVkFormat(texture->m_desc.format));
-    barrier.subresourceRange.baseMipLevel = cmd.subresourceRange.mipLevel;
-    barrier.subresourceRange.levelCount = cmd.subresourceRange.mipLevelCount == 0
-        ? VK_REMAINING_MIP_LEVELS : cmd.subresourceRange.mipLevelCount;
-    barrier.subresourceRange.baseArrayLayer = cmd.subresourceRange.baseArrayLayer;
+    barrier.subresourceRange.baseMipLevel = cmd.subresourceRange.mip;
+    barrier.subresourceRange.levelCount = cmd.subresourceRange.mipCount == 0
+        ? VK_REMAINING_MIP_LEVELS : cmd.subresourceRange.mipCount;
+    barrier.subresourceRange.baseArrayLayer = cmd.subresourceRange.layer;
     barrier.subresourceRange.layerCount = cmd.subresourceRange.layerCount == 0
         ? VK_REMAINING_ARRAY_LAYERS : cmd.subresourceRange.layerCount;
 
