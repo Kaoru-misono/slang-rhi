@@ -1051,13 +1051,18 @@ Result DeviceImpl::initialize(const DeviceDesc& desc)
         std::array{slang::PreprocessorMacroDesc{"__D3D12__", "1"}}
     ));
 
-    // Create queue.
-    m_queue = new CommandQueueImpl(this, QueueType::Graphics);
-    SLANG_RETURN_ON_FAIL(m_queue->init(0));
-    m_queue->setInternalReferenceCount(1);
+    // Create graphics queue.
+    m_graphicsQueue = new CommandQueueImpl(this, QueueType::Graphics);
+    SLANG_RETURN_ON_FAIL(m_graphicsQueue->init(0));
+    m_graphicsQueue->setInternalReferenceCount(1);
+
+    // Create async compute queue.
+    m_computeQueue = new CommandQueueImpl(this, QueueType::Compute);
+    SLANG_RETURN_ON_FAIL(m_computeQueue->init(1));
+    m_computeQueue->setInternalReferenceCount(1);
 
     // Retrieve timestamp frequency.
-    m_queue->m_d3dQueue->GetTimestampFrequency(&m_info.timestampFrequency);
+    m_graphicsQueue->m_d3dQueue->GetTimestampFrequency(&m_info.timestampFrequency);
 
     // Initialize bindless descriptor set if supported.
     if (hasFeature(Feature::Bindless))
@@ -1080,12 +1085,17 @@ Result DeviceImpl::getNativeDeviceHandles(DeviceNativeHandles* outHandles)
 
 Result DeviceImpl::getQueue(QueueType type, ICommandQueue** outQueue)
 {
-    if (type != QueueType::Graphics)
+    switch (type)
     {
+    case QueueType::Graphics:
+        returnComPtr(outQueue, m_graphicsQueue);
+        return SLANG_OK;
+    case QueueType::Compute:
+        returnComPtr(outQueue, m_computeQueue);
+        return SLANG_OK;
+    default:
         return SLANG_E_INVALID_ARG;
     }
-    returnComPtr(outQueue, m_queue);
-    return SLANG_OK;
 }
 
 Result DeviceImpl::createSurface(WindowHandle windowHandle, ISurface** outSurface)
@@ -1668,8 +1678,8 @@ void DeviceImpl::endImmediateCommandList()
 {
     m_immediateCommandList.commandList->Close();
     ID3D12CommandList* commandLists[] = {m_immediateCommandList.commandList.get()};
-    m_queue->m_d3dQueue->ExecuteCommandLists(1, commandLists);
-    m_queue->waitOnHost();
+    m_graphicsQueue->m_d3dQueue->ExecuteCommandLists(1, commandLists);
+    m_graphicsQueue->waitOnHost();
     m_immediateCommandList.mutex.unlock();
 }
 
@@ -2052,10 +2062,15 @@ DeviceImpl::~DeviceImpl()
     m_uploadHeap.release();
     m_readbackHeap.release();
 
-    if (m_queue)
+    if (m_graphicsQueue)
     {
-        m_queue->shutdown();
-        m_queue.setNull();
+        m_graphicsQueue->shutdown();
+        m_graphicsQueue.setNull();
+    }
+    if (m_computeQueue)
+    {
+        m_computeQueue->shutdown();
+        m_computeQueue.setNull();
     }
 
     m_bindlessDescriptorSet.setNull();
@@ -2082,8 +2097,8 @@ DeviceImpl::~DeviceImpl()
 
 void DeviceImpl::deferDelete(Resource* resource)
 {
-    SLANG_RHI_ASSERT(m_queue != nullptr);
-    m_queue->deferDelete(resource);
+    SLANG_RHI_ASSERT(m_graphicsQueue != nullptr);
+    m_graphicsQueue->deferDelete(resource);
     resource->breakStrongReferenceToDevice();
 }
 

@@ -307,6 +307,10 @@ IRenderPassEncoder* DebugCommandEncoder::beginRenderPass(const RenderPassDesc& d
     SLANG_RHI_API_FUNC;
     requireOpen();
     requireNoPass();
+    if (m_queueType == QueueType::Compute)
+    {
+        RHI_VALIDATION_ERROR("Render passes are not supported on compute queues.");
+    }
     m_passState = PassState::RenderPass;
     m_renderPassEncoder.baseObject = baseObject->beginRenderPass(desc);
     return &m_renderPassEncoder;
@@ -327,6 +331,10 @@ IRayTracingPassEncoder* DebugCommandEncoder::beginRayTracingPass()
     SLANG_RHI_API_FUNC;
     requireOpen();
     requireNoPass();
+    if (m_queueType == QueueType::Compute)
+    {
+        RHI_VALIDATION_ERROR("Ray tracing passes are not supported on compute queues.");
+    }
     m_passState = PassState::RayTracingPass;
     m_rayTracingPassEncoder.baseObject = baseObject->beginRayTracingPass();
     return &m_rayTracingPassEncoder;

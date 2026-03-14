@@ -89,7 +89,7 @@ Result SurfaceImpl::init(DeviceImpl* device, WindowHandle windowHandle)
     }
 
     VkBool32 supported = false;
-    api.vkGetPhysicalDeviceSurfaceSupportKHR(api.m_physicalDevice, m_device->m_queueFamilyIndex, m_surface, &supported);
+    api.vkGetPhysicalDeviceSurfaceSupportKHR(api.m_physicalDevice, m_device->m_graphicsQueueFamilyIndex, m_surface, &supported);
     if (!supported)
     {
         return SLANG_FAIL;
@@ -256,7 +256,7 @@ Result SurfaceImpl::createSwapchain()
 void SurfaceImpl::destroySwapchain()
 {
     auto& api = m_device->m_api;
-    api.vkQueueWaitIdle(m_device->m_queue->m_queue);
+    api.vkQueueWaitIdle(m_device->m_graphicsQueue->m_queue);
     m_textures.clear();
     for (FrameData& frameData : m_frameData)
     {
@@ -376,11 +376,11 @@ Result SurfaceImpl::acquireNextImage(ITexture** outTexture)
     }
 
     // Setup queue's next submit for synchronization with the swapchain.
-    m_device->m_queue->m_surfaceSync.fence = frameData.fence;
-    m_device->m_queue->m_surfaceSync.imageAvailableSemaphore = frameData.imageAvailableSemaphore;
+    m_device->m_graphicsQueue->m_surfaceSync.fence = frameData.fence;
+    m_device->m_graphicsQueue->m_surfaceSync.imageAvailableSemaphore = frameData.imageAvailableSemaphore;
     // TextureIndex needs to be used to index the renderFinishedSemaphore to prevent data race caused by acquire the same image
     auto& renderFinishedSemaphore = m_frameData[m_currentTextureIndex].renderFinishedSemaphore;
-    m_device->m_queue->m_surfaceSync.renderFinishedSemaphore = renderFinishedSemaphore;
+    m_device->m_graphicsQueue->m_surfaceSync.renderFinishedSemaphore = renderFinishedSemaphore;
 
     // Mark texture to be in swapchain initial state.
     // This is used by the first image barrier to transition the texture from the correct state.
@@ -405,9 +405,9 @@ Result SurfaceImpl::present()
 
     // If no submit has taken place yet, then we need to submit a dummy command buffer to transition the texture to the
     // correct state.
-    if (m_device->m_queue->m_surfaceSync.fence != VK_NULL_HANDLE)
+    if (m_device->m_graphicsQueue->m_surfaceSync.fence != VK_NULL_HANDLE)
     {
-        ICommandQueue* queue = m_device->m_queue.get();
+        ICommandQueue* queue = m_device->m_graphicsQueue.get();
         ComPtr<ICommandEncoder> encoder;
         SLANG_RETURN_ON_FAIL(queue->createCommandEncoder(encoder.writeRef()));
         encoder->setTextureState(m_textures[m_currentTextureIndex], ResourceState::General);
@@ -423,7 +423,7 @@ Result SurfaceImpl::present()
     presentInfo.pWaitSemaphores = &renderFinishedSemaphore;
     if (m_currentTextureIndex != -1)
     {
-        api.vkQueuePresentKHR(m_device->m_queue->m_queue, &presentInfo);
+        api.vkQueuePresentKHR(m_device->m_graphicsQueue->m_queue, &presentInfo);
         return SLANG_OK;
     }
     else

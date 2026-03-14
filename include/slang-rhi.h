@@ -2644,6 +2644,7 @@ public:
 enum class QueueType
 {
     Graphics,
+    Compute,
 };
 
 // The NULL CUDA stream is valid (it refers to the default stream), so we

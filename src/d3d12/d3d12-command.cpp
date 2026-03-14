@@ -1787,8 +1787,11 @@ Result CommandQueueImpl::init(uint32_t queueIndex)
     m_queueIndex = queueIndex;
     m_d3dDevice = device->m_device;
 
+    m_commandListType = (m_type == QueueType::Compute) ? D3D12_COMMAND_LIST_TYPE_COMPUTE
+                                                       : D3D12_COMMAND_LIST_TYPE_DIRECT;
+
     D3D12_COMMAND_QUEUE_DESC queueDesc = {};
-    queueDesc.Type = D3D12_COMMAND_LIST_TYPE_DIRECT;
+    queueDesc.Type = m_commandListType;
     SLANG_RETURN_ON_FAIL(m_d3dDevice->CreateCommandQueue(&queueDesc, IID_PPV_ARGS(m_d3dQueue.writeRef())));
 
 #if SLANG_RHI_ENABLE_AFTERMATH
@@ -2073,13 +2076,14 @@ CommandBufferImpl::~CommandBufferImpl()
 Result CommandBufferImpl::init()
 {
     DeviceImpl* device = getDevice<DeviceImpl>();
+    D3D12_COMMAND_LIST_TYPE listType = m_queue->m_commandListType;
     SLANG_RETURN_ON_FAIL(device->m_device->CreateCommandAllocator(
-        D3D12_COMMAND_LIST_TYPE_DIRECT,
+        listType,
         IID_PPV_ARGS(m_d3dCommandAllocator.writeRef())
     ));
     SLANG_RETURN_ON_FAIL(device->m_device->CreateCommandList(
         0,
-        D3D12_COMMAND_LIST_TYPE_DIRECT,
+        listType,
         m_d3dCommandAllocator,
         nullptr,
         IID_PPV_ARGS(m_d3dCommandList.writeRef())

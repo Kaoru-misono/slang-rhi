@@ -227,7 +227,8 @@ public:
     VulkanApi m_api;
 
     VulkanDeviceQueue m_deviceQueue;
-    uint32_t m_queueFamilyIndex;
+    uint32_t m_graphicsQueueFamilyIndex;
+    uint32_t m_computeQueueFamilyIndex;
 
     struct CooperativeMatrixFlexibleProperty
     {
@@ -244,7 +245,8 @@ public:
     bool m_cooperativeMatrixPropertiesInitialized = false;
     std::vector<CooperativeMatrixDesc> m_cooperativeMatrixFixedProperties;
     std::vector<CooperativeMatrixFlexibleProperty> m_cooperativeMatrixFlexibleProperties;
-    RefPtr<CommandQueueImpl> m_queue;
+    RefPtr<CommandQueueImpl> m_graphicsQueue;
+    RefPtr<CommandQueueImpl> m_computeQueue;
 
     DescriptorSetAllocator descriptorSetAllocator;
     RefPtr<BindlessDescriptorSet> m_bindlessDescriptorSet;

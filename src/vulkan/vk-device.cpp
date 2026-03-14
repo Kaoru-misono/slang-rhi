@@ -124,9 +124,13 @@ DeviceImpl::DeviceImpl() {}
 DeviceImpl::~DeviceImpl()
 {
     // Wait for all commands to finish and retire any active command buffers.
-    if (m_queue)
+    if (m_graphicsQueue)
     {
-        m_queue->waitOnHost();
+        m_graphicsQueue->waitOnHost();
+    }
+    if (m_computeQueue)
+    {
+        m_computeQueue->waitOnHost();
     }
 
     // Check the device queue is valid else, we can't wait on it..
@@ -147,10 +151,15 @@ DeviceImpl::~DeviceImpl()
         m_api.vkDestroySampler(m_device, m_defaultSampler, nullptr);
     }
 
-    if (m_queue)
+    if (m_graphicsQueue)
     {
-        m_queue->shutdown();
-        m_queue.setNull();
+        m_graphicsQueue->shutdown();
+        m_graphicsQueue.setNull();
+    }
+    if (m_computeQueue)
+    {
+        m_computeQueue->shutdown();
+        m_computeQueue.setNull();
     }
     m_deviceQueue.destroy();
 
@@ -174,8 +183,8 @@ DeviceImpl::~DeviceImpl()
 
 void DeviceImpl::deferDelete(Resource* resource)
 {
-    SLANG_RHI_ASSERT(m_queue != nullptr);
-    m_queue->deferDelete(resource);
+    SLANG_RHI_ASSERT(m_graphicsQueue != nullptr);
+    m_graphicsQueue->deferDelete(resource);
     resource->breakStrongReferenceToDevice();
 }
 
@@ -1229,9 +1238,40 @@ Result DeviceImpl::initVulkanDevice(
         availableCapabilities.push_back(Capability::_spirv_1_6);
     }
 
-    int queueFamilyIndex = m_api.findQueue(VK_QUEUE_GRAPHICS_BIT | VK_QUEUE_COMPUTE_BIT);
-    SLANG_RHI_ASSERT(queueFamilyIndex >= 0);
-    m_queueFamilyIndex = queueFamilyIndex;
+    // Select queue families for graphics and compute.
+    int graphicsFamilyIndex = m_api.findQueue(VK_QUEUE_GRAPHICS_BIT | VK_QUEUE_COMPUTE_BIT);
+    SLANG_RHI_ASSERT(graphicsFamilyIndex >= 0);
+    m_graphicsQueueFamilyIndex = graphicsFamilyIndex;
+
+    // Find a dedicated compute queue family (compute but NOT graphics).
+    // Fall back to same family as graphics if not available.
+    {
+        uint32_t numFamilies = 0;
+        m_api.vkGetPhysicalDeviceQueueFamilyProperties(m_api.m_physicalDevice, &numFamilies, nullptr);
+        std::vector<VkQueueFamilyProperties> families(numFamilies);
+        m_api.vkGetPhysicalDeviceQueueFamilyProperties(m_api.m_physicalDevice, &numFamilies, families.data());
+
+        int dedicatedComputeFamily = -1;
+        for (uint32_t i = 0; i < numFamilies; ++i)
+        {
+            if ((families[i].queueFlags & VK_QUEUE_COMPUTE_BIT) &&
+                !(families[i].queueFlags & VK_QUEUE_GRAPHICS_BIT))
+            {
+                dedicatedComputeFamily = int(i);
+                break;
+            }
+        }
+
+        if (dedicatedComputeFamily >= 0)
+        {
+            m_computeQueueFamilyIndex = uint32_t(dedicatedComputeFamily);
+        }
+        else
+        {
+            // Fallback: use same family as graphics
+            m_computeQueueFamilyIndex = m_graphicsQueueFamilyIndex;
+        }
+    }
 
 #if SLANG_RHI_ENABLE_AFTERMATH
     VkDeviceDiagnosticsConfigCreateInfoNV aftermathInfo = {};
@@ -1272,13 +1312,39 @@ Result DeviceImpl::initVulkanDevice(
     // Create Vulkan device.
     if (!desc.existingDeviceHandles.handles[2])
     {
-        float queuePriority = 0.0f;
-        VkDeviceQueueCreateInfo queueCreateInfo = {VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO};
-        queueCreateInfo.queueFamilyIndex = m_queueFamilyIndex;
-        queueCreateInfo.queueCount = 1;
-        queueCreateInfo.pQueuePriorities = &queuePriority;
+        float queuePriorities[] = {0.0f, 0.0f};
+        std::vector<VkDeviceQueueCreateInfo> queueCreateInfos;
 
-        deviceCreateInfo.pQueueCreateInfos = &queueCreateInfo;
+        VkDeviceQueueCreateInfo graphicsQueueInfo = {VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO};
+        graphicsQueueInfo.queueFamilyIndex = m_graphicsQueueFamilyIndex;
+        graphicsQueueInfo.queueCount = 1;
+        graphicsQueueInfo.pQueuePriorities = queuePriorities;
+        queueCreateInfos.push_back(graphicsQueueInfo);
+
+        if (m_computeQueueFamilyIndex != m_graphicsQueueFamilyIndex)
+        {
+            // Separate compute queue family
+            VkDeviceQueueCreateInfo computeQueueInfo = {VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO};
+            computeQueueInfo.queueFamilyIndex = m_computeQueueFamilyIndex;
+            computeQueueInfo.queueCount = 1;
+            computeQueueInfo.pQueuePriorities = queuePriorities;
+            queueCreateInfos.push_back(computeQueueInfo);
+        }
+        else
+        {
+            // Same family: request 2 queues if available, otherwise share queue index 0
+            uint32_t numFamilies = 0;
+            m_api.vkGetPhysicalDeviceQueueFamilyProperties(m_api.m_physicalDevice, &numFamilies, nullptr);
+            std::vector<VkQueueFamilyProperties> families(numFamilies);
+            m_api.vkGetPhysicalDeviceQueueFamilyProperties(m_api.m_physicalDevice, &numFamilies, families.data());
+            if (families[m_graphicsQueueFamilyIndex].queueCount >= 2)
+            {
+                queueCreateInfos[0].queueCount = 2;
+            }
+        }
+
+        deviceCreateInfo.pQueueCreateInfos = queueCreateInfos.data();
+        deviceCreateInfo.queueCreateInfoCount = uint32_t(queueCreateInfos.size());
 
         deviceCreateInfo.enabledExtensionCount = uint32_t(deviceExtensions.size());
         deviceCreateInfo.ppEnabledExtensionNames = deviceExtensions.data();
@@ -1610,16 +1676,40 @@ Result DeviceImpl::initialize(const DeviceDesc& desc)
 
     {
         VkQueue queue;
-        m_api.vkGetDeviceQueue(m_device, m_queueFamilyIndex, 0, &queue);
-        SLANG_RETURN_ON_FAIL(m_deviceQueue.init(m_api, queue, m_queueFamilyIndex));
+        m_api.vkGetDeviceQueue(m_device, m_graphicsQueueFamilyIndex, 0, &queue);
+        SLANG_RETURN_ON_FAIL(m_deviceQueue.init(m_api, queue, m_graphicsQueueFamilyIndex));
     }
 
     // Initialize the memory sub-allocator
     m_memoryAllocator.init(&m_api);
 
-    m_queue = new CommandQueueImpl(this, QueueType::Graphics);
-    m_queue->init(m_deviceQueue.getQueue(), m_queueFamilyIndex);
-    m_queue->setInternalReferenceCount(1);
+    m_graphicsQueue = new CommandQueueImpl(this, QueueType::Graphics);
+    m_graphicsQueue->init(m_deviceQueue.getQueue(), m_graphicsQueueFamilyIndex);
+    m_graphicsQueue->setInternalReferenceCount(1);
+
+    // Create compute queue
+    {
+        VkQueue computeVkQueue;
+        if (m_computeQueueFamilyIndex != m_graphicsQueueFamilyIndex)
+        {
+            // Dedicated compute family: get queue index 0 from that family
+            m_api.vkGetDeviceQueue(m_device, m_computeQueueFamilyIndex, 0, &computeVkQueue);
+        }
+        else
+        {
+            // Same family: try queue index 1, fall back to sharing queue index 0
+            uint32_t numFamilies = 0;
+            m_api.vkGetPhysicalDeviceQueueFamilyProperties(m_api.m_physicalDevice, &numFamilies, nullptr);
+            std::vector<VkQueueFamilyProperties> families(numFamilies);
+            m_api.vkGetPhysicalDeviceQueueFamilyProperties(m_api.m_physicalDevice, &numFamilies, families.data());
+            uint32_t computeQueueIndex =
+                (families[m_graphicsQueueFamilyIndex].queueCount >= 2) ? 1 : 0;
+            m_api.vkGetDeviceQueue(m_device, m_computeQueueFamilyIndex, computeQueueIndex, &computeVkQueue);
+        }
+        m_computeQueue = new CommandQueueImpl(this, QueueType::Compute);
+        m_computeQueue->init(computeVkQueue, m_computeQueueFamilyIndex);
+        m_computeQueue->setInternalReferenceCount(1);
+    }
 
     return SLANG_OK;
 }
@@ -1631,12 +1721,17 @@ void DeviceImpl::waitForGpu()
 
 Result DeviceImpl::getQueue(QueueType type, ICommandQueue** outQueue)
 {
-    if (type != QueueType::Graphics)
+    switch (type)
     {
+    case QueueType::Graphics:
+        returnComPtr(outQueue, m_graphicsQueue);
+        return SLANG_OK;
+    case QueueType::Compute:
+        returnComPtr(outQueue, m_computeQueue);
+        return SLANG_OK;
+    default:
         return SLANG_E_INVALID_ARG;
     }
-    returnComPtr(outQueue, m_queue);
-    return SLANG_OK;
 }
 
 Result DeviceImpl::readBuffer(IBuffer* buffer, Offset offset, Size size, void* outData)
@@ -1850,9 +1945,11 @@ uint32_t DeviceImpl::getQueueFamilyIndex(QueueType queueType)
 {
     switch (queueType)
     {
+    case QueueType::Compute:
+        return m_computeQueueFamilyIndex;
     case QueueType::Graphics:
     default:
-        return m_queueFamilyIndex;
+        return m_graphicsQueueFamilyIndex;
     }
 }
 

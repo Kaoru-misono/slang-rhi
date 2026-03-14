@@ -42,7 +42,8 @@ public:
     ComPtr<ID3D12Device> m_device;
     ComPtr<ID3D12Device5> m_device5;
 
-    RefPtr<CommandQueueImpl> m_queue;
+    RefPtr<CommandQueueImpl> m_graphicsQueue;
+    RefPtr<CommandQueueImpl> m_computeQueue;
 
     RefPtr<CPUDescriptorHeap> m_cpuCbvSrvUavHeap;
     RefPtr<CPUDescriptorHeap> m_cpuRtvHeap;
