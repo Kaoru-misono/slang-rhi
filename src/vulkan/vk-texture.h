@@ -1,6 +1,7 @@
 #pragma once
 
 #include "vk-base.h"
+#include "vk-memory-allocator.h"
 
 namespace rhi::vk {
 
@@ -25,6 +26,11 @@ public:
     // Swap chain textures are deleted immediately when deleteThis() is called.
     // Swap chain textures do not own the underlying image memory.
     bool m_isSwapchainTexture = false;
+
+    // VMA tracking for image memory
+    VulkanMemoryAllocator* m_allocator = nullptr;
+    VmaAllocation m_allocation = VK_NULL_HANDLE;
+
     bool m_isSwapchainInitialState = false;
 
     virtual SLANG_NO_THROW Result SLANG_MCALL getNativeHandle(NativeHandle* outHandle) override;

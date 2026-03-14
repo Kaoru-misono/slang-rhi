@@ -192,6 +192,11 @@ if(NOT DEFINED SLANG_RHI_VULKAN_HEADERS_URL)
     set(SLANG_RHI_VULKAN_HEADERS_URL "https://github.com/KhronosGroup/Vulkan-Headers/archive/refs/tags/v1.4.318.zip")
 endif()
 
+# VMA (Vulkan Memory Allocator)
+if(NOT DEFINED SLANG_RHI_VMA_URL)
+    set(SLANG_RHI_VMA_URL "https://github.com/GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator/archive/refs/tags/v3.2.1.zip")
+endif()
+
 # Metal C++ headers
 if(NOT DEFINED SLANG_RHI_METAL_CPP_URL)
     set(SLANG_RHI_METAL_CPP_URL "https://developer.apple.com/metal/cpp/files/metal-cpp_macOS14.2_iOS17.2.zip")
@@ -450,6 +455,11 @@ if(SLANG_RHI_ENABLE_VULKAN)
     FetchPackage(vulkan_headers URL ${SLANG_RHI_VULKAN_HEADERS_URL})
     add_library(slang-rhi-vulkan-headers INTERFACE)
     target_include_directories(slang-rhi-vulkan-headers INTERFACE ${vulkan_headers_SOURCE_DIR}/include)
+
+    message(STATUS "Fetching VMA ...")
+    FetchPackage(vma URL ${SLANG_RHI_VMA_URL})
+    add_library(slang-rhi-vma INTERFACE)
+    target_include_directories(slang-rhi-vma INTERFACE ${vma_SOURCE_DIR}/include)
 endif()
 
 # Fetch & setup Metal C++ headers
@@ -707,6 +717,7 @@ if(SLANG_RHI_ENABLE_VULKAN)
         src/vulkan/vk-device.cpp
         src/vulkan/vk-fence.cpp
         src/vulkan/vk-heap.cpp
+        src/vulkan/vk-memory-allocator.cpp
         src/vulkan/vk-pipeline.cpp
         src/vulkan/vk-query.cpp
         src/vulkan/vk-sampler.cpp
@@ -718,7 +729,7 @@ if(SLANG_RHI_ENABLE_VULKAN)
         src/vulkan/vk-texture.cpp
         src/vulkan/vk-utils.cpp
     )
-    target_link_libraries(slang-rhi PRIVATE slang-rhi-vulkan-headers)
+    target_link_libraries(slang-rhi PRIVATE slang-rhi-vulkan-headers slang-rhi-vma)
 endif()
 
 if(SLANG_RHI_ENABLE_METAL)

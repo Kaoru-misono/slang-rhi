@@ -154,6 +154,10 @@ DeviceImpl::~DeviceImpl()
     }
     m_deviceQueue.destroy();
 
+    // Destroy VMA allocator after all resources and queues are destroyed,
+    // but before the VkDevice is destroyed.
+    m_memoryAllocator.destroy();
+
     descriptorSetAllocator.close();
 
     if (m_device != VK_NULL_HANDLE)
@@ -1609,6 +1613,9 @@ Result DeviceImpl::initialize(const DeviceDesc& desc)
         m_api.vkGetDeviceQueue(m_device, m_queueFamilyIndex, 0, &queue);
         SLANG_RETURN_ON_FAIL(m_deviceQueue.init(m_api, queue, m_queueFamilyIndex));
     }
+
+    // Initialize the memory sub-allocator
+    m_memoryAllocator.init(&m_api);
 
     m_queue = new CommandQueueImpl(this, QueueType::Graphics);
     m_queue->init(m_deviceQueue.getQueue(), m_queueFamilyIndex);

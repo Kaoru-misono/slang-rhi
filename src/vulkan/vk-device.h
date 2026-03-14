@@ -2,6 +2,7 @@
 
 #include "vk-base.h"
 #include "vk-bindless-descriptor-set.h"
+#include "vk-memory-allocator.h"
 
 #include <string>
 #include <vector>
@@ -247,6 +248,8 @@ public:
 
     DescriptorSetAllocator descriptorSetAllocator;
     RefPtr<BindlessDescriptorSet> m_bindlessDescriptorSet;
+
+    VulkanMemoryAllocator m_memoryAllocator;
 
     VkSampler m_defaultSampler;
 

@@ -147,6 +147,40 @@ Result VKBufferHandleRAII::init(
     return SLANG_OK;
 }
 
+Result VKBufferHandleRAII::initSubAllocated(
+    VulkanMemoryAllocator& allocator,
+    const VulkanApi& api,
+    Size bufferSize,
+    VkBufferUsageFlags usage,
+    VkMemoryPropertyFlags reqMemoryProperties
+)
+{
+    SLANG_RHI_ASSERT(!isInitialized());
+
+    VkBufferCreateInfo bufferCreateInfo = {VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
+    bufferCreateInfo.size = bufferSize;
+    bufferCreateInfo.usage = usage;
+    bufferCreateInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+
+    Result result = allocator.createBuffer(
+        bufferCreateInfo,
+        reqMemoryProperties,
+        &m_buffer,
+        &m_allocation,
+        &m_allocInfo
+    );
+    if (SLANG_FAILED(result))
+    {
+        return result;
+    }
+
+    m_api = &api;
+    m_allocator = &allocator;
+    m_memory = m_allocInfo.deviceMemory;
+
+    return SLANG_OK;
+}
+
 BufferImpl::BufferImpl(Device* device, const BufferDesc& desc)
     : Buffer(device, desc)
 {
@@ -355,6 +389,7 @@ Result DeviceImpl::createBuffer(const BufferDesc& desc_, const void* initData, I
     RefPtr<BufferImpl> buffer(new BufferImpl(this, desc));
     if (is_set(desc.usage, BufferUsage::Shared))
     {
+        // Shared buffers require dedicated allocation (external memory)
         VkExternalMemoryHandleTypeFlagsKHR externalMemoryHandleTypeFlags
 #if SLANG_WINDOWS_FAMILY
             = VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_WIN32_BIT;
@@ -367,7 +402,10 @@ Result DeviceImpl::createBuffer(const BufferDesc& desc_, const void* initData, I
     }
     else
     {
-        SLANG_RETURN_ON_FAIL(buffer->m_buffer.init(m_api, desc.size, usage, reqMemoryProperties));
+        // Default path: sub-allocate from the memory allocator
+        SLANG_RETURN_ON_FAIL(
+            buffer->m_buffer.initSubAllocated(m_memoryAllocator, m_api, desc.size, usage, reqMemoryProperties)
+        );
     }
 
     _labelObject((uint64_t)buffer->m_buffer.m_buffer, VK_OBJECT_TYPE_BUFFER, desc.label);
@@ -376,17 +414,18 @@ Result DeviceImpl::createBuffer(const BufferDesc& desc_, const void* initData, I
     {
         if (desc.memoryType == MemoryType::DeviceLocal)
         {
-            SLANG_RETURN_ON_FAIL(buffer->m_uploadBuffer.init(
+            // Create staging buffer via sub-allocator
+            SLANG_RETURN_ON_FAIL(buffer->m_uploadBuffer.initSubAllocated(
+                m_memoryAllocator,
                 m_api,
                 bufferSize,
                 VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
                 VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT
             ));
-            // Copy into staging buffer
-            void* mappedData = nullptr;
-            SLANG_VK_CHECK(m_api.vkMapMemory(m_device, buffer->m_uploadBuffer.m_memory, 0, bufferSize, 0, &mappedData));
+            // Copy into staging buffer via persistent mapping
+            void* mappedData = buffer->m_uploadBuffer.getMappedPtr();
+            SLANG_RHI_ASSERT(mappedData);
             ::memcpy(mappedData, initData, bufferSize);
-            m_api.vkUnmapMemory(m_device, buffer->m_uploadBuffer.m_memory);
 
             // Copy from staging buffer to real buffer
             VkCommandBuffer commandBuffer = m_deviceQueue.getCommandBuffer();
@@ -404,11 +443,21 @@ Result DeviceImpl::createBuffer(const BufferDesc& desc_, const void* initData, I
         }
         else
         {
-            // Copy into mapped buffer directly
-            void* mappedData = nullptr;
-            SLANG_VK_CHECK(m_api.vkMapMemory(m_device, buffer->m_buffer.m_memory, 0, bufferSize, 0, &mappedData));
-            ::memcpy(mappedData, initData, bufferSize);
-            m_api.vkUnmapMemory(m_device, buffer->m_buffer.m_memory);
+            // Host-visible buffer: copy data via persistent mapping or direct map
+            void* mappedData = buffer->m_buffer.getMappedPtr();
+            if (mappedData)
+            {
+                ::memcpy(mappedData, initData, bufferSize);
+            }
+            else
+            {
+                // Direct allocation (non-VMA): map, copy, unmap
+                SLANG_VK_CHECK(
+                    m_api.vkMapMemory(m_device, buffer->m_buffer.m_memory, 0, bufferSize, 0, &mappedData)
+                );
+                ::memcpy(mappedData, initData, bufferSize);
+                m_api.vkUnmapMemory(m_device, buffer->m_buffer.m_memory);
+            }
         }
     }
 
@@ -436,6 +485,20 @@ Result DeviceImpl::createBufferFromNativeHandle(NativeHandle handle, const Buffe
 Result DeviceImpl::mapBuffer(IBuffer* buffer, CpuAccessMode mode, void** outData)
 {
     BufferImpl* bufferImpl = checked_cast<BufferImpl*>(buffer);
+
+    if (bufferImpl->m_buffer.isSubAllocated())
+    {
+        // VMA-managed: use persistent mapping
+        void* mappedPtr = bufferImpl->m_buffer.getMappedPtr();
+        if (!mappedPtr)
+        {
+            return SLANG_FAIL;
+        }
+        *outData = mappedPtr;
+        return SLANG_OK;
+    }
+
+    // Direct allocation: map the entire memory
     SLANG_VK_RETURN_ON_FAIL(
         m_api.vkMapMemory(m_api.m_device, bufferImpl->m_buffer.m_memory, 0, VK_WHOLE_SIZE, 0, outData)
     );
@@ -445,6 +508,13 @@ Result DeviceImpl::mapBuffer(IBuffer* buffer, CpuAccessMode mode, void** outData
 Result DeviceImpl::unmapBuffer(IBuffer* buffer)
 {
     BufferImpl* bufferImpl = checked_cast<BufferImpl*>(buffer);
+
+    if (bufferImpl->m_buffer.isSubAllocated())
+    {
+        // Sub-allocated: memory is persistently mapped, no-op
+        return SLANG_OK;
+    }
+
     m_api.vkUnmapMemory(m_api.m_device, bufferImpl->m_buffer.m_memory);
     return SLANG_OK;
 }
