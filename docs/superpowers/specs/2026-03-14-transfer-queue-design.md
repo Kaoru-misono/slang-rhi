@@ -28,6 +28,7 @@ enum class QueueType
 - `copyBuffer`
 - `copyTexture`
 - `copyTextureToBuffer`
+- `copyBufferToTexture`
 - `uploadBufferData`
 
 The following operations are **not** supported on transfer queues:
@@ -114,6 +115,7 @@ The QFOT methods map to `VkBufferMemoryBarrier`/`VkImageMemoryBarrier` with expl
 - `acquireBufferFromQueue`: emits a buffer barrier with `srcQueueFamilyIndex` resolved from source `QueueType` and `dstQueueFamilyIndex = m_queueFamilyIndex`
 - Same pattern for texture variants, with image layout transitions included in the barrier
 - When source and destination queue types share the same family, emit a regular state transition barrier instead (no QFOT needed, `srcQueueFamilyIndex = dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED`)
+- Image layout mapping for QFOT barriers: `currentState` (release) maps to `oldLayout`, `desiredState` (acquire) maps to `newLayout`. Both sides of the barrier must specify the same layout transition — the release barrier uses `oldLayout = translateImageLayout(currentState)` and `newLayout = translateImageLayout(desiredState)`, and the acquire barrier uses the same pair
 
 The `getQueueFamilyIndex(QueueType)` helper must be updated with a `Transfer` case returning `m_transferQueueFamilyIndex`.
 
@@ -177,7 +179,7 @@ D3D12 does not require explicit ownership transfers. The QFOT methods (`releaseB
 
 ### Device Teardown
 
-The destructor must wait on and destroy `m_transferQueue`, matching the pattern for graphics and compute queues.
+The destructor must include `m_transferQueue` in teardown. Note: the existing D3D12 destructor calls `setNull()` on queues without explicit `waitOnHost()` first (unlike Vulkan which calls `waitOnHost()` before cleanup). Follow the existing D3D12 pattern — add `m_transferQueue.setNull()` alongside the other queue teardowns.
 
 ## Debug Layer
 
@@ -226,7 +228,7 @@ Follow the existing compute queue pattern — add a third queue field to each ba
 - `src/d3d12/d3d12-command.cpp` — command list type mapping fix, QFOT no-op implementation
 - `src/debug-layer/debug-device.cpp` — wrap transfer queue
 - `src/debug-layer/debug-command-encoder.cpp` — validate encoder restrictions (render, compute, ray tracing passes), QFOT validation
-- `src/command-encoder.h` — base class QFOT method declarations
+- `src/command-buffer.h` — base `CommandEncoder` class QFOT method declarations
 - `src/cpu/cpu-device.cpp` — return `SLANG_E_NOT_AVAILABLE` for transfer queue
 - `src/d3d11/d3d11-device.cpp` — return `SLANG_E_NOT_AVAILABLE` for transfer queue
 - `src/metal/metal-device.cpp` — return `SLANG_E_NOT_AVAILABLE` for transfer queue
