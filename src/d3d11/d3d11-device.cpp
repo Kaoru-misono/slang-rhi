@@ -609,7 +609,7 @@ Result DeviceImpl::readBuffer(IBuffer* buffer, Offset offset, Size size, void* o
 
 Result DeviceImpl::getQueue(QueueType type, ICommandQueue** outQueue)
 {
-    if (type == QueueType::Compute)
+    if (type == QueueType::Compute || type == QueueType::Transfer)
         return SLANG_E_NOT_AVAILABLE;
     if (type != QueueType::Graphics)
         return SLANG_E_INVALID_ARG;
