@@ -31,6 +31,7 @@ public:
     VulkanApi& m_api;
 
     VkCommandBuffer m_cmdBuffer;
+    QueueType m_queueType = QueueType::Graphics;
 
     StateTracking m_stateTracking;
 
@@ -139,6 +140,7 @@ public:
 Result CommandRecorder::record(CommandBufferImpl* commandBuffer)
 {
     m_cmdBuffer = commandBuffer->m_commandBuffer;
+    m_queueType = commandBuffer->m_queue->m_type;
 
 #if SLANG_RHI_ENABLE_AFTERMATH
     // Enable aftermath marker tracking if aftermath is enabled and extension is available.
@@ -1694,6 +1696,24 @@ void CommandRecorder::commitBarriers()
     if (testing::gDebugDisableStateTracking)
         return;
 
+    // Compute queues only support compute, transfer, and related stages.
+    // Filter out graphics-only stages to avoid Vulkan validation errors.
+    auto filterStageFlags = [this](VkPipelineStageFlags flags) -> VkPipelineStageFlags
+    {
+        if (m_queueType == QueueType::Compute)
+        {
+            constexpr VkPipelineStageFlags kComputeQueueStages = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT |
+                VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT |
+                VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR |
+                VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR | VK_PIPELINE_STAGE_ALL_COMMANDS_BIT |
+                VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT;
+            flags &= kComputeQueueStages;
+            if (flags == 0)
+                flags = VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
+        }
+        return flags;
+    };
+
     short_vector<VkBufferMemoryBarrier, 16> bufferBarriers;
     short_vector<VkImageMemoryBarrier, 16> imageBarriers;
 
@@ -1736,8 +1756,8 @@ void CommandRecorder::commitBarriers()
     {
         BufferImpl* buffer = checked_cast<BufferImpl*>(bufferBarrier.buffer);
 
-        VkPipelineStageFlags beforeStageFlags = calcPipelineStageFlags(bufferBarrier.stateBefore, true);
-        VkPipelineStageFlags afterStageFlags = calcPipelineStageFlags(bufferBarrier.stateAfter, false);
+        VkPipelineStageFlags beforeStageFlags = filterStageFlags(calcPipelineStageFlags(bufferBarrier.stateBefore, true));
+        VkPipelineStageFlags afterStageFlags = filterStageFlags(calcPipelineStageFlags(bufferBarrier.stateAfter, false));
 
         if ((beforeStageFlags != activeBeforeStageFlags || afterStageFlags != activeAfterStageFlags) &&
             !bufferBarriers.empty())
@@ -1771,8 +1791,8 @@ void CommandRecorder::commitBarriers()
     {
         TextureImpl* texture = checked_cast<TextureImpl*>(textureBarrier.texture);
 
-        VkPipelineStageFlags beforeStageFlags = calcPipelineStageFlags(textureBarrier.stateBefore, true);
-        VkPipelineStageFlags afterStageFlags = calcPipelineStageFlags(textureBarrier.stateAfter, false);
+        VkPipelineStageFlags beforeStageFlags = filterStageFlags(calcPipelineStageFlags(textureBarrier.stateBefore, true));
+        VkPipelineStageFlags afterStageFlags = filterStageFlags(calcPipelineStageFlags(textureBarrier.stateAfter, false));
 
         if ((beforeStageFlags != activeBeforeStageFlags || afterStageFlags != activeAfterStageFlags) &&
             !imageBarriers.empty())

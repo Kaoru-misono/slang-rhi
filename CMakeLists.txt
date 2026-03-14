@@ -459,7 +459,7 @@ if(SLANG_RHI_ENABLE_VULKAN)
     message(STATUS "Fetching VMA ...")
     FetchPackage(vma URL ${SLANG_RHI_VMA_URL})
     add_library(slang-rhi-vma INTERFACE)
-    target_include_directories(slang-rhi-vma INTERFACE ${vma_SOURCE_DIR}/include)
+    target_include_directories(slang-rhi-vma SYSTEM INTERFACE ${vma_SOURCE_DIR}/include)
 endif()
 
 # Fetch & setup Metal C++ headers
@@ -868,6 +868,7 @@ if(SLANG_RHI_BUILD_TESTS AND NOT SLANG_RHI_BUILD_SHARED)
         tests/test-combined-texture-sampler.cpp
         tests/test-compute-indirect.cpp
         tests/test-compute-smoke.cpp
+        tests/test-compute-queue.cpp
         tests/test-compute-trivial.cpp
         tests/test-cooperative-matrix.cpp
         tests/test-cooperative-vector.cpp
@@ -926,6 +927,7 @@ if(SLANG_RHI_BUILD_TESTS AND NOT SLANG_RHI_BUILD_SHARED)
         tests/test-texture-view.cpp
         tests/test-timer.cpp
         tests/test-uint16-structured-buffer.cpp
+        tests/test-vma.cpp
         tests/testing.cpp
         tests/texture-utils.cpp
         tests/texture-test.cpp
