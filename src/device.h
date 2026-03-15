@@ -14,6 +14,7 @@
 
 #include <atomic>
 #include <map>
+#include <mutex>
 #include <unordered_map>
 
 namespace rhi {
@@ -114,6 +115,8 @@ public:
     void free();
 
 protected:
+    mutable std::mutex m_mutex;
+
     struct ComponentKeyHasher
     {
         std::size_t operator()(const ComponentKey& k) const { return k.hash; }
@@ -468,6 +471,7 @@ public:
     ComPtr<IPersistentCache> m_persistentShaderCache;
     ComPtr<IPersistentCache> m_persistentPipelineCache;
 
+    mutable std::mutex m_shaderObjectLayoutCacheMutex;
     std::map<slang::TypeLayoutReflection*, RefPtr<ShaderObjectLayout>> m_shaderObjectLayoutCache;
 
     // List of heaps managed by this device. DeviceImpl is expected
