@@ -1061,6 +1061,11 @@ Result DeviceImpl::initialize(const DeviceDesc& desc)
     SLANG_RETURN_ON_FAIL(m_computeQueue->init(1));
     m_computeQueue->setInternalReferenceCount(1);
 
+    // Create async transfer (copy) queue.
+    m_transferQueue = new CommandQueueImpl(this, QueueType::Transfer);
+    SLANG_RETURN_ON_FAIL(m_transferQueue->init(2));
+    m_transferQueue->setInternalReferenceCount(1);
+
     // Retrieve timestamp frequency.
     m_graphicsQueue->m_d3dQueue->GetTimestampFrequency(&m_info.timestampFrequency);
 
@@ -1092,6 +1097,9 @@ Result DeviceImpl::getQueue(QueueType type, ICommandQueue** outQueue)
         return SLANG_OK;
     case QueueType::Compute:
         returnComPtr(outQueue, m_computeQueue);
+        return SLANG_OK;
+    case QueueType::Transfer:
+        returnComPtr(outQueue, m_transferQueue);
         return SLANG_OK;
     default:
         return SLANG_E_INVALID_ARG;
@@ -2071,6 +2079,11 @@ DeviceImpl::~DeviceImpl()
     {
         m_computeQueue->shutdown();
         m_computeQueue.setNull();
+    }
+    if (m_transferQueue)
+    {
+        m_transferQueue->shutdown();
+        m_transferQueue.setNull();
     }
 
     m_bindlessDescriptorSet.setNull();

@@ -1553,10 +1553,33 @@ void CommandRecorder::cmdGlobalBarrier(const commands::GlobalBarrier& cmd)
     m_cmdList->ResourceBarrier(1, &barrier);
 }
 
-void CommandRecorder::cmdReleaseBufferForQueue(const commands::ReleaseBufferForQueue& cmd) { SLANG_UNUSED(cmd); }
-void CommandRecorder::cmdReleaseTextureForQueue(const commands::ReleaseTextureForQueue& cmd) { SLANG_UNUSED(cmd); }
-void CommandRecorder::cmdAcquireBufferFromQueue(const commands::AcquireBufferFromQueue& cmd) { SLANG_UNUSED(cmd); }
-void CommandRecorder::cmdAcquireTextureFromQueue(const commands::AcquireTextureFromQueue& cmd) { SLANG_UNUSED(cmd); }
+void CommandRecorder::cmdReleaseBufferForQueue(const commands::ReleaseBufferForQueue& cmd)
+{
+    m_stateTracking.setBufferState(checked_cast<BufferImpl*>(cmd.buffer), cmd.currentState);
+}
+
+void CommandRecorder::cmdReleaseTextureForQueue(const commands::ReleaseTextureForQueue& cmd)
+{
+    m_stateTracking.setTextureState(
+        checked_cast<TextureImpl*>(cmd.texture),
+        cmd.subresourceRange,
+        cmd.currentState
+    );
+}
+
+void CommandRecorder::cmdAcquireBufferFromQueue(const commands::AcquireBufferFromQueue& cmd)
+{
+    m_stateTracking.setBufferState(checked_cast<BufferImpl*>(cmd.buffer), cmd.desiredState);
+}
+
+void CommandRecorder::cmdAcquireTextureFromQueue(const commands::AcquireTextureFromQueue& cmd)
+{
+    m_stateTracking.setTextureState(
+        checked_cast<TextureImpl*>(cmd.texture),
+        cmd.subresourceRange,
+        cmd.desiredState
+    );
+}
 
 void CommandRecorder::cmdPushDebugGroup(const commands::PushDebugGroup& cmd)
 {
@@ -1796,8 +1819,18 @@ Result CommandQueueImpl::init(uint32_t queueIndex)
     m_queueIndex = queueIndex;
     m_d3dDevice = device->m_device;
 
-    m_commandListType = (m_type == QueueType::Compute) ? D3D12_COMMAND_LIST_TYPE_COMPUTE
-                                                       : D3D12_COMMAND_LIST_TYPE_DIRECT;
+    switch (m_type)
+    {
+    case QueueType::Compute:
+        m_commandListType = D3D12_COMMAND_LIST_TYPE_COMPUTE;
+        break;
+    case QueueType::Transfer:
+        m_commandListType = D3D12_COMMAND_LIST_TYPE_COPY;
+        break;
+    default:
+        m_commandListType = D3D12_COMMAND_LIST_TYPE_DIRECT;
+        break;
+    }
 
     D3D12_COMMAND_QUEUE_DESC queueDesc = {};
     queueDesc.Type = m_commandListType;
