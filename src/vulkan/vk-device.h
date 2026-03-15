@@ -229,6 +229,7 @@ public:
     VulkanDeviceQueue m_deviceQueue;
     uint32_t m_graphicsQueueFamilyIndex;
     uint32_t m_computeQueueFamilyIndex;
+    uint32_t m_transferQueueFamilyIndex;
 
     struct CooperativeMatrixFlexibleProperty
     {
@@ -247,6 +248,7 @@ public:
     std::vector<CooperativeMatrixFlexibleProperty> m_cooperativeMatrixFlexibleProperties;
     RefPtr<CommandQueueImpl> m_graphicsQueue;
     RefPtr<CommandQueueImpl> m_computeQueue;
+    RefPtr<CommandQueueImpl> m_transferQueue;
 
     DescriptorSetAllocator descriptorSetAllocator;
     RefPtr<BindlessDescriptorSet> m_bindlessDescriptorSet;
