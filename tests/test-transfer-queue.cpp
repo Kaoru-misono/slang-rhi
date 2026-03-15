@@ -3,6 +3,35 @@
 using namespace rhi;
 using namespace rhi::testing;
 
+// Helper: synchronize transfer queue results to graphics queue.
+// readBuffer uses the graphics queue internally, so after writing on the transfer queue,
+// we need GPU-GPU synchronization to make the writes visible to the graphics queue.
+static void syncTransferToGraphics(IDevice* device, ICommandQueue* transferQueue)
+{
+    ComPtr<IFence> syncFence;
+    REQUIRE_CALL(device->createFence({}, syncFence.writeRef()));
+
+    // Signal fence on transfer queue
+    IFence* sf = syncFence.get();
+    uint64_t sv = 1;
+    SubmitDesc signalDesc = {};
+    signalDesc.signalFences = &sf;
+    signalDesc.signalFenceValues = &sv;
+    signalDesc.signalFenceCount = 1;
+    REQUIRE_CALL(transferQueue->submit(signalDesc));
+
+    // Wait on graphics queue
+    auto graphicsQueue = device->getQueue(QueueType::Graphics);
+    SubmitDesc waitDesc = {};
+    waitDesc.waitFences = &sf;
+    waitDesc.waitFenceValues = &sv;
+    waitDesc.waitFenceCount = 1;
+    REQUIRE_CALL(graphicsQueue->submit(waitDesc));
+
+    // Ensure graphics queue finishes the wait before readBuffer submits more work
+    graphicsQueue->waitOnHost();
+}
+
 // Test that getQueue(QueueType::Transfer) succeeds on D3D12 and Vulkan.
 GPU_TEST_CASE("transfer-queue-create", D3D12 | Vulkan)
 {
@@ -40,6 +69,12 @@ GPU_TEST_CASE("transfer-queue-copy", D3D12 | Vulkan)
     ComPtr<IBuffer> dstBuffer;
     REQUIRE_CALL(device->createBuffer(bufferDesc, nullptr, dstBuffer.writeRef()));
 
+    // Ensure the graphics queue's internal device queue is fully flushed before using
+    // the transfer queue. createBuffer with initial data uses the internal device queue
+    // for uploads, and its pending command buffer state can interfere with cross-queue
+    // synchronization during readBuffer.
+    device->getQueue(QueueType::Graphics)->waitOnHost();
+
     {
         auto encoder = transferQueue->createCommandEncoder();
         encoder->setBufferState(srcBuffer, ResourceState::CopySource);
@@ -48,6 +83,9 @@ GPU_TEST_CASE("transfer-queue-copy", D3D12 | Vulkan)
         transferQueue->submit(encoder->finish());
         transferQueue->waitOnHost();
     }
+
+    // readBuffer uses the graphics queue internally — need GPU-GPU sync from transfer queue.
+    syncTransferToGraphics(device, transferQueue);
 
     compareComputeResult(device, dstBuffer, makeArray<float>(1.0f, 2.0f, 3.0f, 4.0f));
 }
@@ -142,6 +180,9 @@ GPU_TEST_CASE("transfer-queue-all-queues", D3D12 | Vulkan)
     computeQueue->waitOnHost();
     transferQueue->waitOnHost();
 
+    // Sync transfer queue writes to graphics queue before readBuffer.
+    syncTransferToGraphics(device, transferQueue);
+
     compareComputeResult(device, bufferA, makeArray<float>(11.0f, 12.0f, 13.0f, 14.0f));
     compareComputeResult(device, bufferB, makeArray<float>(16.0f, 26.0f, 36.0f, 46.0f));
     compareComputeResult(device, copyDst, makeArray<float>(100.0f, 200.0f, 300.0f, 400.0f));
@@ -215,6 +256,9 @@ GPU_TEST_CASE("transfer-queue-ownership-transfer", D3D12 | Vulkan)
     }
 
     transferQueue->waitOnHost();
+
+    // Sync transfer queue writes to graphics queue before readBuffer.
+    syncTransferToGraphics(device, transferQueue);
 
     compareComputeResult(device, dstBuffer, makeArray<float>(1.0f, 2.0f, 3.0f, 4.0f));
 }

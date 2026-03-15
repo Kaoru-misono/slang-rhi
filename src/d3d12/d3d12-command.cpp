@@ -2138,11 +2138,15 @@ Result CommandBufferImpl::init()
     }
 #endif
 
-    ID3D12DescriptorHeap* heaps[] = {
-        device->m_gpuCbvSrvUavHeap->getHeap(),
-        device->m_gpuSamplerHeap->getHeap(),
-    };
-    m_d3dCommandList->SetDescriptorHeaps(SLANG_COUNT_OF(heaps), heaps);
+    // SetDescriptorHeaps is not valid on COPY command lists.
+    if (listType != D3D12_COMMAND_LIST_TYPE_COPY)
+    {
+        ID3D12DescriptorHeap* heaps[] = {
+            device->m_gpuCbvSrvUavHeap->getHeap(),
+            device->m_gpuSamplerHeap->getHeap(),
+        };
+        m_d3dCommandList->SetDescriptorHeaps(SLANG_COUNT_OF(heaps), heaps);
+    }
 
     m_constantBufferPool.init(device);
 
@@ -2157,11 +2161,15 @@ Result CommandBufferImpl::reset()
     DeviceImpl* device = getDevice<DeviceImpl>();
     SLANG_RETURN_ON_FAIL(m_d3dCommandAllocator->Reset());
     SLANG_RETURN_ON_FAIL(m_d3dCommandList->Reset(m_d3dCommandAllocator, nullptr));
-    ID3D12DescriptorHeap* heaps[] = {
-        device->m_gpuCbvSrvUavHeap->getHeap(),
-        device->m_gpuSamplerHeap->getHeap(),
-    };
-    m_d3dCommandList->SetDescriptorHeaps(SLANG_COUNT_OF(heaps), heaps);
+    // SetDescriptorHeaps is not valid on COPY command lists.
+    if (m_queue->m_commandListType != D3D12_COMMAND_LIST_TYPE_COPY)
+    {
+        ID3D12DescriptorHeap* heaps[] = {
+            device->m_gpuCbvSrvUavHeap->getHeap(),
+            device->m_gpuSamplerHeap->getHeap(),
+        };
+        m_d3dCommandList->SetDescriptorHeaps(SLANG_COUNT_OF(heaps), heaps);
+    }
 
     m_cbvSrvUavArena.reset();
     m_samplerArena.reset();

@@ -2237,7 +2237,10 @@ Result CommandQueueImpl::submit(const SubmitDesc& desc)
     for (uint32_t i = 0; i < desc.waitFenceCount; ++i)
     {
         FenceImpl* fence = checked_cast<FenceImpl*>(desc.waitFences[i]);
-        addWaitSemaphore(fence->m_semaphore, desc.waitFenceValues[i]);
+        // Use ALL_COMMANDS_BIT to establish a full memory dependency for cross-queue synchronization.
+        // BOTTOM_OF_PIPE_BIT would create an empty access scope, making writes from the signaling
+        // queue invisible to subsequent operations on this queue.
+        addWaitSemaphore(fence->m_semaphore, desc.waitFenceValues[i], VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
     }
 
     // Setup signal semaphores.
