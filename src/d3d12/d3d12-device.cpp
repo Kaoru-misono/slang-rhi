@@ -546,7 +546,7 @@ Result DeviceImpl::initialize(const DeviceDesc& desc)
             GPUDescriptorHeap::create(
                 m_device,
                 D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV,
-                1000000,
+                desc.d3d12CbvSrvUavHeapSize,
                 16 * 1024,
                 m_gpuCbvSrvUavHeap.writeRef()
             )
@@ -555,8 +555,8 @@ Result DeviceImpl::initialize(const DeviceDesc& desc)
             GPUDescriptorHeap::create(
                 m_device,
                 D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER,
-                2048,
-                2048,
+                min(desc.d3d12SamplerHeapSize, 2048u),
+                min(desc.d3d12SamplerHeapSize, 2048u),
                 m_gpuSamplerHeap.writeRef()
             )
         );

@@ -197,6 +197,11 @@ GPUDescriptorRangeAllocation GPUDescriptorHeap::allocate(uint32_t count)
     OffsetAllocator::Allocation heapOffset = m_allocator.allocate(count);
     if (heapOffset)
     {
+        auto report = m_allocator.storageReport();
+        uint32_t used = m_size - report.totalFreeSpace;
+        if (used > m_highWaterMark)
+            m_highWaterMark = used;
+
         GPUDescriptorRangeAllocation allocation;
         allocation.firstCpuHandle = m_heap.getCpuHandle(heapOffset.offset);
         allocation.firstGpuHandle = m_heap.getGpuHandle(heapOffset.offset);
@@ -205,6 +210,18 @@ GPUDescriptorRangeAllocation GPUDescriptorHeap::allocate(uint32_t count)
         allocation.heapOffset = heapOffset;
         return allocation;
     }
+
+    auto report = m_allocator.storageReport();
+    fprintf(
+        stderr,
+        "slang-rhi: GPU descriptor heap allocation failed (requested %u descriptors, "
+        "heap size %u, free space %u, high water mark %u). "
+        "Consider increasing DeviceDesc::d3d12CbvSrvUavHeapSize or d3d12SamplerHeapSize.\n",
+        count,
+        m_size,
+        report.totalFreeSpace,
+        m_highWaterMark
+    );
     return {};
 }
 
@@ -257,7 +274,13 @@ GPUDescriptorRange GPUDescriptorArena::allocate(uint32_t count)
     if (count > m_currentChunkSpace)
     {
         uint32_t chunkSize = max(count, m_chunkSize);
-        m_chunks.push_back(m_heap->allocate(chunkSize));
+        auto chunk = m_heap->allocate(chunkSize);
+        if (!chunk.isValid())
+        {
+            // Allocation failed — return invalid range.
+            return {};
+        }
+        m_chunks.push_back(chunk);
         m_currentChunkSpace = chunkSize;
         m_currentChunkOffset = 0;
     }

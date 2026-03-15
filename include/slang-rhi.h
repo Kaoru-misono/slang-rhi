@@ -3144,6 +3144,14 @@ struct DeviceDesc
     /// Size of a page in staging heap.
     Size stagingHeapPageSize = 16 * 1024 * 1024;
 
+    /// D3D12: Maximum number of CBV/SRV/UAV descriptors in the GPU-visible heap.
+    /// Default is 1,000,000. Increase for large bindless scenes with many textures/buffers.
+    uint32_t d3d12CbvSrvUavHeapSize = 1000000;
+
+    /// D3D12: Maximum number of Sampler descriptors in the GPU-visible heap.
+    /// Default is 2,048 (D3D12 hardware limit). Cannot exceed 2,048.
+    uint32_t d3d12SamplerHeapSize = 2048;
+
     // Configuration for bindless resources.
     BindlessDesc bindless = {};
 };

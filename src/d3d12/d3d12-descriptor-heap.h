@@ -228,10 +228,16 @@ public:
     /// Free a range of descriptors.
     void free(const GPUDescriptorRangeAllocation& allocation);
 
+    /// Return the high water mark (peak usage) of the heap.
+    uint32_t getHighWaterMark() const { return m_highWaterMark; }
+    /// Return the total size of the heap.
+    uint32_t getSize() const { return m_size; }
+
 private:
     ID3D12Device* m_device;
     uint32_t m_size;
     uint32_t m_descriptorSize;
+    uint32_t m_highWaterMark = 0;
     std::mutex m_mutex;
     DescriptorHeap m_heap;
     OffsetAllocator m_allocator;
