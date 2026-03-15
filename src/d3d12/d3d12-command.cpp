@@ -64,11 +64,6 @@ public:
 
     BindingDataImpl* m_bindingData = nullptr;
 
-    // Split barrier support: after a pass ends, the next commitBarriers() emits BEGIN_ONLY
-    // and saves the barriers. The following commitBarriers() emits END_ONLY to complete them.
-    bool m_afterPassEnd = false;
-    short_vector<D3D12_RESOURCE_BARRIER, 16> m_pendingSplitBarriers;
-
 #if SLANG_RHI_ENABLE_AFTERMATH
     GFSDK_Aftermath_ContextHandle m_aftermathContext = nullptr;
     AftermathMarkerTracker* m_aftermathMarkerTracker = nullptr;
@@ -177,8 +172,6 @@ Result CommandRecorder::record(CommandBufferImpl* commandBuffer)
     }
 
     // Transition all resources back to their default states.
-    // This uses regular (non-split) barriers since we're closing the command list.
-    m_afterPassEnd = false;
     m_stateTracking.requireDefaultStates();
     commitBarriers();
     m_stateTracking.clear();
@@ -787,7 +780,6 @@ void CommandRecorder::cmdEndRenderPass(const commands::EndRenderPass& cmd)
     m_depthStencilView = nullptr;
 
     m_renderPassActive = false;
-    m_afterPassEnd = true;
 }
 
 void CommandRecorder::cmdSetRenderState(const commands::SetRenderState& cmd)
@@ -1023,7 +1015,6 @@ void CommandRecorder::cmdBeginComputePass(const commands::BeginComputePass& cmd)
 void CommandRecorder::cmdEndComputePass(const commands::EndComputePass& cmd)
 {
     m_computePassActive = false;
-    m_afterPassEnd = true;
 }
 
 void CommandRecorder::cmdSetComputeState(const commands::SetComputeState& cmd)
@@ -1089,7 +1080,6 @@ void CommandRecorder::cmdBeginRayTracingPass(const commands::BeginRayTracingPass
 void CommandRecorder::cmdEndRayTracingPass(const commands::EndRayTracingPass& cmd)
 {
     m_rayTracingPassActive = false;
-    m_afterPassEnd = true;
 }
 
 void CommandRecorder::cmdSetRayTracingState(const commands::SetRayTracingState& cmd)
@@ -1733,17 +1723,6 @@ void CommandRecorder::commitBarriers()
     if (testing::gDebugDisableStateTracking)
         return;
 
-    // Complete any pending split barriers from a previous pass end.
-    if (!m_pendingSplitBarriers.empty())
-    {
-        for (auto& barrier : m_pendingSplitBarriers)
-        {
-            barrier.Flags = D3D12_RESOURCE_BARRIER_FLAG_END_ONLY;
-        }
-        m_cmdList->ResourceBarrier((UINT)m_pendingSplitBarriers.size(), m_pendingSplitBarriers.data());
-        m_pendingSplitBarriers.clear();
-    }
-
     short_vector<D3D12_RESOURCE_BARRIER, 16> barriers;
 
     for (const auto& bufferBarrier : m_stateTracking.getBufferBarriers())
@@ -1819,43 +1798,7 @@ void CommandRecorder::commitBarriers()
 
     if (!barriers.empty())
     {
-        if (m_afterPassEnd)
-        {
-            // After a pass ends, emit barriers as BEGIN_ONLY (split barrier).
-            // The GPU can overlap these transitions with previous pass's in-flight work.
-            // They will be completed as END_ONLY at the next commitBarriers() call.
-            for (auto& barrier : barriers)
-            {
-                if (barrier.Type == D3D12_RESOURCE_BARRIER_TYPE_TRANSITION)
-                {
-                    barrier.Flags = D3D12_RESOURCE_BARRIER_FLAG_BEGIN_ONLY;
-                    m_pendingSplitBarriers.push_back(barrier);
-                }
-            }
-            // UAV barriers cannot be split — emit them immediately.
-            short_vector<D3D12_RESOURCE_BARRIER, 16> immediateBarriers;
-            for (const auto& barrier : barriers)
-            {
-                if (barrier.Type != D3D12_RESOURCE_BARRIER_TYPE_TRANSITION)
-                {
-                    immediateBarriers.push_back(barrier);
-                }
-            }
-            // Submit split barriers and immediate barriers.
-            if (!m_pendingSplitBarriers.empty())
-            {
-                m_cmdList->ResourceBarrier((UINT)m_pendingSplitBarriers.size(), m_pendingSplitBarriers.data());
-            }
-            if (!immediateBarriers.empty())
-            {
-                m_cmdList->ResourceBarrier((UINT)immediateBarriers.size(), immediateBarriers.data());
-            }
-            m_afterPassEnd = false;
-        }
-        else
-        {
-            m_cmdList->ResourceBarrier((UINT)barriers.size(), barriers.data());
-        }
+        m_cmdList->ResourceBarrier((UINT)barriers.size(), barriers.data());
     }
 
     m_stateTracking.clearBarriers();

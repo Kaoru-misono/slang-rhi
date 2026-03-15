@@ -918,6 +918,7 @@ if(SLANG_RHI_BUILD_TESTS AND NOT SLANG_RHI_BUILD_SHARED)
         tests/test-ring-queue.cpp
         tests/test-short-vector.cpp
         tests/test-staging-heap.cpp
+        tests/test-state-tracking.cpp
         tests/test-static-vector.cpp
         tests/test-surface.cpp
         tests/test-texture-allocation-info.cpp
