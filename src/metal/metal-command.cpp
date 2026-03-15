@@ -663,14 +663,41 @@ void CommandRecorder::cmdDrawIndexed(const commands::DrawIndexed& cmd)
 
 void CommandRecorder::cmdDrawIndirect(const commands::DrawIndirect& cmd)
 {
-    SLANG_UNUSED(cmd);
-    NOT_SUPPORTED(S_RenderPassEncoder_drawIndirect);
+    if (!m_renderStateValid)
+        return;
+
+    auto argBuffer = checked_cast<BufferImpl*>(cmd.argBuffer.buffer);
+
+    // Metal does not support count buffers for indirect draw.
+    // Each indirect draw call draws maxDrawCount times from the argument buffer.
+    for (uint32_t i = 0; i < cmd.maxDrawCount; ++i)
+    {
+        m_renderCommandEncoder->drawPrimitives(
+            m_renderPipeline->m_primitiveType,
+            argBuffer->m_buffer.get(),
+            cmd.argBuffer.offset + i * sizeof(MTL::DrawPrimitivesIndirectArguments)
+        );
+    }
 }
 
 void CommandRecorder::cmdDrawIndexedIndirect(const commands::DrawIndexedIndirect& cmd)
 {
-    SLANG_UNUSED(cmd);
-    NOT_SUPPORTED(S_RenderPassEncoder_drawIndexedIndirect);
+    if (!m_renderStateValid)
+        return;
+
+    auto argBuffer = checked_cast<BufferImpl*>(cmd.argBuffer.buffer);
+
+    for (uint32_t i = 0; i < cmd.maxDrawCount; ++i)
+    {
+        m_renderCommandEncoder->drawIndexedPrimitives(
+            m_renderPipeline->m_primitiveType,
+            m_indexType,
+            m_indexBuffer->m_buffer.get(),
+            m_indexBufferOffset,
+            argBuffer->m_buffer.get(),
+            cmd.argBuffer.offset + i * sizeof(MTL::DrawIndexedPrimitivesIndirectArguments)
+        );
+    }
 }
 
 void CommandRecorder::cmdDrawMeshTasks(const commands::DrawMeshTasks& cmd)
@@ -735,8 +762,15 @@ void CommandRecorder::cmdDispatchCompute(const commands::DispatchCompute& cmd)
 
 void CommandRecorder::cmdDispatchComputeIndirect(const commands::DispatchComputeIndirect& cmd)
 {
-    SLANG_UNUSED(cmd);
-    NOT_SUPPORTED(S_ComputePassEncoder_dispatchComputeIndirect);
+    if (!m_computeStateValid)
+        return;
+
+    auto argBuffer = checked_cast<BufferImpl*>(cmd.argBuffer.buffer);
+    m_computeCommandEncoder->dispatchThreadgroups(
+        argBuffer->m_buffer.get(),
+        cmd.argBuffer.offset,
+        m_computePipeline->m_threadGroupSize
+    );
 }
 
 void CommandRecorder::cmdBeginRayTracingPass(const commands::BeginRayTracingPass& cmd)
