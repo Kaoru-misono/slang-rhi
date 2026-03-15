@@ -1569,10 +1569,171 @@ void CommandRecorder::cmdGlobalBarrier(const commands::GlobalBarrier& cmd)
     );
 }
 
-void CommandRecorder::cmdReleaseBufferForQueue(const commands::ReleaseBufferForQueue& cmd) { SLANG_UNUSED(cmd); }
-void CommandRecorder::cmdReleaseTextureForQueue(const commands::ReleaseTextureForQueue& cmd) { SLANG_UNUSED(cmd); }
-void CommandRecorder::cmdAcquireBufferFromQueue(const commands::AcquireBufferFromQueue& cmd) { SLANG_UNUSED(cmd); }
-void CommandRecorder::cmdAcquireTextureFromQueue(const commands::AcquireTextureFromQueue& cmd) { SLANG_UNUSED(cmd); }
+void CommandRecorder::cmdReleaseBufferForQueue(const commands::ReleaseBufferForQueue& cmd)
+{
+    BufferImpl* buffer = checked_cast<BufferImpl*>(cmd.buffer);
+
+    uint32_t srcFamily = m_device->getQueueFamilyIndex(m_queueType);
+    uint32_t dstFamily = m_device->getQueueFamilyIndex(cmd.dstQueue);
+
+    if (srcFamily == dstFamily)
+    {
+        m_stateTracking.setBufferState(buffer, cmd.currentState);
+        return;
+    }
+
+    commitBarriers();
+
+    VkBufferMemoryBarrier barrier = {};
+    barrier.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
+    barrier.srcAccessMask = calcAccessFlags(cmd.currentState);
+    barrier.dstAccessMask = 0;
+    barrier.srcQueueFamilyIndex = srcFamily;
+    barrier.dstQueueFamilyIndex = dstFamily;
+    barrier.buffer = buffer->m_buffer.m_buffer;
+    barrier.offset = 0;
+    barrier.size = buffer->m_desc.size;
+
+    VkPipelineStageFlags srcStage = calcPipelineStageFlags(cmd.currentState, true);
+    m_api.vkCmdPipelineBarrier(
+        m_cmdBuffer,
+        srcStage, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
+        0,
+        0, nullptr,
+        1, &barrier,
+        0, nullptr
+    );
+}
+
+void CommandRecorder::cmdReleaseTextureForQueue(const commands::ReleaseTextureForQueue& cmd)
+{
+    TextureImpl* texture = checked_cast<TextureImpl*>(cmd.texture);
+
+    uint32_t srcFamily = m_device->getQueueFamilyIndex(m_queueType);
+    uint32_t dstFamily = m_device->getQueueFamilyIndex(cmd.dstQueue);
+
+    if (srcFamily == dstFamily)
+    {
+        m_stateTracking.setTextureState(texture, cmd.subresourceRange, cmd.currentState);
+        return;
+    }
+
+    commitBarriers();
+
+    VkImageLayout currentLayout = translateImageLayout(cmd.currentState);
+
+    VkImageMemoryBarrier barrier = {};
+    barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+    barrier.image = texture->m_image;
+    barrier.oldLayout = currentLayout;
+    barrier.newLayout = currentLayout;
+    barrier.srcAccessMask = calcAccessFlags(cmd.currentState);
+    barrier.dstAccessMask = 0;
+    barrier.srcQueueFamilyIndex = srcFamily;
+    barrier.dstQueueFamilyIndex = dstFamily;
+    barrier.subresourceRange.aspectMask = getAspectMaskFromFormat(getVkFormat(texture->m_desc.format));
+    barrier.subresourceRange.baseMipLevel = cmd.subresourceRange.mip;
+    barrier.subresourceRange.levelCount = cmd.subresourceRange.mipCount == 0
+        ? VK_REMAINING_MIP_LEVELS : cmd.subresourceRange.mipCount;
+    barrier.subresourceRange.baseArrayLayer = cmd.subresourceRange.layer;
+    barrier.subresourceRange.layerCount = cmd.subresourceRange.layerCount == 0
+        ? VK_REMAINING_ARRAY_LAYERS : cmd.subresourceRange.layerCount;
+
+    VkPipelineStageFlags srcStage = calcPipelineStageFlags(cmd.currentState, true);
+    m_api.vkCmdPipelineBarrier(
+        m_cmdBuffer,
+        srcStage, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
+        0,
+        0, nullptr,
+        0, nullptr,
+        1, &barrier
+    );
+}
+
+void CommandRecorder::cmdAcquireBufferFromQueue(const commands::AcquireBufferFromQueue& cmd)
+{
+    BufferImpl* buffer = checked_cast<BufferImpl*>(cmd.buffer);
+
+    uint32_t srcFamily = m_device->getQueueFamilyIndex(cmd.srcQueue);
+    uint32_t dstFamily = m_device->getQueueFamilyIndex(m_queueType);
+
+    if (srcFamily == dstFamily)
+    {
+        m_stateTracking.setBufferState(buffer, cmd.desiredState);
+        return;
+    }
+
+    commitBarriers();
+
+    VkBufferMemoryBarrier barrier = {};
+    barrier.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
+    barrier.srcAccessMask = 0;
+    barrier.dstAccessMask = calcAccessFlags(cmd.desiredState);
+    barrier.srcQueueFamilyIndex = srcFamily;
+    barrier.dstQueueFamilyIndex = dstFamily;
+    barrier.buffer = buffer->m_buffer.m_buffer;
+    barrier.offset = 0;
+    barrier.size = buffer->m_desc.size;
+
+    VkPipelineStageFlags dstStage = calcPipelineStageFlags(cmd.desiredState, false);
+    m_api.vkCmdPipelineBarrier(
+        m_cmdBuffer,
+        VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, dstStage,
+        0,
+        0, nullptr,
+        1, &barrier,
+        0, nullptr
+    );
+
+    m_stateTracking.setBufferState(buffer, cmd.desiredState);
+}
+
+void CommandRecorder::cmdAcquireTextureFromQueue(const commands::AcquireTextureFromQueue& cmd)
+{
+    TextureImpl* texture = checked_cast<TextureImpl*>(cmd.texture);
+
+    uint32_t srcFamily = m_device->getQueueFamilyIndex(cmd.srcQueue);
+    uint32_t dstFamily = m_device->getQueueFamilyIndex(m_queueType);
+
+    if (srcFamily == dstFamily)
+    {
+        m_stateTracking.setTextureState(texture, cmd.subresourceRange, cmd.desiredState);
+        return;
+    }
+
+    commitBarriers();
+
+    VkImageLayout desiredLayout = translateImageLayout(cmd.desiredState);
+
+    VkImageMemoryBarrier barrier = {};
+    barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+    barrier.image = texture->m_image;
+    barrier.oldLayout = desiredLayout;
+    barrier.newLayout = desiredLayout;
+    barrier.srcAccessMask = 0;
+    barrier.dstAccessMask = calcAccessFlags(cmd.desiredState);
+    barrier.srcQueueFamilyIndex = srcFamily;
+    barrier.dstQueueFamilyIndex = dstFamily;
+    barrier.subresourceRange.aspectMask = getAspectMaskFromFormat(getVkFormat(texture->m_desc.format));
+    barrier.subresourceRange.baseMipLevel = cmd.subresourceRange.mip;
+    barrier.subresourceRange.levelCount = cmd.subresourceRange.mipCount == 0
+        ? VK_REMAINING_MIP_LEVELS : cmd.subresourceRange.mipCount;
+    barrier.subresourceRange.baseArrayLayer = cmd.subresourceRange.layer;
+    barrier.subresourceRange.layerCount = cmd.subresourceRange.layerCount == 0
+        ? VK_REMAINING_ARRAY_LAYERS : cmd.subresourceRange.layerCount;
+
+    VkPipelineStageFlags dstStage = calcPipelineStageFlags(cmd.desiredState, false);
+    m_api.vkCmdPipelineBarrier(
+        m_cmdBuffer,
+        VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, dstStage,
+        0,
+        0, nullptr,
+        0, nullptr,
+        1, &barrier
+    );
+
+    m_stateTracking.setTextureState(texture, cmd.subresourceRange, cmd.desiredState);
+}
 
 void CommandRecorder::cmdPushDebugGroup(const commands::PushDebugGroup& cmd)
 {
@@ -1719,6 +1880,15 @@ void CommandRecorder::commitBarriers()
             flags &= kComputeQueueStages;
             if (flags == 0)
                 flags = VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
+        }
+        else if (m_queueType == QueueType::Transfer)
+        {
+            constexpr VkPipelineStageFlags kTransferQueueStages = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT |
+                VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT |
+                VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
+            flags &= kTransferQueueStages;
+            if (flags == 0)
+                flags = VK_PIPELINE_STAGE_TRANSFER_BIT;
         }
         return flags;
     };
