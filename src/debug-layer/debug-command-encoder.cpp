@@ -311,6 +311,10 @@ IRenderPassEncoder* DebugCommandEncoder::beginRenderPass(const RenderPassDesc& d
     {
         RHI_VALIDATION_ERROR("Render passes are not supported on compute queues.");
     }
+    if (m_queueType == QueueType::Transfer)
+    {
+        RHI_VALIDATION_ERROR("Render passes are not supported on transfer queues.");
+    }
     m_passState = PassState::RenderPass;
     m_renderPassEncoder.baseObject = baseObject->beginRenderPass(desc);
     return &m_renderPassEncoder;
@@ -321,6 +325,10 @@ IComputePassEncoder* DebugCommandEncoder::beginComputePass()
     SLANG_RHI_API_FUNC;
     requireOpen();
     requireNoPass();
+    if (m_queueType == QueueType::Transfer)
+    {
+        RHI_VALIDATION_ERROR("Compute passes are not supported on transfer queues.");
+    }
     m_passState = PassState::ComputePass;
     m_computePassEncoder.baseObject = baseObject->beginComputePass();
     return &m_computePassEncoder;
@@ -334,6 +342,10 @@ IRayTracingPassEncoder* DebugCommandEncoder::beginRayTracingPass()
     if (m_queueType == QueueType::Compute)
     {
         RHI_VALIDATION_ERROR("Ray tracing passes are not supported on compute queues.");
+    }
+    if (m_queueType == QueueType::Transfer)
+    {
+        RHI_VALIDATION_ERROR("Ray tracing passes are not supported on transfer queues.");
     }
     m_passState = PassState::RayTracingPass;
     m_rayTracingPassEncoder.baseObject = baseObject->beginRayTracingPass();
@@ -902,6 +914,10 @@ void DebugCommandEncoder::releaseBufferForQueue(IBuffer* buffer, ResourceState c
     SLANG_RHI_API_FUNC;
     requireOpen();
     requireNoPass();
+    if (dstQueue == m_queueType)
+    {
+        RHI_VALIDATION_ERROR("releaseBufferForQueue: dstQueue must be different from current queue type.");
+    }
     baseObject->releaseBufferForQueue(buffer, currentState, dstQueue);
 }
 
@@ -915,6 +931,10 @@ void DebugCommandEncoder::releaseTextureForQueue(
     SLANG_RHI_API_FUNC;
     requireOpen();
     requireNoPass();
+    if (dstQueue == m_queueType)
+    {
+        RHI_VALIDATION_ERROR("releaseTextureForQueue: dstQueue must be different from current queue type.");
+    }
     baseObject->releaseTextureForQueue(texture, subresourceRange, currentState, dstQueue);
 }
 
@@ -923,6 +943,10 @@ void DebugCommandEncoder::acquireBufferFromQueue(IBuffer* buffer, ResourceState 
     SLANG_RHI_API_FUNC;
     requireOpen();
     requireNoPass();
+    if (srcQueue == m_queueType)
+    {
+        RHI_VALIDATION_ERROR("acquireBufferFromQueue: srcQueue must be different from current queue type.");
+    }
     baseObject->acquireBufferFromQueue(buffer, desiredState, srcQueue);
 }
 
@@ -936,6 +960,10 @@ void DebugCommandEncoder::acquireTextureFromQueue(
     SLANG_RHI_API_FUNC;
     requireOpen();
     requireNoPass();
+    if (srcQueue == m_queueType)
+    {
+        RHI_VALIDATION_ERROR("acquireTextureFromQueue: srcQueue must be different from current queue type.");
+    }
     baseObject->acquireTextureFromQueue(texture, subresourceRange, desiredState, srcQueue);
 }
 
