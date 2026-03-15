@@ -868,6 +868,7 @@ if(SLANG_RHI_BUILD_TESTS AND NOT SLANG_RHI_BUILD_SHARED)
         tests/test-combined-texture-sampler.cpp
         tests/test-compute-indirect.cpp
         tests/test-compute-smoke.cpp
+        tests/test-async-load.cpp
         tests/test-compute-queue.cpp
         tests/test-transfer-queue.cpp
         tests/test-compute-trivial.cpp
