@@ -150,6 +150,8 @@ public:
     NS::SharedPtr<MTL::Device> m_device;
     RefPtr<CommandQueueImpl> m_queue;
     NS::SharedPtr<MTL::CommandQueue> m_commandQueue;
+    RefPtr<CommandQueueImpl> m_transferQueue;
+    NS::SharedPtr<MTL::CommandQueue> m_transferCommandQueue;
     ClearEngine m_clearEngine;
 
     // Global registry of all acceleration structures.

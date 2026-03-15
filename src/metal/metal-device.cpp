@@ -91,6 +91,11 @@ DeviceImpl::~DeviceImpl()
         m_queue->shutdown();
         m_queue.setNull();
     }
+    if (m_transferQueue)
+    {
+        m_transferQueue->shutdown();
+        m_transferQueue.setNull();
+    }
 
     m_clearEngine.release();
 }
@@ -132,6 +137,16 @@ Result DeviceImpl::initialize(const DeviceDesc& desc)
     m_queue = new CommandQueueImpl(this, QueueType::Graphics);
     m_queue->init(m_commandQueue);
     m_queue->setInternalReferenceCount(1);
+
+    // Create transfer queue (Metal queues are general-purpose, no QFOT needed).
+    m_transferCommandQueue = NS::TransferPtr(m_device->newCommandQueue(64));
+    if (!m_transferCommandQueue)
+    {
+        return SLANG_FAIL;
+    }
+    m_transferQueue = new CommandQueueImpl(this, QueueType::Transfer);
+    m_transferQueue->init(m_transferCommandQueue);
+    m_transferQueue->setInternalReferenceCount(1);
 
     // Setup capture manager.
     if (captureEnabled())
@@ -287,8 +302,13 @@ Result DeviceImpl::getQueue(QueueType type, ICommandQueue** outQueue)
 {
     AUTORELEASEPOOL
 
-    if (type == QueueType::Compute || type == QueueType::Transfer)
+    if (type == QueueType::Compute)
         return SLANG_E_NOT_AVAILABLE;
+    if (type == QueueType::Transfer)
+    {
+        returnComPtr(outQueue, m_transferQueue);
+        return SLANG_OK;
+    }
     if (type != QueueType::Graphics)
         return SLANG_E_INVALID_ARG;
     returnComPtr(outQueue, m_queue);
