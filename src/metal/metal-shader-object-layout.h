@@ -70,7 +70,8 @@ public:
     struct BindingRangeInfo : Super::BindingRangeInfo
     {
         /// The offset of this binding range from the start of the sub-object.
-        uint32_t registerOffset;
+        uint32_t registerOffset = 0;
+        uint32_t samplerRegisterOffset = 0;
     };
 
     // Sometimes we just want to iterate over the ranges that represent

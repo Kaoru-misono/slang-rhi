@@ -1,5 +1,7 @@
 #include "metal-texture.h"
+#include "metal-bindless-descriptor-set.h"
 #include "metal-device.h"
+#include "metal-sampler.h"
 #include "metal-utils.h"
 
 namespace rhi::metal {
@@ -55,10 +57,63 @@ TextureViewImpl::TextureViewImpl(Device* device, const TextureViewDesc& desc)
 {
 }
 
+TextureViewImpl::~TextureViewImpl()
+{
+    DeviceImpl* device = getDevice<DeviceImpl>();
+    if (device && device->m_bindlessDescriptorSet)
+    {
+        for (auto& handle : m_descriptorHandle)
+        {
+            if (handle)
+            {
+                SLANG_RHI_ASSERT(SLANG_SUCCEEDED(device->m_bindlessDescriptorSet->freeHandle(handle)));
+            }
+        }
+    }
+}
+
 Result TextureViewImpl::getNativeHandle(NativeHandle* outHandle)
 {
     outHandle->type = NativeHandleType::MTLTexture;
     outHandle->value = (uint64_t)m_textureView.get();
+    return SLANG_OK;
+}
+
+Result TextureViewImpl::getDescriptorHandle(DescriptorHandleAccess access, DescriptorHandle* outHandle)
+{
+    DeviceImpl* device = getDevice<DeviceImpl>();
+    if (!device->m_bindlessDescriptorSet)
+        return SLANG_E_NOT_AVAILABLE;
+
+    DescriptorHandle& handle = m_descriptorHandle[access == DescriptorHandleAccess::Read ? 0 : 1];
+    if (!handle)
+    {
+        SLANG_RETURN_ON_FAIL(device->m_bindlessDescriptorSet->allocTextureHandle(this, access, &handle));
+    }
+
+    *outHandle = handle;
+    return SLANG_OK;
+}
+
+Result TextureViewImpl::getCombinedTextureSamplerDescriptorHandle(DescriptorHandle* outHandle)
+{
+    DeviceImpl* device = getDevice<DeviceImpl>();
+    if (!device->m_bindlessDescriptorSet)
+        return SLANG_E_NOT_AVAILABLE;
+
+    DescriptorHandle& handle = m_descriptorHandle[2];
+    if (!handle)
+    {
+        SamplerImpl* sampler = checked_cast<SamplerImpl*>(m_sampler.get());
+        if (!sampler && m_texture)
+            sampler = checked_cast<SamplerImpl*>(m_texture->m_sampler.get());
+        if (!sampler)
+            return SLANG_E_INVALID_ARG;
+
+        SLANG_RETURN_ON_FAIL(device->m_bindlessDescriptorSet->allocCombinedTextureSamplerHandle(this, sampler, &handle));
+    }
+
+    *outHandle = handle;
     return SLANG_OK;
 }
 
@@ -215,6 +270,8 @@ Result DeviceImpl::createTextureView(ITexture* texture, const TextureViewDesc& d
     if (viewImpl->m_desc.format == Format::Undefined)
         viewImpl->m_desc.format = viewImpl->m_texture->m_desc.format;
     viewImpl->m_desc.subresourceRange = viewImpl->m_texture->resolveSubresourceRange(desc.subresourceRange);
+    if (!viewImpl->m_sampler)
+        viewImpl->m_sampler = textureImpl->m_sampler;
 
     const TextureDesc& textureDesc = textureImpl->m_desc;
     uint32_t layerCount = textureDesc.arrayLength * (textureDesc.type == TextureType::TextureCube ? 6 : 1);

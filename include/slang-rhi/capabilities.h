@@ -12,6 +12,7 @@
     x(cpp) \
     x(cuda) \
     x(metal) \
+    x(descriptor_handle) \
     x(spirv) \
     x(wgsl) \
     x(slangvm) \

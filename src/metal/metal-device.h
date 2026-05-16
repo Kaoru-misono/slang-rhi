@@ -13,6 +13,8 @@ public:
     NS::SharedPtr<MTL::Device> m_device;
 };
 
+class BindlessDescriptorSet;
+
 class DeviceImpl : public Device
 {
 public:
@@ -166,6 +168,8 @@ public:
     } m_accelerationStructures;
 
     NS::Array* getAccelerationStructureArray();
+
+    RefPtr<BindlessDescriptorSet> m_bindlessDescriptorSet;
 
     bool m_hasArgumentBufferTier2 = false;
 };

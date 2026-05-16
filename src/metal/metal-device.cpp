@@ -12,6 +12,7 @@
 #include "metal-shader-object-layout.h"
 #include "metal-shader-object.h"
 #include "metal-acceleration-structure.h"
+#include "metal-bindless-descriptor-set.h"
 
 #include "core/common.h"
 
@@ -241,6 +242,8 @@ Result DeviceImpl::initialize(const DeviceDesc& desc)
     {
         addFeature(Feature::ArgumentBufferTier2);
         addFeature(Feature::ParameterBlock);
+        addFeature(Feature::Bindless);
+        addCapability(Capability::descriptor_handle);
     }
 
     addCapability(Capability::metal);
@@ -294,6 +297,12 @@ Result DeviceImpl::initialize(const DeviceDesc& desc)
     ));
 
     SLANG_RETURN_ON_FAIL(m_clearEngine.initialize(m_device.get()));
+
+    if (hasFeature(Feature::Bindless))
+    {
+        m_bindlessDescriptorSet = new BindlessDescriptorSet(this, desc.bindless);
+        SLANG_RETURN_ON_FAIL(m_bindlessDescriptorSet->initialize());
+    }
 
     return SLANG_OK;
 }

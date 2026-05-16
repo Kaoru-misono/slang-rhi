@@ -79,6 +79,12 @@ Result ShaderObjectLayoutImpl::Builder::setElementTypeLayout(slang::TypeLayoutRe
             m_slotCount += count;
             m_resourceCount.sampler += count;
             break;
+        case slang::BindingType::CombinedTextureSampler:
+            slotIndex = m_slotCount;
+            m_slotCount += count;
+            m_resourceCount.texture += count;
+            m_resourceCount.sampler += count;
+            break;
         case slang::BindingType::Texture:
         case slang::BindingType::MutableTexture:
             slotIndex = m_slotCount;
@@ -89,7 +95,7 @@ Result ShaderObjectLayoutImpl::Builder::setElementTypeLayout(slang::TypeLayoutRe
         case slang::BindingType::MutableTypedBuffer:
             slotIndex = m_slotCount;
             m_slotCount += count;
-            m_resourceCount.buffer += count;
+            m_resourceCount.texture += count;
             break;
         case slang::BindingType::RayTracingAccelerationStructure:
             slotIndex = m_slotCount;
@@ -136,6 +142,17 @@ Result ShaderObjectLayoutImpl::Builder::setElementTypeLayout(slang::TypeLayoutRe
                 typeLayout->getDescriptorSetDescriptorRangeIndexOffset(descriptorSetIndex, descriptorRangeIndex);
 
             bindingRangeInfo.registerOffset = (uint32_t)registerOffset;
+            bindingRangeInfo.samplerRegisterOffset = bindingRangeInfo.registerOffset;
+            if (slangBindingType == slang::BindingType::CombinedTextureSampler &&
+                typeLayout->getBindingRangeDescriptorRangeCount(r) > 1)
+            {
+                SlangInt samplerDescriptorRangeIndex = descriptorRangeIndex + 1;
+                auto samplerRegisterOffset = typeLayout->getDescriptorSetDescriptorRangeIndexOffset(
+                    descriptorSetIndex,
+                    samplerDescriptorRangeIndex
+                );
+                bindingRangeInfo.samplerRegisterOffset = (uint32_t)samplerRegisterOffset;
+            }
         }
 
         m_bindingRanges.push_back(bindingRangeInfo);

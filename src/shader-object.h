@@ -29,6 +29,7 @@ struct ResourceSlot
     BindingType type = BindingType::Undefined;
     RefPtr<Resource> resource;
     RefPtr<Resource> resource2;
+    DescriptorHandle descriptorHandle = {};
     Format format = Format::Undefined;
     union
     {

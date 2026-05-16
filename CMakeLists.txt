@@ -736,6 +736,7 @@ if(SLANG_RHI_ENABLE_METAL)
     target_sources(slang-rhi PRIVATE
         src/metal/metal-acceleration-structure.cpp
         src/metal/metal-api.cpp
+        src/metal/metal-bindless-descriptor-set.cpp
         src/metal/metal-buffer.cpp
         src/metal/metal-clear-engine.cpp
         src/metal/metal-command.cpp

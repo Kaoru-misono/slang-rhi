@@ -383,12 +383,52 @@ Result ShaderObject::setDescriptorHandle(const ShaderOffset& offset, const Descr
 {
     SLANG_RETURN_ON_FAIL(checkFinalized());
 
-    if (offset.uniformOffset + 8 > m_data.size())
+    bool wroteHandle = false;
+    if (offset.uniformOffset + 8 <= m_data.size())
+    {
+        ::memcpy(m_data.data() + offset.uniformOffset, &handle.value, 8);
+        wroteHandle = true;
+    }
+
+    if (offset.bindingRangeIndex < m_layout->getBindingRangeCount())
+    {
+        const auto& bindingRange = m_layout->getBindingRange(offset.bindingRangeIndex);
+        uint32_t slotIndex = bindingRange.slotIndex + offset.bindingArrayIndex;
+        if (slotIndex < m_slots.size())
+        {
+            ResourceSlot& slot = m_slots[slotIndex];
+            slot = {};
+            slot.descriptorHandle = handle;
+            switch (handle.type)
+            {
+            case DescriptorHandleType::Buffer:
+            case DescriptorHandleType::RWBuffer:
+                slot.type = BindingType::Buffer;
+                break;
+            case DescriptorHandleType::Texture:
+            case DescriptorHandleType::RWTexture:
+                slot.type = BindingType::Texture;
+                break;
+            case DescriptorHandleType::Sampler:
+                slot.type = BindingType::Sampler;
+                break;
+            case DescriptorHandleType::CombinedTextureSampler:
+                slot.type = BindingType::CombinedTextureSampler;
+                break;
+            case DescriptorHandleType::AccelerationStructure:
+                slot.type = BindingType::AccelerationStructure;
+                break;
+            default:
+                break;
+            }
+            wroteHandle = true;
+        }
+    }
+
+    if (!wroteHandle)
     {
         return SLANG_E_INVALID_ARG;
     }
-
-    ::memcpy(m_data.data() + offset.uniformOffset, &handle.value, 8);
 
     incrementVersion();
 
