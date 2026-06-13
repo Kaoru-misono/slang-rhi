@@ -695,7 +695,7 @@ Result DeviceImpl::initialize(const DeviceDesc& desc, BackendImpl* backend)
             GPUDescriptorHeap::create(
                 m_device,
                 D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV,
-                1000000,
+                desc.d3d12CbvSrvUavHeapSize,
                 16 * 1024,
                 m_gpuCbvSrvUavHeap.writeRef()
             )
@@ -704,8 +704,8 @@ Result DeviceImpl::initialize(const DeviceDesc& desc, BackendImpl* backend)
             GPUDescriptorHeap::create(
                 m_device,
                 D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER,
-                2048,
-                2048,
+                min(desc.d3d12SamplerHeapSize, 2048u),
+                min(desc.d3d12SamplerHeapSize, 2048u),
                 m_gpuSamplerHeap.writeRef()
             )
         );
@@ -1230,10 +1230,20 @@ Result DeviceImpl::initialize(const DeviceDesc& desc, BackendImpl* backend)
         std::array{slang::PreprocessorMacroDesc{"__D3D12__", "1"}}
     ));
 
-    // Create queue.
+    // Create graphics queue.
     m_queue = new CommandQueueImpl(this, QueueType::Graphics);
     SLANG_RETURN_ON_FAIL(m_queue->init(0));
     m_queue->setInternalReferenceCount(1);
+
+    // Create async compute queue.
+    m_computeQueue = new CommandQueueImpl(this, QueueType::Compute);
+    SLANG_RETURN_ON_FAIL(m_computeQueue->init(1));
+    m_computeQueue->setInternalReferenceCount(1);
+
+    // Create async transfer (copy) queue.
+    m_transferQueue = new CommandQueueImpl(this, QueueType::Transfer);
+    SLANG_RETURN_ON_FAIL(m_transferQueue->init(2));
+    m_transferQueue->setInternalReferenceCount(1);
 
     // Retrieve timestamp frequency.
     m_queue->m_d3dQueue->GetTimestampFrequency(&m_info.timestampFrequency);
@@ -1261,12 +1271,20 @@ Result DeviceImpl::getNativeDeviceHandles(DeviceNativeHandles* outHandles)
 
 Result DeviceImpl::getQueue(QueueType type, ICommandQueue** outQueue)
 {
-    if (type != QueueType::Graphics)
+    switch (type)
     {
+    case QueueType::Graphics:
+        returnComPtr(outQueue, m_queue);
+        return SLANG_OK;
+    case QueueType::Compute:
+        returnComPtr(outQueue, m_computeQueue);
+        return SLANG_OK;
+    case QueueType::Transfer:
+        returnComPtr(outQueue, m_transferQueue);
+        return SLANG_OK;
+    default:
         return SLANG_E_INVALID_ARG;
     }
-    returnComPtr(outQueue, m_queue);
-    return SLANG_OK;
 }
 
 Result DeviceImpl::createSurface(WindowHandle windowHandle, ISurface** outSurface)
@@ -2251,6 +2269,16 @@ DeviceImpl::~DeviceImpl()
     {
         m_queue->shutdown();
         m_queue.setNull();
+    }
+    if (m_computeQueue)
+    {
+        m_computeQueue->shutdown();
+        m_computeQueue.setNull();
+    }
+    if (m_transferQueue)
+    {
+        m_transferQueue->shutdown();
+        m_transferQueue.setNull();
     }
 
     m_bindlessDescriptorSet.setNull();

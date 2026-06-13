@@ -111,6 +111,10 @@ public:
     void cmdSetBufferState(const commands::SetBufferState& cmd);
     void cmdSetTextureState(const commands::SetTextureState& cmd);
     void cmdGlobalBarrier(const commands::GlobalBarrier& cmd);
+    void cmdReleaseBufferForQueue(const commands::ReleaseBufferForQueue& cmd);
+    void cmdReleaseTextureForQueue(const commands::ReleaseTextureForQueue& cmd);
+    void cmdAcquireBufferFromQueue(const commands::AcquireBufferFromQueue& cmd);
+    void cmdAcquireTextureFromQueue(const commands::AcquireTextureFromQueue& cmd);
     void cmdPushDebugGroup(const commands::PushDebugGroup& cmd);
     void cmdPopDebugGroup(const commands::PopDebugGroup& cmd);
     void cmdInsertDebugMarker(const commands::InsertDebugMarker& cmd);
@@ -1573,6 +1577,37 @@ void CommandRecorder::cmdGlobalBarrier(const commands::GlobalBarrier& cmd)
     m_cmdList->ResourceBarrier(1, &barrier);
 }
 
+// On D3D12 cross-queue resource ownership is implicit (no Vulkan-style QFOT
+// barriers); record the resource's state so the state tracker emits the right
+// transition barriers on whichever queue next uses it.
+void CommandRecorder::cmdReleaseBufferForQueue(const commands::ReleaseBufferForQueue& cmd)
+{
+    m_stateTracking.setBufferState(checked_cast<BufferImpl*>(cmd.buffer), cmd.currentState);
+}
+
+void CommandRecorder::cmdReleaseTextureForQueue(const commands::ReleaseTextureForQueue& cmd)
+{
+    m_stateTracking.setTextureState(
+        checked_cast<TextureImpl*>(cmd.texture),
+        cmd.subresourceRange,
+        cmd.currentState
+    );
+}
+
+void CommandRecorder::cmdAcquireBufferFromQueue(const commands::AcquireBufferFromQueue& cmd)
+{
+    m_stateTracking.setBufferState(checked_cast<BufferImpl*>(cmd.buffer), cmd.desiredState);
+}
+
+void CommandRecorder::cmdAcquireTextureFromQueue(const commands::AcquireTextureFromQueue& cmd)
+{
+    m_stateTracking.setTextureState(
+        checked_cast<TextureImpl*>(cmd.texture),
+        cmd.subresourceRange,
+        cmd.desiredState
+    );
+}
+
 void CommandRecorder::cmdPushDebugGroup(const commands::PushDebugGroup& cmd)
 {
 #if SLANG_RHI_ENABLE_AFTERMATH
@@ -1871,8 +1906,21 @@ Result CommandQueueImpl::init(uint32_t queueIndex)
     m_queueIndex = queueIndex;
     m_d3dDevice = device->m_device;
 
+    switch (m_type)
+    {
+    case QueueType::Compute:
+        m_commandListType = D3D12_COMMAND_LIST_TYPE_COMPUTE;
+        break;
+    case QueueType::Transfer:
+        m_commandListType = D3D12_COMMAND_LIST_TYPE_COPY;
+        break;
+    default:
+        m_commandListType = D3D12_COMMAND_LIST_TYPE_DIRECT;
+        break;
+    }
+
     D3D12_COMMAND_QUEUE_DESC queueDesc = {};
-    queueDesc.Type = D3D12_COMMAND_LIST_TYPE_DIRECT;
+    queueDesc.Type = m_commandListType;
     SLANG_D3D_RETURN_ON_FAIL_REPORT(
         m_d3dDevice->CreateCommandQueue(&queueDesc, IID_PPV_ARGS(m_d3dQueue.writeRef())),
         m_device
@@ -2212,15 +2260,15 @@ CommandBufferImpl::~CommandBufferImpl()
 Result CommandBufferImpl::init()
 {
     DeviceImpl* device = getDevice<DeviceImpl>();
+    D3D12_COMMAND_LIST_TYPE listType = m_queue->m_commandListType;
     SLANG_D3D_RETURN_ON_FAIL_REPORT(
-        device->m_device
-            ->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(m_d3dCommandAllocator.writeRef())),
+        device->m_device->CreateCommandAllocator(listType, IID_PPV_ARGS(m_d3dCommandAllocator.writeRef())),
         device
     );
     SLANG_D3D_RETURN_ON_FAIL_REPORT(
         device->m_device->CreateCommandList(
             0,
-            D3D12_COMMAND_LIST_TYPE_DIRECT,
+            listType,
             m_d3dCommandAllocator,
             nullptr,
             IID_PPV_ARGS(m_d3dCommandList.writeRef())
@@ -2235,11 +2283,15 @@ Result CommandBufferImpl::init()
     }
 #endif
 
-    ID3D12DescriptorHeap* heaps[] = {
-        device->m_gpuCbvSrvUavHeap->getHeap(),
-        device->m_gpuSamplerHeap->getHeap(),
-    };
-    m_d3dCommandList->SetDescriptorHeaps(SLANG_COUNT_OF(heaps), heaps);
+    // SetDescriptorHeaps is not valid on COPY command lists.
+    if (listType != D3D12_COMMAND_LIST_TYPE_COPY)
+    {
+        ID3D12DescriptorHeap* heaps[] = {
+            device->m_gpuCbvSrvUavHeap->getHeap(),
+            device->m_gpuSamplerHeap->getHeap(),
+        };
+        m_d3dCommandList->SetDescriptorHeaps(SLANG_COUNT_OF(heaps), heaps);
+    }
 
     m_constantBufferPool.init(device);
 
@@ -2254,11 +2306,15 @@ Result CommandBufferImpl::reset()
     DeviceImpl* device = getDevice<DeviceImpl>();
     SLANG_D3D_RETURN_ON_FAIL_REPORT(m_d3dCommandAllocator->Reset(), device);
     SLANG_D3D_RETURN_ON_FAIL_REPORT(m_d3dCommandList->Reset(m_d3dCommandAllocator, nullptr), device);
-    ID3D12DescriptorHeap* heaps[] = {
-        device->m_gpuCbvSrvUavHeap->getHeap(),
-        device->m_gpuSamplerHeap->getHeap(),
-    };
-    m_d3dCommandList->SetDescriptorHeaps(SLANG_COUNT_OF(heaps), heaps);
+    // SetDescriptorHeaps is not valid on COPY command lists.
+    if (m_queue->m_commandListType != D3D12_COMMAND_LIST_TYPE_COPY)
+    {
+        ID3D12DescriptorHeap* heaps[] = {
+            device->m_gpuCbvSrvUavHeap->getHeap(),
+            device->m_gpuSamplerHeap->getHeap(),
+        };
+        m_d3dCommandList->SetDescriptorHeaps(SLANG_COUNT_OF(heaps), heaps);
+    }
 
     m_cbvSrvUavArena.reset();
     m_samplerArena.reset();
