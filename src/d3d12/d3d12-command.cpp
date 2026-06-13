@@ -2210,11 +2210,16 @@ Result CommandEncoderImpl::getBindingData(RootShaderObject* rootObject, BindingD
 
 Result CommandEncoderImpl::finish(const CommandBufferDesc& desc, ICommandBuffer** outCommandBuffer)
 {
-    bool hadLabel = m_commandBuffer->m_desc.label != nullptr;
     m_commandBuffer->setDesc(desc);
-    if (hadLabel)
+    // Set the d3d command list debug name only when THIS finish provides a non-null
+    // label. The previous logic derived `hadLabel` from the command buffer's prior
+    // (possibly pooled/stale) label and then passed the encoder's `m_desc.label`
+    // (set at createCommandEncoder, normally null) to SetName — so a reused pooled
+    // buffer finished without a new label called SetName(nullptr) -> wcslen(nullptr)
+    // -> crash. Triggered by the retained-labeled-command-buffer + pool-reuse path.
+    if (desc.label)
     {
-        m_commandBuffer->m_d3dCommandList->SetName(m_desc.label ? string::to_wstring(m_desc.label).c_str() : nullptr);
+        m_commandBuffer->m_d3dCommandList->SetName(string::to_wstring(desc.label).c_str());
     }
     SLANG_RETURN_ON_FAIL(resolvePipelines(m_device));
     CommandRecorder recorder(getDevice<DeviceImpl>());
