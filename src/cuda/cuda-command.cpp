@@ -277,6 +277,10 @@ public:
     void cmdSetBufferState(const commands::SetBufferState& cmd);
     void cmdSetTextureState(const commands::SetTextureState& cmd);
     void cmdGlobalBarrier(const commands::GlobalBarrier& cmd);
+    void cmdReleaseBufferForQueue(const commands::ReleaseBufferForQueue& cmd);
+    void cmdReleaseTextureForQueue(const commands::ReleaseTextureForQueue& cmd);
+    void cmdAcquireBufferFromQueue(const commands::AcquireBufferFromQueue& cmd);
+    void cmdAcquireTextureFromQueue(const commands::AcquireTextureFromQueue& cmd);
     void cmdPushDebugGroup(const commands::PushDebugGroup& cmd);
     void cmdPopDebugGroup(const commands::PopDebugGroup& cmd);
     void cmdInsertDebugMarker(const commands::InsertDebugMarker& cmd);
@@ -836,6 +840,13 @@ void CommandExecutor::cmdGlobalBarrier(const commands::GlobalBarrier& cmd)
 {
     SLANG_UNUSED(cmd);
 }
+
+// Queue-family-ownership transfer is a no-op on CUDA (stream-based, shared memory).
+// Handlers exist only because the command X-macro dispatch requires one per command.
+void CommandExecutor::cmdReleaseBufferForQueue(const commands::ReleaseBufferForQueue& cmd) { SLANG_UNUSED(cmd); }
+void CommandExecutor::cmdReleaseTextureForQueue(const commands::ReleaseTextureForQueue& cmd) { SLANG_UNUSED(cmd); }
+void CommandExecutor::cmdAcquireBufferFromQueue(const commands::AcquireBufferFromQueue& cmd) { SLANG_UNUSED(cmd); }
+void CommandExecutor::cmdAcquireTextureFromQueue(const commands::AcquireTextureFromQueue& cmd) { SLANG_UNUSED(cmd); }
 
 void CommandExecutor::cmdPushDebugGroup(const commands::PushDebugGroup& cmd)
 {
