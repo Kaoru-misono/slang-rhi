@@ -2,6 +2,7 @@
 
 #include "vk-base.h"
 #include "vk-bindless-descriptor-set.h"
+#include "vk-memory-allocator.h"
 
 #include <string>
 #include <vector>
@@ -247,7 +248,12 @@ public:
     VulkanApi m_api;
 
     VulkanDeviceQueue m_deviceQueue;
+    // m_queueFamilyIndex is the graphics queue family. The compute/transfer
+    // families are selected separately (dedicated where available) to back the
+    // Compute/Transfer queues; they may alias the graphics family as a fallback.
     uint32_t m_queueFamilyIndex;
+    uint32_t m_computeQueueFamilyIndex;
+    uint32_t m_transferQueueFamilyIndex;
 
     struct CooperativeMatrixFlexibleProperty
     {
@@ -265,9 +271,13 @@ public:
     std::vector<CooperativeMatrixDesc> m_cooperativeMatrixFixedProperties;
     std::vector<CooperativeMatrixFlexibleProperty> m_cooperativeMatrixFlexibleProperties;
     RefPtr<CommandQueueImpl> m_queue;
+    RefPtr<CommandQueueImpl> m_computeQueue;
+    RefPtr<CommandQueueImpl> m_transferQueue;
 
     DescriptorSetAllocator descriptorSetAllocator;
     RefPtr<BindlessDescriptorSet> m_bindlessDescriptorSet;
+
+    VulkanMemoryAllocator m_memoryAllocator;
 
     VkSampler m_defaultSampler;
 

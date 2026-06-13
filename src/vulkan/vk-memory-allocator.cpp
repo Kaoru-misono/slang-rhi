@@ -5,7 +5,12 @@
 #pragma warning(disable : 4324) // structure was padded due to alignment specifier
 #endif
 
-#define VMA_IMPLEMENTATION
+// NOTE(april): the VMA implementation (VMA_IMPLEMENTATION) is compiled once by
+// upstream's dedicated slang-rhi-vma static library (external/vma/vk_mem_alloc.cpp,
+// force-including vulkan/vma-config.h). This translation unit is a pure consumer
+// of that implementation; defining VMA_IMPLEMENTATION here too would duplicate
+// every VMA symbol and fail to link. The VMA config (dynamic functions) in
+// vk-memory-allocator.h matches vma-config.h, so the declarations are ABI-compatible.
 #include "vk-memory-allocator.h"
 #include "vk-device.h"
 

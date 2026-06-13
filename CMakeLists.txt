@@ -863,6 +863,7 @@ if(SLANG_RHI_ENABLE_VULKAN)
         src/vulkan/vk-device.cpp
         src/vulkan/vk-fence.cpp
         src/vulkan/vk-heap.cpp
+        src/vulkan/vk-memory-allocator.cpp
         src/vulkan/vk-pipeline.cpp
         src/vulkan/vk-query.cpp
         src/vulkan/vk-sampler.cpp
@@ -882,6 +883,7 @@ if(SLANG_RHI_ENABLE_METAL)
         src/metal/metal-acceleration-structure.cpp
         src/metal/metal-api.cpp
         src/metal/metal-backend.cpp
+        src/metal/metal-bindless-descriptor-set.cpp
         src/metal/metal-buffer.cpp
         src/metal/metal-clear-engine.cpp
         src/metal/metal-command.cpp
