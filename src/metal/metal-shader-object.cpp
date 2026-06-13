@@ -1,6 +1,7 @@
 #include "metal-shader-object.h"
 #include "metal-device.h"
 #include "metal-acceleration-structure.h"
+#include "metal-bindless-descriptor-set.h"
 #include "metal-buffer.h"
 #include "metal-texture.h"
 #include "metal-sampler.h"
@@ -48,6 +49,84 @@ inline Result addUsedRWResource(BindingDataImpl* bindingData, MTL::Resource* res
         return SLANG_FAIL;
     }
     bindingData->usedRWResources[bindingData->usedRWResourceCount++] = resource;
+    return SLANG_OK;
+}
+
+static Result resolveTextureSlot(DeviceImpl* device, const ResourceSlot& slot, TextureViewImpl*& outTextureView)
+{
+    outTextureView = checked_cast<TextureViewImpl*>(slot.resource.get());
+    if (!outTextureView && slot.descriptorHandle)
+    {
+        if (!device->m_bindlessDescriptorSet)
+            return SLANG_E_NOT_AVAILABLE;
+        SLANG_RETURN_ON_FAIL(device->m_bindlessDescriptorSet->resolveTextureHandle(slot.descriptorHandle, &outTextureView));
+    }
+    return SLANG_OK;
+}
+
+static Result resolveSamplerSlot(DeviceImpl* device, const ResourceSlot& slot, SamplerImpl*& outSampler)
+{
+    outSampler = checked_cast<SamplerImpl*>(slot.resource.get());
+    if (!outSampler && slot.descriptorHandle)
+    {
+        if (!device->m_bindlessDescriptorSet)
+            return SLANG_E_NOT_AVAILABLE;
+        SLANG_RETURN_ON_FAIL(device->m_bindlessDescriptorSet->resolveSamplerHandle(slot.descriptorHandle, &outSampler));
+    }
+    return SLANG_OK;
+}
+
+static Result resolveBufferSlot(
+    DeviceImpl* device,
+    const ResourceSlot& slot,
+    DescriptorHandleAccess requestedAccess,
+    BufferImpl*& outBuffer,
+    BufferRange& outRange,
+    Format& outFormat
+)
+{
+    outBuffer = checked_cast<BufferImpl*>(slot.resource.get());
+    outRange = slot.bufferRange;
+    outFormat = slot.format;
+    if (!outBuffer && slot.descriptorHandle)
+    {
+        if (!device->m_bindlessDescriptorSet)
+            return SLANG_E_NOT_AVAILABLE;
+        DescriptorHandleAccess handleAccess = DescriptorHandleAccess::Read;
+        SLANG_RETURN_ON_FAIL(
+            device->m_bindlessDescriptorSet->resolveBufferHandle(
+                slot.descriptorHandle,
+                &outBuffer,
+                &outRange,
+                &handleAccess,
+                &outFormat
+            )
+        );
+        if (handleAccess != requestedAccess)
+            return SLANG_E_INVALID_ARG;
+    }
+    return SLANG_OK;
+}
+
+static Result resolveCombinedTextureSamplerSlot(
+    DeviceImpl* device,
+    const ResourceSlot& slot,
+    TextureViewImpl*& outTextureView,
+    SamplerImpl*& outSampler
+)
+{
+    outTextureView = checked_cast<TextureViewImpl*>(slot.resource.get());
+    outSampler = checked_cast<SamplerImpl*>(slot.resource2.get());
+    if ((!outTextureView || !outSampler) && slot.descriptorHandle)
+    {
+        if (!device->m_bindlessDescriptorSet)
+            return SLANG_E_NOT_AVAILABLE;
+        SLANG_RETURN_ON_FAIL(device->m_bindlessDescriptorSet->resolveCombinedTextureSamplerHandle(
+            slot.descriptorHandle,
+            &outTextureView,
+            &outSampler
+        ));
+    }
     return SLANG_OK;
 }
 
@@ -198,12 +277,24 @@ Result BindingDataBuilder::bindAsParameterBlock(
     if (!m_device->m_hasArgumentBufferTier2)
         return SLANG_FAIL;
 
+    // Check cache for unchanged parameter block sub-objects.
+    // If the entire sub-object tree hasn't changed, we can reuse the previous
+    // argument buffer without creating a new GPU buffer allocation.
+    uint32_t subTreeVersion = shaderObject->getSubTreeVersion();
+    auto* cached = m_bindingCache->lookup(shaderObject->m_uid, subTreeVersion, specializedLayout);
+    if (cached && cached->argumentBuffer)
+    {
+        SLANG_RETURN_ON_FAIL(setBuffer(m_bindingData, inOffset.buffer, cached->argumentBuffer->m_buffer.get()));
+        return SLANG_OK;
+    }
+
     BufferImpl* argumentBuffer = nullptr;
     SLANG_RETURN_ON_FAIL(writeArgumentBuffer(shaderObject, specializedLayout, argumentBuffer));
 
     if (argumentBuffer)
     {
         SLANG_RETURN_ON_FAIL(setBuffer(m_bindingData, inOffset.buffer, argumentBuffer->m_buffer.get()));
+        m_bindingCache->store(shaderObject->m_uid, subTreeVersion, specializedLayout, argumentBuffer);
     }
 
     return SLANG_OK;
@@ -235,7 +326,8 @@ Result BindingDataBuilder::bindAsValue(
             for (uint32_t i = 0; i < count; ++i)
             {
                 const ResourceSlot& slot = shaderObject->m_slots[slotIndex + i];
-                TextureViewImpl* textureView = checked_cast<TextureViewImpl*>(slot.resource.get());
+                TextureViewImpl* textureView = nullptr;
+                SLANG_RETURN_ON_FAIL(resolveTextureSlot(m_device, slot, textureView));
                 if (textureView)
                 {
                     uint32_t registerIndex = bindingRangeInfo.registerOffset + offset.texture + i;
@@ -247,7 +339,8 @@ Result BindingDataBuilder::bindAsValue(
             for (uint32_t i = 0; i < count; ++i)
             {
                 const ResourceSlot& slot = shaderObject->m_slots[slotIndex + i];
-                SamplerImpl* sampler = checked_cast<SamplerImpl*>(slot.resource.get());
+                SamplerImpl* sampler = nullptr;
+                SLANG_RETURN_ON_FAIL(resolveSamplerSlot(m_device, slot, sampler));
                 if (sampler)
                 {
                     uint32_t registerIndex = bindingRangeInfo.registerOffset + offset.sampler + i;
@@ -256,23 +349,73 @@ Result BindingDataBuilder::bindAsValue(
                 }
             }
             break;
-        case slang::BindingType::RawBuffer:
-        case slang::BindingType::MutableRawBuffer:
-        case slang::BindingType::TypedBuffer:
-        case slang::BindingType::MutableTypedBuffer:
+        case slang::BindingType::CombinedTextureSampler:
             for (uint32_t i = 0; i < count; ++i)
             {
                 const ResourceSlot& slot = shaderObject->m_slots[slotIndex + i];
-                BufferImpl* buffer = checked_cast<BufferImpl*>(slot.resource.get());
+                TextureViewImpl* textureView = nullptr;
+                SamplerImpl* sampler = nullptr;
+                SLANG_RETURN_ON_FAIL(resolveCombinedTextureSamplerSlot(m_device, slot, textureView, sampler));
+                if (textureView && sampler)
+                {
+                    uint32_t textureRegisterIndex = bindingRangeInfo.registerOffset + offset.texture + i;
+                    SLANG_RETURN_ON_FAIL(
+                        setTexture(m_bindingData, textureRegisterIndex, textureView->m_textureView.get())
+                    );
+
+                    uint32_t samplerRegisterIndex = bindingRangeInfo.samplerRegisterOffset + offset.sampler + i;
+                    SLANG_RHI_ASSERT(samplerRegisterIndex < m_bindingData->samplerCount);
+                    m_bindingData->samplers[samplerRegisterIndex] = sampler->m_samplerState.get();
+                }
+            }
+            break;
+        case slang::BindingType::RawBuffer:
+        case slang::BindingType::MutableRawBuffer:
+        {
+            DescriptorHandleAccess access = bindingRangeInfo.bindingType == slang::BindingType::MutableRawBuffer
+                                                ? DescriptorHandleAccess::ReadWrite
+                                                : DescriptorHandleAccess::Read;
+            for (uint32_t i = 0; i < count; ++i)
+            {
+                const ResourceSlot& slot = shaderObject->m_slots[slotIndex + i];
+                BufferImpl* buffer = nullptr;
+                BufferRange range = {};
+                Format format = Format::Undefined;
+                SLANG_RETURN_ON_FAIL(resolveBufferSlot(m_device, slot, access, buffer, range, format));
                 if (buffer)
                 {
                     uint32_t registerIndex = bindingRangeInfo.registerOffset + offset.buffer + i;
                     SLANG_RETURN_ON_FAIL(
-                        setBuffer(m_bindingData, registerIndex, buffer->m_buffer.get(), slot.bufferRange.offset)
+                        setBuffer(m_bindingData, registerIndex, buffer->m_buffer.get(), range.offset)
                     );
                 }
             }
             break;
+        }
+        case slang::BindingType::TypedBuffer:
+        case slang::BindingType::MutableTypedBuffer:
+        {
+            DescriptorHandleAccess access = bindingRangeInfo.bindingType == slang::BindingType::MutableTypedBuffer
+                                                ? DescriptorHandleAccess::ReadWrite
+                                                : DescriptorHandleAccess::Read;
+            for (uint32_t i = 0; i < count; ++i)
+            {
+                const ResourceSlot& slot = shaderObject->m_slots[slotIndex + i];
+                BufferImpl* buffer = nullptr;
+                BufferRange range = {};
+                Format format = Format::Undefined;
+                SLANG_RETURN_ON_FAIL(resolveBufferSlot(m_device, slot, access, buffer, range, format));
+                if (buffer)
+                {
+                    MTL::Texture* textureBuffer = nullptr;
+                    SLANG_RETURN_ON_FAIL(buffer->getTextureBufferView(access, format, range, &textureBuffer));
+
+                    uint32_t registerIndex = bindingRangeInfo.registerOffset + offset.texture + i;
+                    SLANG_RETURN_ON_FAIL(setTexture(m_bindingData, registerIndex, textureBuffer));
+                }
+            }
+            break;
+        }
         case slang::BindingType::RayTracingAccelerationStructure:
             for (uint32_t i = 0; i < count; ++i)
             {
@@ -517,7 +660,8 @@ Result BindingDataBuilder::writeArgumentBuffer(
             for (uint32_t i = 0; i < count; ++i)
             {
                 const ResourceSlot& slot = shaderObject->m_slots[slotIndex + i];
-                TextureViewImpl* textureView = checked_cast<TextureViewImpl*>(slot.resource.get());
+                TextureViewImpl* textureView = nullptr;
+                SLANG_RETURN_ON_FAIL(resolveTextureSlot(m_device, slot, textureView));
                 if (textureView)
                 {
                     auto resourceId = textureView->m_textureView->gpuResourceID();
@@ -540,7 +684,8 @@ Result BindingDataBuilder::writeArgumentBuffer(
             for (uint32_t i = 0; i < count; ++i)
             {
                 const ResourceSlot& slot = shaderObject->m_slots[slotIndex + i];
-                SamplerImpl* sampler = checked_cast<SamplerImpl*>(slot.resource.get());
+                SamplerImpl* sampler = nullptr;
+                SLANG_RETURN_ON_FAIL(resolveSamplerSlot(m_device, slot, sampler));
                 if (sampler)
                 {
                     auto resourceId = sampler->m_samplerState->gpuResourceID();
@@ -548,23 +693,58 @@ Result BindingDataBuilder::writeArgumentBuffer(
                 }
             }
             break;
-        case slang::BindingType::RawBuffer:
-        case slang::BindingType::MutableRawBuffer:
-        case slang::BindingType::TypedBuffer:
-        case slang::BindingType::MutableTypedBuffer:
+        case slang::BindingType::CombinedTextureSampler:
         {
+            SlangInt samplerRangeIndex = rangeIndex + 1;
+            SlangInt samplerArgumentOffset =
+                argumentBufferTypeLayout->getDescriptorSetDescriptorRangeIndexOffset(setIndex, samplerRangeIndex);
+            uint8_t* samplerArgumentPtr = argumentData + samplerArgumentOffset;
+
             for (uint32_t i = 0; i < count; ++i)
             {
                 const ResourceSlot& slot = shaderObject->m_slots[slotIndex + i];
-                BufferImpl* buffer = checked_cast<BufferImpl*>(slot.resource.get());
+                TextureViewImpl* textureView = nullptr;
+                SamplerImpl* sampler = nullptr;
+                SLANG_RETURN_ON_FAIL(resolveCombinedTextureSamplerSlot(m_device, slot, textureView, sampler));
+                if (textureView && sampler)
+                {
+                    auto textureResourceId = textureView->m_textureView->gpuResourceID();
+                    memcpy(argumentPtr + i * sizeof(uint64_t), &textureResourceId, sizeof(textureResourceId));
+                    if (!m_device->m_hasResidencySet)
+                    {
+                        SLANG_RETURN_ON_FAIL(addUsedResource(m_bindingData, textureView->m_textureView.get()));
+                    }
+
+                    auto samplerResourceId = sampler->m_samplerState->gpuResourceID();
+                    memcpy(
+                        samplerArgumentPtr + i * sizeof(uint64_t),
+                        &samplerResourceId,
+                        sizeof(samplerResourceId)
+                    );
+                }
+            }
+            break;
+        }
+        case slang::BindingType::RawBuffer:
+        case slang::BindingType::MutableRawBuffer:
+        {
+            DescriptorHandleAccess access = bindingRangeInfo.bindingType == slang::BindingType::MutableRawBuffer
+                                                ? DescriptorHandleAccess::ReadWrite
+                                                : DescriptorHandleAccess::Read;
+            for (uint32_t i = 0; i < count; ++i)
+            {
+                const ResourceSlot& slot = shaderObject->m_slots[slotIndex + i];
+                BufferImpl* buffer = nullptr;
+                BufferRange range = {};
+                Format format = Format::Undefined;
+                SLANG_RETURN_ON_FAIL(resolveBufferSlot(m_device, slot, access, buffer, range, format));
                 if (buffer)
                 {
-                    DeviceAddress bufferPtr = buffer->getDeviceAddress() + slot.bufferRange.offset;
+                    DeviceAddress bufferPtr = buffer->getDeviceAddress() + range.offset;
                     memcpy(argumentPtr + i * sizeof(uint64_t), &bufferPtr, sizeof(bufferPtr));
                     if (!m_device->m_hasResidencySet)
                     {
-                        if (bindingRangeInfo.bindingType == slang::BindingType::MutableRawBuffer ||
-                            bindingRangeInfo.bindingType == slang::BindingType::MutableTypedBuffer)
+                        if (bindingRangeInfo.bindingType == slang::BindingType::MutableRawBuffer)
                         {
                             SLANG_RETURN_ON_FAIL(addUsedRWResource(m_bindingData, buffer->m_buffer.get()));
                         }
@@ -575,8 +755,43 @@ Result BindingDataBuilder::writeArgumentBuffer(
                     }
                 }
             }
+            break;
         }
-        break;
+        case slang::BindingType::TypedBuffer:
+        case slang::BindingType::MutableTypedBuffer:
+        {
+            DescriptorHandleAccess access = bindingRangeInfo.bindingType == slang::BindingType::MutableTypedBuffer
+                                                ? DescriptorHandleAccess::ReadWrite
+                                                : DescriptorHandleAccess::Read;
+            for (uint32_t i = 0; i < count; ++i)
+            {
+                const ResourceSlot& slot = shaderObject->m_slots[slotIndex + i];
+                BufferImpl* buffer = nullptr;
+                BufferRange range = {};
+                Format format = Format::Undefined;
+                SLANG_RETURN_ON_FAIL(resolveBufferSlot(m_device, slot, access, buffer, range, format));
+                if (buffer)
+                {
+                    MTL::Texture* textureBuffer = nullptr;
+                    SLANG_RETURN_ON_FAIL(buffer->getTextureBufferView(access, format, range, &textureBuffer));
+
+                    auto resourceId = textureBuffer->gpuResourceID();
+                    memcpy(argumentPtr + i * sizeof(uint64_t), &resourceId, sizeof(resourceId));
+                    if (!m_device->m_hasResidencySet)
+                    {
+                        if (bindingRangeInfo.bindingType == slang::BindingType::MutableTypedBuffer)
+                        {
+                            SLANG_RETURN_ON_FAIL(addUsedRWResource(m_bindingData, textureBuffer));
+                        }
+                        else
+                        {
+                            SLANG_RETURN_ON_FAIL(addUsedResource(m_bindingData, textureBuffer));
+                        }
+                    }
+                }
+            }
+            break;
+        }
         case slang::BindingType::RayTracingAccelerationStructure:
             for (uint32_t i = 0; i < count; ++i)
             {
