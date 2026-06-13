@@ -2568,6 +2568,13 @@ struct ExecuteCallbackDesc
     Size userDataSize = 0;
 };
 
+enum class QueueType
+{
+    Graphics,
+    Compute,
+    Transfer,
+};
+
 class ICommandEncoder : public ISlangUnknown
 {
     SLANG_COM_INTERFACE(0x8ee39d55, 0x2b07, 0x4e61, {0x8f, 0x13, 0x1d, 0x6c, 0x01, 0xa9, 0x15, 0x43});
@@ -2724,6 +2731,26 @@ public:
 
     virtual SLANG_NO_THROW void SLANG_MCALL globalBarrier() = 0;
 
+    virtual SLANG_NO_THROW void SLANG_MCALL
+    releaseBufferForQueue(IBuffer* buffer, ResourceState currentState, QueueType dstQueue) = 0;
+
+    virtual SLANG_NO_THROW void SLANG_MCALL releaseTextureForQueue(
+        ITexture* texture,
+        SubresourceRange subresourceRange,
+        ResourceState currentState,
+        QueueType dstQueue
+    ) = 0;
+
+    virtual SLANG_NO_THROW void SLANG_MCALL
+    acquireBufferFromQueue(IBuffer* buffer, ResourceState desiredState, QueueType srcQueue) = 0;
+
+    virtual SLANG_NO_THROW void SLANG_MCALL acquireTextureFromQueue(
+        ITexture* texture,
+        SubresourceRange subresourceRange,
+        ResourceState desiredState,
+        QueueType srcQueue
+    ) = 0;
+
     inline void setTextureState(ITexture* texture, ResourceState state)
     {
         setTextureState(texture, kEntireTexture, state);
@@ -2771,11 +2798,6 @@ public:
     virtual SLANG_NO_THROW void SLANG_MCALL ensureInternalDescriptorHeapsBound() = 0;
 };
 #endif
-
-enum class QueueType
-{
-    Graphics,
-};
 
 enum class CpuTimestampDomain
 {
@@ -3320,6 +3342,14 @@ struct DeviceDesc
 
     /// Size of a page in staging heap.
     Size stagingHeapPageSize = 16 * 1024 * 1024;
+
+    /// D3D12: Maximum number of CBV/SRV/UAV descriptors in the GPU-visible heap.
+    /// Default is 1,000,000. Increase for large bindless scenes with many textures/buffers.
+    uint32_t d3d12CbvSrvUavHeapSize = 1000000;
+
+    /// D3D12: Maximum number of Sampler descriptors in the GPU-visible heap.
+    /// Default is 2,048 (D3D12 hardware limit). Cannot exceed 2,048.
+    uint32_t d3d12SamplerHeapSize = 2048;
 
     // Configuration for bindless resources.
     BindlessDesc bindless = {};

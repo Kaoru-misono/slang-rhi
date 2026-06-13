@@ -1,0 +1,7 @@
+[2026/06/09 17:39:08] [WARN] Requested GPU was not selected by backend; running on a different adapter. [render-device.cpp:748]
+[2026/06/09 17:39:08] [WARN] Shader model capabilities are unavailable on Metal backend. Falling back to SM6_0. [render-device.cpp:768]
+[2026/06/09 17:39:08] [WARN] Timestamp queries are unavailable on this device/backend. GPU profiler is disabled. [render-device.cpp:778]
+[2026/06/09 17:39:08] [INFO] VFS Mounted: 'editorShader' -> '/Users/kaori/GitHub/April2/engine/editor/shader'
+[2026/06/09 17:39:08] [INFO] VFS Mounted: 'graphicsShader' -> '/Users/kaori/GitHub/April2/engine/graphics/shader'
+[2026/06/09 17:39:08] [INFO] VFS Mounted: 'shader' -> '/Users/kaori/GitHub/April2/engine/graphics/shader'
+[2026/06/09 17:39:08] [INFO] Created GPU device 'default' using 'Metal' API.
