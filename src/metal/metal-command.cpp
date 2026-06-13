@@ -7,6 +7,7 @@
 #include "metal-pipeline.h"
 #include "metal-acceleration-structure.h"
 #include "metal-shader-object.h"
+#include "metal-bindless-descriptor-set.h"
 #include "metal-utils.h"
 #include "../strings.h"
 
@@ -134,6 +135,10 @@ public:
     void cmdSetBufferState(const commands::SetBufferState& cmd);
     void cmdSetTextureState(const commands::SetTextureState& cmd);
     void cmdGlobalBarrier(const commands::GlobalBarrier& cmd);
+    void cmdReleaseBufferForQueue(const commands::ReleaseBufferForQueue& cmd);
+    void cmdReleaseTextureForQueue(const commands::ReleaseTextureForQueue& cmd);
+    void cmdAcquireBufferFromQueue(const commands::AcquireBufferFromQueue& cmd);
+    void cmdAcquireTextureFromQueue(const commands::AcquireTextureFromQueue& cmd);
     void cmdPushDebugGroup(const commands::PushDebugGroup& cmd);
     void cmdPopDebugGroup(const commands::PopDebugGroup& cmd);
     void cmdInsertDebugMarker(const commands::InsertDebugMarker& cmd);
@@ -404,12 +409,25 @@ void CommandRecorder::cmdUploadTextureData(const commands::UploadTextureData& cm
         {
             uint32_t mip = subresourceRange.mip + mipOffset;
 
+            // NOTE(april): the subresource layout size is rounded up to whole
+            // compression blocks (a 2x2 BC mip stores a full 4x4 block), but
+            // Metal requires destinationOrigin + sourceSize to fit inside the
+            // mip's ACTUAL dimensions ("Copy From Buffer Validation" fails
+            // otherwise). Clamp the copy region to the mip; rowPitch/slicePitch
+            // keep describing the block-rounded buffer layout.
+            Extent3D mipSize = calcMipSize(dst->m_desc.size, mip);
+            MTL::Size copySize(
+                std::min(srLayout->size.width, mipSize.width - cmd.offset.x),
+                std::min(srLayout->size.height, mipSize.height - cmd.offset.y),
+                std::min(srLayout->size.depth, mipSize.depth - cmd.offset.z)
+            );
+
             encoder->copyFromBuffer(
                 buffer->m_buffer.get(),
                 bufferOffset,
                 srLayout->rowPitch,
                 srLayout->slicePitch,
-                MTL::Size(srLayout->size.width, srLayout->size.height, srLayout->size.depth),
+                copySize,
                 dst->m_texture.get(),
                 layer,
                 mip,
@@ -456,7 +474,12 @@ void CommandRecorder::cmdBeginRenderPass(const commands::BeginRenderPass& cmd)
         NS::TransferPtr(MTL::RenderPassDescriptor::alloc()->init());
 
     // Setup color attachments.
-    renderPassDesc->setRenderTargetArrayLength(desc.colorAttachmentCount);
+    // NOTE(april): renderTargetArrayLength is the LAYER count for layered
+    // rendering (render-target arrays), not the color attachment count.
+    // Setting it to the MRT count made every multi-attachment pass invalid
+    // ("slice + renderTargetArrayLength is N, but the texture only has 1
+    // slices") and silently dropped draws — fatally so for stencil-enabled
+    // pipelines. Leave it at the Metal default (0 = non-layered).
     for (uint32_t i = 0; i < desc.colorAttachmentCount; ++i)
     {
         const auto& attachment = desc.colorAttachments[i];
@@ -615,6 +638,24 @@ void CommandRecorder::cmdSetRenderState(const commands::SetRenderState& cmd)
                     MTL::ResourceUsageRead | MTL::ResourceUsageWrite
                 );
             }
+            // Make every live bindless resource resident: an embedded .Handle texture is
+            // referenced by id from inside a buffer, which Metal does not auto-page. Only
+            // needed on the fallback path; on a residency set the base texture/buffer is
+            // already resident (registered at creation), which covers its views.
+            if (m_device->m_bindlessDescriptorSet)
+            {
+                std::vector<MTL::Resource*> bindlessRead;
+                std::vector<MTL::Resource*> bindlessReadWrite;
+                m_device->m_bindlessDescriptorSet->collectResidentResources(bindlessRead, bindlessReadWrite);
+                if (!bindlessRead.empty())
+                    encoder->useResources(bindlessRead.data(), bindlessRead.size(), MTL::ResourceUsageRead);
+                if (!bindlessReadWrite.empty())
+                    encoder->useResources(
+                        bindlessReadWrite.data(),
+                        bindlessReadWrite.size(),
+                        MTL::ResourceUsageRead | MTL::ResourceUsageWrite
+                    );
+            }
         }
     }
 
@@ -739,14 +780,41 @@ void CommandRecorder::cmdDrawIndexed(const commands::DrawIndexed& cmd)
 
 void CommandRecorder::cmdDrawIndirect(const commands::DrawIndirect& cmd)
 {
-    SLANG_UNUSED(cmd);
-    NOT_SUPPORTED(IRenderPassEncoder, drawIndirect);
+    if (!m_renderStateValid)
+        return;
+
+    auto argBuffer = checked_cast<BufferImpl*>(cmd.argBuffer.buffer);
+
+    // Metal does not support count buffers for indirect draw.
+    // Each indirect draw call draws maxDrawCount times from the argument buffer.
+    for (uint32_t i = 0; i < cmd.maxDrawCount; ++i)
+    {
+        m_renderCommandEncoder->drawPrimitives(
+            m_renderPipeline->m_primitiveType,
+            argBuffer->m_buffer.get(),
+            cmd.argBuffer.offset + i * sizeof(MTL::DrawPrimitivesIndirectArguments)
+        );
+    }
 }
 
 void CommandRecorder::cmdDrawIndexedIndirect(const commands::DrawIndexedIndirect& cmd)
 {
-    SLANG_UNUSED(cmd);
-    NOT_SUPPORTED(IRenderPassEncoder, drawIndexedIndirect);
+    if (!m_renderStateValid)
+        return;
+
+    auto argBuffer = checked_cast<BufferImpl*>(cmd.argBuffer.buffer);
+
+    for (uint32_t i = 0; i < cmd.maxDrawCount; ++i)
+    {
+        m_renderCommandEncoder->drawIndexedPrimitives(
+            m_renderPipeline->m_primitiveType,
+            m_indexType,
+            m_indexBuffer->m_buffer.get(),
+            m_indexBufferOffset,
+            argBuffer->m_buffer.get(),
+            cmd.argBuffer.offset + i * sizeof(MTL::DrawIndexedPrimitivesIndirectArguments)
+        );
+    }
 }
 
 void CommandRecorder::cmdDrawMeshTasks(const commands::DrawMeshTasks& cmd)
@@ -820,6 +888,22 @@ void CommandRecorder::cmdSetComputeState(const commands::SetComputeState& cmd)
                     MTL::ResourceUsageRead
                 );
             }
+
+            // Make every live bindless resource resident (see render path above).
+            if (m_device->m_bindlessDescriptorSet)
+            {
+                std::vector<MTL::Resource*> bindlessRead;
+                std::vector<MTL::Resource*> bindlessReadWrite;
+                m_device->m_bindlessDescriptorSet->collectResidentResources(bindlessRead, bindlessReadWrite);
+                if (!bindlessRead.empty())
+                    encoder->useResources(bindlessRead.data(), bindlessRead.size(), MTL::ResourceUsageRead);
+                if (!bindlessReadWrite.empty())
+                    encoder->useResources(
+                        bindlessReadWrite.data(),
+                        bindlessReadWrite.size(),
+                        MTL::ResourceUsageRead | MTL::ResourceUsageWrite
+                    );
+            }
         }
 
         // Bind root-level acceleration structures via setAccelerationStructure:atBufferIndex:.
@@ -858,10 +942,18 @@ void CommandRecorder::cmdDispatchCompute(const commands::DispatchCompute& cmd)
 
 void CommandRecorder::cmdDispatchComputeIndirect(const commands::DispatchComputeIndirect& cmd)
 {
-    // TODO: When implemented, must set m_computeEncoderHasDispatched = true
-    // so that cmdSetComputeState emits a memoryBarrier after indirect dispatches.
-    SLANG_UNUSED(cmd);
-    NOT_SUPPORTED(IComputePassEncoder, dispatchComputeIndirect);
+    if (!m_computeStateValid)
+        return;
+
+    auto argBuffer = checked_cast<BufferImpl*>(cmd.argBuffer.buffer);
+    m_computeCommandEncoder->dispatchThreadgroups(
+        argBuffer->m_buffer.get(),
+        cmd.argBuffer.offset,
+        m_computePipeline->m_threadGroupSize
+    );
+    // Mark a dispatch so cmdSetComputeState emits a memoryBarrier on rebind,
+    // matching the direct dispatch path.
+    m_computeEncoderHasDispatched = true;
 }
 
 void CommandRecorder::cmdBeginRayTracingPass(const commands::BeginRayTracingPass& cmd)
@@ -987,6 +1079,14 @@ void CommandRecorder::cmdGlobalBarrier(const commands::GlobalBarrier& cmd)
     // so no explicit barrier is needed. Encoder transitions provide
     // inter-encoder visibility via MTL::Fence.
 }
+
+// Queue-family-ownership transfer is a no-op on Metal: its command queues are
+// general-purpose and share one unified memory space, so a resource needs no
+// release/acquire to move between the graphics and transfer queues.
+void CommandRecorder::cmdReleaseBufferForQueue(const commands::ReleaseBufferForQueue& cmd) { SLANG_UNUSED(cmd); }
+void CommandRecorder::cmdReleaseTextureForQueue(const commands::ReleaseTextureForQueue& cmd) { SLANG_UNUSED(cmd); }
+void CommandRecorder::cmdAcquireBufferFromQueue(const commands::AcquireBufferFromQueue& cmd) { SLANG_UNUSED(cmd); }
+void CommandRecorder::cmdAcquireTextureFromQueue(const commands::AcquireTextureFromQueue& cmd) { SLANG_UNUSED(cmd); }
 
 void CommandRecorder::cmdPushDebugGroup(const commands::PushDebugGroup& cmd)
 {
