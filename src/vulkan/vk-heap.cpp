@@ -83,7 +83,7 @@ HeapImpl::~HeapImpl() {}
 Result HeapImpl::free(HeapAlloc allocation)
 {
     DeviceImpl* deviceImpl = static_cast<DeviceImpl*>(getDevice());
-    CommandQueueImpl* queue = deviceImpl->m_queue;
+    CommandQueueImpl* queue = deviceImpl->m_graphicsQueue;
 
     // Check if the queue has finished all work by comparing submission IDs
     // We don't call updateLastFinishedID for every free, as it's pretty costly
@@ -106,7 +106,7 @@ Result HeapImpl::free(HeapAlloc allocation)
 Result HeapImpl::flush()
 {
     DeviceImpl* deviceImpl = static_cast<DeviceImpl*>(getDevice());
-    CommandQueueImpl* queue = deviceImpl->m_queue;
+    CommandQueueImpl* queue = deviceImpl->m_graphicsQueue;
 
     // Update the last finished ID to get current GPU completion status
     uint64_t lastFinishedID = queue->updateLastFinishedID();

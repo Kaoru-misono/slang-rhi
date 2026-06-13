@@ -3,8 +3,13 @@
 using namespace rhi;
 using namespace rhi::testing;
 
+GPU_TEST_CASE("bindless-metal-feature", Metal)
+{
+    CHECK(device->hasFeature(Feature::Bindless));
+}
+
 // Bindless buffers are currently not supported on CUDA.
-GPU_TEST_CASE("bindless-buffers", D3D12 | Vulkan)
+GPU_TEST_CASE("bindless-buffers", D3D12 | Vulkan | Metal)
 {
     if (!device->hasFeature(Feature::Bindless))
     {
@@ -181,7 +186,7 @@ GPU_TEST_CASE("bindless-buffers", D3D12 | Vulkan)
     compareComputeResult(device, rwByteAddressBuffer, std::array{2.f, 3.f});
 }
 
-GPU_TEST_CASE("bindless-textures", D3D12 | Vulkan | CUDA)
+GPU_TEST_CASE("bindless-textures", D3D12 | Vulkan | Metal | CUDA)
 {
     if (!device->hasFeature(Feature::Bindless))
     {
@@ -561,7 +566,7 @@ GPU_TEST_CASE("bindless-textures", D3D12 | Vulkan | CUDA)
     compareComputeResult(device, rwTexture2DArray, 1, 0, std::array{6.f, 6.f, 7.f, 9.f});
 }
 
-GPU_TEST_CASE("bindless-combined-texture-samplers", D3D12 | Vulkan | CUDA)
+GPU_TEST_CASE("bindless-combined-texture-samplers", D3D12 | Vulkan | Metal | CUDA)
 {
     if (!device->hasFeature(Feature::Bindless))
     {

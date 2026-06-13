@@ -3,7 +3,7 @@
 #include "rhi-shared.h"
 
 #include <vector>
-#include <map>
+#include <unordered_map>
 
 namespace rhi {
 
@@ -49,7 +49,22 @@ public:
         BufferState* bufferState = getBufferState(buffer);
         if (state != bufferState->state || state == ResourceState::UnorderedAccess)
         {
-            m_bufferBarriers.push_back({buffer, bufferState->state, state});
+            // Try to merge with an existing barrier for the same buffer in this batch.
+            // A→B + B→C becomes A→C. If A==C, commitBarriers will skip it as a no-op.
+            bool merged = false;
+            for (auto& existing : m_bufferBarriers)
+            {
+                if (existing.buffer == buffer)
+                {
+                    existing.stateAfter = state;
+                    merged = true;
+                    break;
+                }
+            }
+            if (!merged)
+            {
+                m_bufferBarriers.push_back({buffer, bufferState->state, state});
+            }
             bufferState->state = state;
         }
     }
@@ -71,7 +86,21 @@ public:
             // Transition entire texture.
             if (state != textureState->state || state == ResourceState::UnorderedAccess)
             {
-                m_textureBarriers.push_back({texture, true, 0, 0, textureState->state, state});
+                // Try to merge with an existing entire-texture barrier for the same texture.
+                bool merged = false;
+                for (auto& existing : m_textureBarriers)
+                {
+                    if (existing.texture == texture && existing.entireTexture)
+                    {
+                        existing.stateAfter = state;
+                        merged = true;
+                        break;
+                    }
+                }
+                if (!merged)
+                {
+                    m_textureBarriers.push_back({texture, true, 0, 0, textureState->state, state});
+                }
                 textureState->state = state;
             }
         }
@@ -160,8 +189,8 @@ public:
     }
 
 private:
-    std::map<Buffer*, BufferState> m_bufferStates;
-    std::map<Texture*, TextureState> m_textureStates;
+    std::unordered_map<Buffer*, BufferState> m_bufferStates;
+    std::unordered_map<Texture*, TextureState> m_textureStates;
     std::vector<BufferBarrier> m_bufferBarriers;
     std::vector<TextureBarrier> m_textureBarriers;
 

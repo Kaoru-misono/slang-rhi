@@ -233,11 +233,7 @@ Result BindingDataBuilder::bindAsRoot(
     BindingDataImpl*& outBindingData
 )
 {
-    // Create a new set of binding data to populate.
-    // TODO: In the future we should lookup the cache for existing
-    // binding data and reuse that if possible.
     m_bindingData = m_allocator->allocate<BindingDataImpl>();
-    m_bindingCache->bindingData.push_back(m_bindingData);
 
     // TODO(shaderobject): we should count number of buffers/textures in the layout and allocate appropriately
     // For now we use a fixed starting capacity and grow as needed.
@@ -696,6 +692,20 @@ Result BindingDataBuilder::bindAsParameterBlock(
     ShaderObjectLayoutImpl* specializedLayout
 )
 {
+    // Check cache for unchanged parameter block sub-objects.
+    // If the entire sub-object tree hasn't changed, we can reuse the previous
+    // descriptor sets without reallocating or rewriting any descriptors.
+    uint32_t subTreeVersion = shaderObject->getSubTreeVersion();
+    auto* cached = m_bindingCache->lookup(shaderObject->m_uid, subTreeVersion, specializedLayout);
+    if (cached)
+    {
+        for (uint32_t i = 0; i < cached->descriptorSetCount; ++i)
+            m_bindingData->descriptorSets[m_bindingData->descriptorSetCount++] = cached->descriptorSets[i];
+        return SLANG_OK;
+    }
+
+    uint32_t startSetCount = m_bindingData->descriptorSetCount;
+
     // Because we are binding into a nested parameter block,
     // any texture/buffer/sampler bindings will now want to
     // write into the sets we allocate for this object and
@@ -716,6 +726,17 @@ Result BindingDataBuilder::bindAsParameterBlock(
 
     SLANG_RHI_ASSERT(offset.bindingSet < m_bindingData->descriptorSetCount);
     SLANG_RETURN_ON_FAIL(bindAsConstantBuffer(shaderObject, offset, specializedLayout));
+
+    // Cache all descriptor sets allocated during this parameter block bind
+    // (including nested parameter blocks).
+    uint32_t addedCount = m_bindingData->descriptorSetCount - startSetCount;
+    m_bindingCache->store(
+        shaderObject->m_uid,
+        subTreeVersion,
+        specializedLayout,
+        &m_bindingData->descriptorSets[startSetCount],
+        addedCount
+    );
 
     return SLANG_OK;
 }
