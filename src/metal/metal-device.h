@@ -188,6 +188,8 @@ public:
     NS::Array* getAccelerationStructureArray();
     std::span<MTL::Resource* const> getAccelerationStructureResources();
 
+    RefPtr<BindlessDescriptorSet> m_bindlessDescriptorSet;
+
     bool m_hasArgumentBufferTier2 = false;
 
     NS::SharedPtr<MTL::ResidencySet> m_residencySet;

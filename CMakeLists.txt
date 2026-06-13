@@ -452,7 +452,10 @@ endif()
 if(SLANG_RHI_ENABLE_VULKAN)
     add_library(slang-rhi-vma STATIC)
     target_sources(slang-rhi-vma PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/external/vma/vk_mem_alloc.cpp)
-    target_include_directories(slang-rhi-vma PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/external/vma)
+    # SYSTEM so consumers that include <vk_mem_alloc.h> (our VulkanMemoryAllocator
+    # wrapper, transitively via vk-device.h) don't trip slang-rhi's -Werror on
+    # VMA's Clang nullability extensions.
+    target_include_directories(slang-rhi-vma SYSTEM PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/external/vma)
     target_link_libraries(slang-rhi-vma PUBLIC slang-rhi-vulkan-headers)
     target_compile_features(slang-rhi-vma PRIVATE cxx_std_20)
     target_compile_options(slang-rhi-vma PRIVATE
