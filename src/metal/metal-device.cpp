@@ -13,6 +13,7 @@
 #include "metal-shader-object-layout.h"
 #include "metal-shader-object.h"
 #include "metal-acceleration-structure.h"
+#include "metal-bindless-descriptor-set.h"
 
 #include "core/common.h"
 
@@ -38,6 +39,11 @@ DeviceImpl::~DeviceImpl()
     {
         m_queue->shutdown();
         m_queue.setNull();
+    }
+    if (m_transferQueue)
+    {
+        m_transferQueue->shutdown();
+        m_transferQueue.setNull();
     }
 
     if (m_commandQueue && m_residencySet)
@@ -149,6 +155,16 @@ Result DeviceImpl::initialize(const DeviceDesc& desc, BackendImpl* backend)
     m_queue->init(m_commandQueue);
     m_queue->setInternalReferenceCount(1);
 
+    // Create transfer queue (Metal queues are general-purpose, no QFOT needed).
+    m_transferCommandQueue = NS::TransferPtr(m_device->newCommandQueue(64));
+    if (!m_transferCommandQueue)
+    {
+        return SLANG_FAIL;
+    }
+    m_transferQueue = new CommandQueueImpl(this, QueueType::Transfer);
+    m_transferQueue->init(m_transferCommandQueue);
+    m_transferQueue->setInternalReferenceCount(1);
+
     // Setup capture manager.
     if (captureEnabled())
     {
@@ -243,6 +259,8 @@ Result DeviceImpl::initialize(const DeviceDesc& desc, BackendImpl* backend)
     {
         addFeature(Feature::ArgumentBufferTier2);
         addFeature(Feature::ParameterBlock);
+        addFeature(Feature::Bindless);
+        addCapability(Capability::descriptor_handle);
     }
     if (m_hasResidencySet)
     {
@@ -336,6 +354,12 @@ Result DeviceImpl::initialize(const DeviceDesc& desc, BackendImpl* backend)
 
     SLANG_RETURN_ON_FAIL(checkRequiredFeatures(desc));
 
+    if (hasFeature(Feature::Bindless))
+    {
+        m_bindlessDescriptorSet = new BindlessDescriptorSet(this, desc.bindless);
+        SLANG_RETURN_ON_FAIL(m_bindlessDescriptorSet->initialize());
+    }
+
     return SLANG_OK;
 }
 
@@ -343,10 +367,15 @@ Result DeviceImpl::getQueue(QueueType type, ICommandQueue** outQueue)
 {
     AUTORELEASEPOOL
 
-    if (type != QueueType::Graphics)
+    if (type == QueueType::Compute)
+        return SLANG_E_NOT_AVAILABLE;
+    if (type == QueueType::Transfer)
     {
-        return SLANG_E_INVALID_ARG;
+        returnComPtr(outQueue, m_transferQueue);
+        return SLANG_OK;
     }
+    if (type != QueueType::Graphics)
+        return SLANG_E_INVALID_ARG;
     returnComPtr(outQueue, m_queue);
     return SLANG_OK;
 }

@@ -16,6 +16,8 @@ public:
     NS::SharedPtr<MTL::Device> m_device;
 };
 
+class BindlessDescriptorSet;
+
 class DeviceImpl : public Device
 {
 public:
@@ -161,6 +163,11 @@ public:
     /// in the fence chain. See synchronization model in metal-command.h.
     RefPtr<CommandQueueImpl> m_queue;
     NS::SharedPtr<MTL::CommandQueue> m_commandQueue;
+    // Second general-purpose Metal queue exposed as QueueType::Transfer. Metal
+    // queues are general-purpose, so no queue-family-ownership transfer (QFOT)
+    // is required; the Transfer queue is a plain second command queue.
+    RefPtr<CommandQueueImpl> m_transferQueue;
+    NS::SharedPtr<MTL::CommandQueue> m_transferCommandQueue;
     ClearEngine m_clearEngine;
 
     // Global registry of all acceleration structures.
