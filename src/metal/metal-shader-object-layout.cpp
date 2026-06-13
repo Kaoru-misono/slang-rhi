@@ -116,6 +116,12 @@ Result ShaderObjectLayoutImpl::Builder::setElementTypeLayout(slang::TypeLayoutRe
             m_slotCount += count;
             m_resourceCount.sampler += count;
             break;
+        case slang::BindingType::CombinedTextureSampler:
+            slotIndex = m_slotCount;
+            m_slotCount += count;
+            m_resourceCount.texture += count;
+            m_resourceCount.sampler += count;
+            break;
         case slang::BindingType::Texture:
         case slang::BindingType::MutableTexture:
             slotIndex = m_slotCount;
@@ -124,9 +130,12 @@ Result ShaderObjectLayoutImpl::Builder::setElementTypeLayout(slang::TypeLayoutRe
             break;
         case slang::BindingType::TypedBuffer:
         case slang::BindingType::MutableTypedBuffer:
+            // Metal lowers a TypedBuffer to a texture-buffer view (see
+            // BufferImpl::getTextureBufferView), so it consumes a texture slot,
+            // not a buffer slot.
             slotIndex = m_slotCount;
             m_slotCount += count;
-            m_resourceCount.buffer += count;
+            m_resourceCount.texture += count;
             break;
         case slang::BindingType::RayTracingAccelerationStructure:
             slotIndex = m_slotCount;
@@ -173,6 +182,19 @@ Result ShaderObjectLayoutImpl::Builder::setElementTypeLayout(slang::TypeLayoutRe
                 typeLayout->getDescriptorSetDescriptorRangeIndexOffset(descriptorSetIndex, descriptorRangeIndex);
 
             bindingRangeInfo.registerOffset = (uint32_t)registerOffset;
+            bindingRangeInfo.samplerRegisterOffset = bindingRangeInfo.registerOffset;
+            // A combined texture-sampler range is backed by two descriptor
+            // ranges (texture then sampler); record the sampler's own offset.
+            if (slangBindingType == slang::BindingType::CombinedTextureSampler &&
+                typeLayout->getBindingRangeDescriptorRangeCount(r) > 1)
+            {
+                SlangInt samplerDescriptorRangeIndex = descriptorRangeIndex + 1;
+                auto samplerRegisterOffset = typeLayout->getDescriptorSetDescriptorRangeIndexOffset(
+                    descriptorSetIndex,
+                    samplerDescriptorRangeIndex
+                );
+                bindingRangeInfo.samplerRegisterOffset = (uint32_t)samplerRegisterOffset;
+            }
         }
 
         m_bindingRanges.push_back(bindingRangeInfo);
@@ -237,10 +259,42 @@ Result ShaderObjectLayoutImpl::Builder::setElementTypeLayout(slang::TypeLayoutRe
 
         m_subObjectRanges.push_back(subObjectRange);
 
-        if (subObjectLayout && slangBindingType != slang::BindingType::ParameterBlock)
+        // Compute the number of buffer/texture/sampler slots consumed by this
+        // sub-object range so that m_totalResourceCount reflects all binding
+        // indices that bindAsRoot / bindAsValue will actually write to.
+        //
+        // For ConstantBuffer ranges, bindAsConstantBuffer writes one buffer
+        // for ordinary data at subObjectRange.offset.buffer, then the element
+        // layout's own resources follow.
+        //
+        // For ParameterBlock ranges, bindAsParameterBlock writes one argument
+        // buffer at subObjectRange.offset.buffer.  The contents of the
+        // argument buffer are indirect and do not occupy additional top-level
+        // binding slots.
+        //
+        uint32_t bindingCount = m_bindingRanges[bindingRangeIndex].count;
+        BindingOffset rangeEnd = subObjectRange.offset;
+
+        if (slangBindingType == slang::BindingType::ParameterBlock)
         {
-            m_totalResourceCount += subObjectLayout->m_totalResourceCount;
+            // Each ParameterBlock uses exactly one buffer slot (the argument buffer).
+            rangeEnd.buffer += bindingCount;
         }
+        else if (subObjectLayout)
+        {
+            // ConstantBuffer / other: one buffer for ordinary data, plus the
+            // sub-object's own resources, per element in the range.
+            BindingOffset perElement;
+            perElement.buffer = 1; // ordinary data buffer
+            perElement += subObjectLayout->m_totalResourceCount;
+            rangeEnd.buffer += perElement.buffer * bindingCount;
+            rangeEnd.texture += perElement.texture * bindingCount;
+            rangeEnd.sampler += perElement.sampler * bindingCount;
+        }
+
+        m_totalResourceCount.buffer = max(m_totalResourceCount.buffer, rangeEnd.buffer);
+        m_totalResourceCount.texture = max(m_totalResourceCount.texture, rangeEnd.texture);
+        m_totalResourceCount.sampler = max(m_totalResourceCount.sampler, rangeEnd.sampler);
     }
     return SLANG_OK;
 }
