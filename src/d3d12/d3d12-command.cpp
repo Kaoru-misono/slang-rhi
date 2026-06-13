@@ -37,6 +37,10 @@ public:
     ComPtr<ID3D12GraphicsCommandList4> m_cmdList4;
     ComPtr<ID3D12GraphicsCommandList6> m_cmdList6;
 
+    // Command-list type of the buffer being recorded. A COPY list (transfer queue)
+    // permits only COMMON/COPY_SOURCE/COPY_DEST states, so commitBarriers() clamps to them.
+    D3D12_COMMAND_LIST_TYPE m_commandListType = D3D12_COMMAND_LIST_TYPE_DIRECT;
+
     GPUDescriptorArena* m_cbvSrvUavArena = nullptr;
     GPUDescriptorArena* m_samplerArena = nullptr;
 
@@ -148,6 +152,7 @@ public:
 Result CommandRecorder::record(CommandBufferImpl* commandBuffer)
 {
     m_cmdList = commandBuffer->m_d3dCommandList;
+    m_commandListType = commandBuffer->m_queue->m_commandListType;
     m_cmdList->QueryInterface<ID3D12GraphicsCommandList1>(m_cmdList1.writeRef());
     m_cmdList->QueryInterface<ID3D12GraphicsCommandList4>(m_cmdList4.writeRef());
     m_cmdList->QueryInterface<ID3D12GraphicsCommandList6>(m_cmdList6.writeRef());
@@ -1765,12 +1770,23 @@ void CommandRecorder::commitBarriers()
 
     short_vector<D3D12_RESOURCE_BARRIER, 16> barriers;
 
+    // A COPY command list (transfer queue) permits only COMMON/COPY_SOURCE/COPY_DEST
+    // resource states. Clamp any tracked graphics/compute state down so an illegal
+    // transition is never emitted there (e.g. a graphics-default-state resource first
+    // used on the transfer queue). COMMON == 0, so a non-copy state collapses to it and
+    // a resulting before==after barrier is skipped by the existing equality checks below.
+    bool const isCopyList = (m_commandListType == D3D12_COMMAND_LIST_TYPE_COPY);
+    auto const clampState = [isCopyList](D3D12_RESOURCE_STATES s) -> D3D12_RESOURCE_STATES
+    {
+        return isCopyList ? (s & (D3D12_RESOURCE_STATE_COPY_SOURCE | D3D12_RESOURCE_STATE_COPY_DEST)) : s;
+    };
+
     for (const auto& bufferBarrier : m_stateTracking.getBufferBarriers())
     {
         BufferImpl* buffer = checked_cast<BufferImpl*>(bufferBarrier.buffer);
         D3D12_RESOURCE_BARRIER barrier = {};
-        D3D12_RESOURCE_STATES stateBefore = translateResourceState(bufferBarrier.stateBefore);
-        D3D12_RESOURCE_STATES stateAfter = translateResourceState(bufferBarrier.stateAfter);
+        D3D12_RESOURCE_STATES stateBefore = clampState(translateResourceState(bufferBarrier.stateBefore));
+        D3D12_RESOURCE_STATES stateAfter = clampState(translateResourceState(bufferBarrier.stateAfter));
         // Acceleration structure buffers need to be treated specially.
         // D3D12 doesn't allow to transition to/from D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE state.
         // Instead, UAV barriers are used to synchronize accesses.
@@ -1801,8 +1817,8 @@ void CommandRecorder::commitBarriers()
     {
         TextureImpl* texture = checked_cast<TextureImpl*>(textureBarrier.texture);
         D3D12_RESOURCE_BARRIER barrier = {};
-        D3D12_RESOURCE_STATES stateBefore = translateResourceState(textureBarrier.stateBefore);
-        D3D12_RESOURCE_STATES stateAfter = translateResourceState(textureBarrier.stateAfter);
+        D3D12_RESOURCE_STATES stateBefore = clampState(translateResourceState(textureBarrier.stateBefore));
+        D3D12_RESOURCE_STATES stateAfter = clampState(translateResourceState(textureBarrier.stateAfter));
         if (stateBefore != stateAfter)
         {
             barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
