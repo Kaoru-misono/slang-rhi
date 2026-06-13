@@ -11,6 +11,8 @@
 #include "metal-utils.h"
 #include "../strings.h"
 
+#include <mach/mach_time.h>
+
 #include <cstdio>
 
 namespace rhi::metal {
@@ -1355,6 +1357,37 @@ Result CommandQueueImpl::getNativeHandle(NativeHandle* outHandle)
 {
     outHandle->type = NativeHandleType::MTLCommandQueue;
     outHandle->value = (uint64_t)m_commandQueue.get();
+    return SLANG_OK;
+}
+
+Result CommandQueueImpl::getTimestampCalibration(TimestampCalibration* outCalibration)
+{
+    if (!outCalibration)
+        return SLANG_E_INVALID_ARG;
+
+    DeviceImpl* device = getDevice<DeviceImpl>();
+
+    // sampleTimestamps atomically captures a paired CPU + GPU timestamp. On Apple
+    // platforms both are already in mach-absolute nanoseconds (verified on M-series:
+    // sampleTimestamps returns mach_absolute_time scaled by the timebase, i.e. ns),
+    // and the GPU value shares the timebase of MTL::CounterSampleBuffer timestamps,
+    // so CPU<->GPU correlation needs no extra tick->ns conversion (frequency = 1e9).
+    mach_timebase_info_data_t timebase = {};
+    mach_timebase_info(&timebase);
+    auto const machToNs = [&](uint64_t ticks) -> uint64_t { return ticks * timebase.numer / timebase.denom; };
+
+    uint64_t const before = mach_absolute_time();
+    MTL::Timestamp cpuTimestamp = 0;
+    MTL::Timestamp gpuTimestamp = 0;
+    device->m_device->sampleTimestamps(&cpuTimestamp, &gpuTimestamp);
+    uint64_t const after = mach_absolute_time();
+
+    outCalibration->cpuDomain = CpuTimestampDomain::MachAbsoluteTime;
+    outCalibration->cpuTimestamp = cpuTimestamp;
+    outCalibration->cpuFrequency = 1'000'000'000ull;
+    outCalibration->gpuTimestamp = gpuTimestamp;
+    outCalibration->gpuFrequency = 1'000'000'000ull;
+    outCalibration->maxDeviationNs = machToNs(after - before);
     return SLANG_OK;
 }
 

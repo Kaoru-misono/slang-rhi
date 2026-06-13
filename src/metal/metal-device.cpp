@@ -267,6 +267,13 @@ Result DeviceImpl::initialize(const DeviceDesc& desc, BackendImpl* backend)
         addFeature(Feature::ResidencySet);
     }
 
+    // CPU<->GPU timestamp correlation is available via MTLDevice::sampleTimestamps
+    // (macOS 10.15+). This is independent of timestamp-query support: the GPU
+    // profiler stays disabled until the Metal timestamp WRITE path (counter-sample
+    // attachments, see WS-M) lands and timestampFrequency is set; getTimestampCalibration
+    // is correct and ready for that.
+    addFeature(Feature::TimestampCalibration);
+
     addCapability(Capability::metal);
 
     auto supportsAnyGPUFamilyInRange = [&](MTL::GPUFamily first, MTL::GPUFamily last)
