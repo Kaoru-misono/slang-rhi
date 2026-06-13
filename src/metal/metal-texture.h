@@ -33,6 +33,7 @@ class TextureViewImpl : public TextureView
 {
 public:
     TextureViewImpl(Device* device, const TextureViewDesc& desc);
+    ~TextureViewImpl();
 
     // RefObject implementation
     virtual void makeExternal() override { m_texture.establishStrongReference(); }
@@ -43,10 +44,19 @@ public:
 
     // ITextureView implementation
     virtual SLANG_NO_THROW ITexture* SLANG_MCALL getTexture() override { return m_texture; }
+    virtual SLANG_NO_THROW Result SLANG_MCALL getDescriptorHandle(
+        DescriptorHandleAccess access,
+        DescriptorHandle* outHandle
+    ) override;
+    virtual SLANG_NO_THROW Result SLANG_MCALL getCombinedTextureSamplerDescriptorHandle(
+        DescriptorHandle* outHandle
+    ) override;
 
 public:
     BreakableReference<TextureImpl> m_texture;
     NS::SharedPtr<MTL::Texture> m_textureView;
+    // [0]=Read, [1]=ReadWrite, [2]=combined texture-sampler. Freed in the dtor.
+    DescriptorHandle m_descriptorHandle[3] = {};
 };
 
 } // namespace rhi::metal

@@ -1,4 +1,5 @@
 #include "metal-buffer.h"
+#include "metal-bindless-descriptor-set.h"
 #include "metal-command.h"
 #include "metal-device.h"
 #include "metal-utils.h"
@@ -15,6 +16,13 @@ BufferImpl::~BufferImpl()
     if (m_buffer)
     {
         auto* device = getDevice<DeviceImpl>();
+        if (device->m_bindlessDescriptorSet)
+        {
+            for (auto& handle : m_descriptorHandles)
+            {
+                SLANG_RHI_ASSERT(SLANG_SUCCEEDED(device->m_bindlessDescriptorSet->freeHandle(handle.second)));
+            }
+        }
         if (!device->m_hasResidencySet && m_deviceAddress != 0)
             device->m_addressToBuffer.erase(m_deviceAddress);
         device->unregisterResource(m_buffer.get());
@@ -42,6 +50,87 @@ Result BufferImpl::getSharedHandle(NativeHandle* outHandle)
 DeviceAddress BufferImpl::getDeviceAddress()
 {
     return m_deviceAddress;
+}
+
+Result BufferImpl::getDescriptorHandle(
+    DescriptorHandleAccess access,
+    Format format,
+    BufferRange range,
+    DescriptorHandle* outHandle
+)
+{
+    DeviceImpl* device = getDevice<DeviceImpl>();
+    if (!device->m_bindlessDescriptorSet)
+        return SLANG_E_NOT_AVAILABLE;
+
+    range = resolveBufferRange(range);
+    DescriptorHandleKey key = {access, format, range};
+    DescriptorHandle& handle = m_descriptorHandles[key];
+    if (!handle)
+    {
+        SLANG_RETURN_ON_FAIL(device->m_bindlessDescriptorSet->allocBufferHandle(this, access, format, range, &handle));
+    }
+
+    *outHandle = handle;
+    return SLANG_OK;
+}
+
+Result BufferImpl::getTextureBufferView(
+    DescriptorHandleAccess access,
+    Format format,
+    BufferRange range,
+    MTL::Texture** outTexture
+)
+{
+    if (format == Format::Undefined)
+        return SLANG_E_INVALID_ARG;
+
+    MTL::PixelFormat pixelFormat = translatePixelFormat(format);
+    if (pixelFormat == MTL::PixelFormatInvalid)
+        return SLANG_E_INVALID_ARG;
+
+    range = resolveBufferRange(range);
+
+    const FormatInfo& formatInfo = getFormatInfo(format);
+    if (formatInfo.pixelsPerBlock != 1 || range.size % formatInfo.blockSizeInBytes != 0)
+        return SLANG_E_INVALID_ARG;
+
+    DescriptorHandleKey key = {access, format, range};
+    NS::SharedPtr<MTL::Texture>& texture = m_textureBufferViews[key];
+    if (!texture)
+    {
+        MTL::TextureUsage usage = MTL::TextureUsageShaderRead;
+        if (access == DescriptorHandleAccess::ReadWrite)
+        {
+            usage = MTL::TextureUsage(usage | MTL::TextureUsageShaderWrite);
+        }
+        else if (access != DescriptorHandleAccess::Read)
+        {
+            return SLANG_E_INVALID_ARG;
+        }
+
+        NS::UInteger width = NS::UInteger(range.size / formatInfo.blockSizeInBytes);
+        MTL::ResourceOptions resourceOptions = MTL::ResourceOptions(m_buffer->resourceOptions());
+        NS::SharedPtr<MTL::TextureDescriptor> textureDesc =
+            NS::TransferPtr(MTL::TextureDescriptor::alloc()->init());
+        textureDesc->setTextureType(MTL::TextureTypeTextureBuffer);
+        textureDesc->setPixelFormat(pixelFormat);
+        textureDesc->setWidth(width);
+        textureDesc->setHeight(1);
+        textureDesc->setDepth(1);
+        textureDesc->setMipmapLevelCount(1);
+        textureDesc->setArrayLength(1);
+        textureDesc->setResourceOptions(resourceOptions);
+        textureDesc->setUsage(usage);
+
+        NS::UInteger bytesPerRow = NS::UInteger(range.size);
+        texture = NS::TransferPtr(m_buffer->newTexture(textureDesc.get(), NS::UInteger(range.offset), bytesPerRow));
+        if (!texture)
+            return SLANG_FAIL;
+    }
+
+    *outTexture = texture.get();
+    return SLANG_OK;
 }
 
 Result DeviceImpl::createBuffer(const BufferDesc& desc_, const void* initData, IBuffer** outBuffer)
