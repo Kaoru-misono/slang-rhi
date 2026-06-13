@@ -189,6 +189,10 @@
 | `setBufferState`                       | :x: | :x:  | :x:   | yes   | yes    | :x:   | :x:  |
 | `setTextureState`                      | :x: | :x:  | :x:   | yes   | yes    | :x:   | :x:  |
 | `globalBarrier`                        | :x: | :x:  | :x:   | yes   | yes    | :x:   | :x:  |
+| `releaseBufferForQueue`                | :x: | :x:  | :x:   | yes   | yes    | :x:   | :x:  |
+| `releaseTextureForQueue`               | :x: | :x:  | :x:   | yes   | yes    | :x:   | :x:  |
+| `acquireBufferFromQueue`               | :x: | :x:  | :x:   | yes   | yes    | :x:   | :x:  |
+| `acquireTextureFromQueue`              | :x: | :x:  | :x:   | yes   | yes    | :x:   | :x:  |
 | `pushDebugGroup`                       | :x: | :x:  | :x:   | yes   | yes    | yes   | yes  |
 | `popDebugGroup`                        | :x: | :x:  | :x:   | yes   | yes    | yes   | yes  |
 | `insertDebugMarker`                    | :x: | :x:  | :x:   | yes   | yes    | yes   | yes  |
@@ -250,6 +254,21 @@
 | `getNativeHandle`         | :x: | yes  | :x:   | yes   | yes    | yes   | yes  |
 | `waitOnHost`              | yes | yes  | yes   | yes   | yes    | yes   | yes  |
 | `getTimestampCalibration` | yes | yes  | yes   | yes   | yes    | :x:   | :x:  |
+
+### Queue type support
+
+| Queue Type             | CPU | CUDA | D3D11 | D3D12 | Vulkan | Metal | WGPU |
+|------------------------|-----|------|-------|-------|--------|-------|------|
+| `QueueType::Graphics`  | yes | yes  | yes   | yes   | yes    | yes   | yes  |
+| `QueueType::Compute`   | :x: | :x:  | :x:   | yes   | yes    | :x:   | :x:  |
+| `QueueType::Transfer`  | :x: | :x:  | :x:   | yes   | yes    | :x:   | yes  |
+
+The queue family ownership transfer (QFOT) methods (`releaseBufferForQueue`, `releaseTextureForQueue`,
+`acquireBufferFromQueue`, `acquireTextureFromQueue`) are used to transfer resource ownership between
+queues of different types. These are supported on D3D12 and Vulkan. On D3D12, they are implemented
+as resource state barriers. On Vulkan, they use queue family ownership transfer barriers. On Metal,
+the Transfer queue is a second general-purpose queue and QFOT is a no-op (unified memory, no
+ownership transfer required).
 
 ## `ISurface` interface
 
