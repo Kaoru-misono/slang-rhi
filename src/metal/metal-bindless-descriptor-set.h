@@ -137,8 +137,8 @@ private:
     std::vector<CombinedTextureSamplerEntry> m_combinedTextureSamplers;
 
     // On this Slang/Metal target an embedded `.Handle` lowers to an inline 64-bit
-    // MTL::ResourceID, so a texture/sampler/combined handle's `value` is the
-    // gpuResourceID (what the GPU reads from the argument buffer), NOT the slot.
+    // MTL::ResourceSlotId, so a texture/sampler/combined handle's `value` is the
+    // gpuResourceSlotId (what the GPU reads from the argument buffer), NOT the slot.
     // These map that resource id back to the internal slot for resolve/free.
     // (Buffer handles keep slot-as-value; embedded buffer bindless is unchanged.)
     std::unordered_map<uint64_t, uint32_t> m_textureIdToSlot;

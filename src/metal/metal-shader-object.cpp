@@ -664,7 +664,7 @@ Result BindingDataBuilder::writeArgumentBuffer(
                 SLANG_RETURN_ON_FAIL(resolveTextureSlot(m_device, slot, textureView));
                 if (textureView)
                 {
-                    auto resourceId = textureView->m_textureView->gpuResourceID();
+                    auto resourceId = textureView->m_textureView->gpuResourceSlotId();
                     memcpy(argumentPtr + i * sizeof(uint64_t), &resourceId, sizeof(resourceId));
                     if (!m_device->m_hasResidencySet)
                     {
@@ -688,7 +688,7 @@ Result BindingDataBuilder::writeArgumentBuffer(
                 SLANG_RETURN_ON_FAIL(resolveSamplerSlot(m_device, slot, sampler));
                 if (sampler)
                 {
-                    auto resourceId = sampler->m_samplerState->gpuResourceID();
+                    auto resourceId = sampler->m_samplerState->gpuResourceSlotId();
                     memcpy(argumentPtr + i * sizeof(uint64_t), &resourceId, sizeof(resourceId));
                 }
             }
@@ -708,14 +708,14 @@ Result BindingDataBuilder::writeArgumentBuffer(
                 SLANG_RETURN_ON_FAIL(resolveCombinedTextureSamplerSlot(m_device, slot, textureView, sampler));
                 if (textureView && sampler)
                 {
-                    auto textureResourceId = textureView->m_textureView->gpuResourceID();
+                    auto textureResourceId = textureView->m_textureView->gpuResourceSlotId();
                     memcpy(argumentPtr + i * sizeof(uint64_t), &textureResourceId, sizeof(textureResourceId));
                     if (!m_device->m_hasResidencySet)
                     {
                         SLANG_RETURN_ON_FAIL(addUsedResource(m_bindingData, textureView->m_textureView.get()));
                     }
 
-                    auto samplerResourceId = sampler->m_samplerState->gpuResourceID();
+                    auto samplerResourceId = sampler->m_samplerState->gpuResourceSlotId();
                     memcpy(
                         samplerArgumentPtr + i * sizeof(uint64_t),
                         &samplerResourceId,
@@ -775,7 +775,7 @@ Result BindingDataBuilder::writeArgumentBuffer(
                     MTL::Texture* textureBuffer = nullptr;
                     SLANG_RETURN_ON_FAIL(buffer->getTextureBufferView(access, format, range, &textureBuffer));
 
-                    auto resourceId = textureBuffer->gpuResourceID();
+                    auto resourceId = textureBuffer->gpuResourceSlotId();
                     memcpy(argumentPtr + i * sizeof(uint64_t), &resourceId, sizeof(resourceId));
                     if (!m_device->m_hasResidencySet)
                     {
@@ -800,7 +800,7 @@ Result BindingDataBuilder::writeArgumentBuffer(
                     checked_cast<AccelerationStructureImpl*>(slot.resource.get());
                 if (accelerationStructure)
                 {
-                    auto resourceId = accelerationStructure->m_accelerationStructure->gpuResourceID();
+                    auto resourceId = accelerationStructure->m_accelerationStructure->gpuResourceSlotId();
                     memcpy(argumentPtr + i * sizeof(uint64_t), &resourceId, sizeof(resourceId));
                     if (!m_device->m_hasResidencySet)
                     {

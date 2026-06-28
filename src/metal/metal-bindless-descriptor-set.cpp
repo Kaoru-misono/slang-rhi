@@ -80,11 +80,11 @@ Result BindlessDescriptorSet::allocTextureHandle(
     }
 
     auto* impl = checked_cast<TextureViewImpl*>(textureView);
-    uint64_t resourceId = impl->m_textureView->gpuResourceID()._impl;
+    uint64_t resourceId = impl->m_textureView->gpuResourceSlotId()._impl;
     m_textures[slot] = {type, impl};
     m_textureIdToSlot[resourceId] = slot;
     outHandle->type = type;
-    outHandle->value = resourceId; // Metal: the GPU reads this inline as an MTL::ResourceID
+    outHandle->value = resourceId; // Metal: the GPU reads this inline as an MTL::ResourceSlotId
     return SLANG_OK;
 }
 
@@ -94,11 +94,11 @@ Result BindlessDescriptorSet::allocSamplerHandle(ISampler* sampler, DescriptorHa
     SLANG_RETURN_ON_FAIL(m_samplerAllocator.allocate(&slot));
 
     auto* impl = checked_cast<SamplerImpl*>(sampler);
-    uint64_t resourceId = impl->m_samplerState->gpuResourceID()._impl;
+    uint64_t resourceId = impl->m_samplerState->gpuResourceSlotId()._impl;
     m_samplers[slot] = {DescriptorHandleType::Sampler, impl};
     m_samplerIdToSlot[resourceId] = slot;
     outHandle->type = DescriptorHandleType::Sampler;
-    outHandle->value = resourceId; // Metal: inline sampler MTL::ResourceID
+    outHandle->value = resourceId; // Metal: inline sampler MTL::ResourceSlotId
     return SLANG_OK;
 }
 
@@ -114,7 +114,7 @@ Result BindlessDescriptorSet::allocCombinedTextureSamplerHandle(
     auto* texImpl = checked_cast<TextureViewImpl*>(textureView);
     auto* sampImpl = checked_cast<SamplerImpl*>(sampler);
     // Key on the texture's resource id (what a combined .Handle dereference reads).
-    uint64_t resourceId = texImpl->m_textureView->gpuResourceID()._impl;
+    uint64_t resourceId = texImpl->m_textureView->gpuResourceSlotId()._impl;
     m_combinedTextureSamplers[slot] = {
         DescriptorHandleType::CombinedTextureSampler, texImpl, sampImpl,
     };
