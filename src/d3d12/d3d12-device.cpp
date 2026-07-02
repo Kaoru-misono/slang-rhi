@@ -922,6 +922,14 @@ Result DeviceImpl::initialize(const DeviceDesc& desc, BackendImpl* backend)
             if (options.Int64ShaderOps)
             {
                 addFeature(Feature::Int64);
+                if (shaderModelData.HighestShaderModel >= D3D_SHADER_MODEL_6_6)
+                {
+                    // SM 6.6 requires 64-bit integer atomics for RWByteAddressBuffer and
+                    // RWStructuredBuffer when Int64ShaderOps is present. Typed resources,
+                    // groupshared memory, and descriptor-heap resources have separate
+                    // optional D3D12_OPTIONS9/11 capability bits.
+                    addFeature(Feature::AtomicInt64);
+                }
             }
         }
     }
