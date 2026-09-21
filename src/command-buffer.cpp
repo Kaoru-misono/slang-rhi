@@ -207,22 +207,72 @@ ComputePassEncoder::ComputePassEncoder(CommandEncoder* commandEncoder)
 {
 }
 
-void ComputePassEncoder::writeComputeState()
+bool ComputePassEncoder::writeComputeState()
 {
+    if (!m_pipeline || (!m_fixedBindingData && !m_rootObject))
+        return false;
     commands::SetComputeState cmd;
     cmd.pipeline = m_pipeline;
-    m_commandEncoder->getPipelineSpecializationArgs(m_pipeline, m_rootObject, cmd.specializationArgs);
-    if (SLANG_FAILED(m_commandEncoder->getBindingData(m_rootObject, cmd.bindingData)))
+    if (m_fixedBindingData)
     {
-        m_commandEncoder->getDevice()
-            ->handleMessage(DebugMessageType::Error, DebugMessageSource::Layer, "Failed to get binding data");
-        return;
+        cmd.specializationArgs = nullptr;
+        cmd.bindingData = m_fixedBindingData;
+    }
+    else
+    {
+        if (SLANG_FAILED(m_commandEncoder->getPipelineSpecializationArgs(m_pipeline, m_rootObject, cmd.specializationArgs)) ||
+            SLANG_FAILED(m_commandEncoder->getBindingData(m_rootObject, cmd.bindingData)))
+        {
+            m_commandEncoder->getDevice()
+                ->handleMessage(DebugMessageType::Error, DebugMessageSource::Layer, "Failed to get binding data");
+            return false;
+        }
     }
     m_commandList->write(std::move(cmd));
+    return true;
+}
+
+Result ComputePassEncoder::bindPipelineWithData(
+    IComputePipeline* pipeline, const void* data, size_t size,
+    const ComputeBufferAccess* buffers, uint32_t bufferCount
+)
+{
+    m_pipeline = nullptr;
+    m_rootObject = nullptr;
+    m_fixedBindingData = nullptr;
+    if (!m_commandList || !pipeline || !data || !size || size > 128 || size % 4 || (bufferCount && !buffers))
+        return SLANG_E_INVALID_ARG;
+    auto* program = checked_cast<ShaderProgram*>(pipeline->getProgram());
+    if (program->getDevice() != m_commandEncoder->getDevice() || program->isSpecializable())
+        return SLANG_E_INVALID_ARG;
+    auto* layout = program->getRootShaderObjectLayout();
+    if (layout->getEntryPointCount() != 1 || layout->getSlotCount() || layout->getSubObjectCount())
+        return SLANG_E_INVALID_ARG;
+    auto* entryPoint = layout->getEntryPointLayout(0);
+    if (entryPoint->getSlotCount() || entryPoint->getSubObjectCount())
+        return SLANG_E_INVALID_ARG;
+    for (uint32_t i = 0; i < bufferCount; ++i)
+    {
+        if (!buffers[i].buffer ||
+            checked_cast<Buffer*>(buffers[i].buffer)->getDevice() != m_commandEncoder->getDevice() ||
+            (buffers[i].state != ResourceState::ShaderResource && buffers[i].state != ResourceState::UnorderedAccess))
+            return SLANG_E_INVALID_ARG;
+        BufferUsage usage = buffers[i].state == ResourceState::ShaderResource
+            ? BufferUsage::ShaderResource : BufferUsage::UnorderedAccess;
+        if (!is_set(buffers[i].buffer->getDesc().usage, usage))
+            return SLANG_E_INVALID_ARG;
+        for (uint32_t j = 0; j < i; ++j)
+            if (buffers[j].buffer == buffers[i].buffer && buffers[j].state != buffers[i].state)
+                return SLANG_E_INVALID_ARG;
+    }
+    SLANG_RETURN_ON_FAIL(m_commandEncoder->getComputeBindingData(program, data, size, buffers, bufferCount, m_fixedBindingData));
+    m_pipeline = pipeline;
+    return SLANG_OK;
 }
 
 IShaderObject* ComputePassEncoder::bindPipeline(IComputePipeline* pipeline)
 {
+    m_fixedBindingData = nullptr;
     if (m_commandList)
     {
         m_pipeline = pipeline;
@@ -236,6 +286,7 @@ IShaderObject* ComputePassEncoder::bindPipeline(IComputePipeline* pipeline)
 
 void ComputePassEncoder::bindPipeline(IComputePipeline* pipeline, IShaderObject* rootObject)
 {
+    m_fixedBindingData = nullptr;
     if (m_commandList)
     {
         m_pipeline = checked_cast<ComputePipeline*>(pipeline);
@@ -247,7 +298,7 @@ void ComputePassEncoder::dispatchCompute(uint32_t x, uint32_t y, uint32_t z)
 {
     if (m_commandList)
     {
-        writeComputeState();
+        if (!writeComputeState()) return;
         commands::DispatchCompute cmd;
         cmd.x = x;
         cmd.y = y;
@@ -260,7 +311,7 @@ void ComputePassEncoder::dispatchComputeIndirect(BufferOffsetPair argBuffer)
 {
     if (m_commandList)
     {
-        writeComputeState();
+        if (!writeComputeState()) return;
         commands::DispatchComputeIndirect cmd;
         cmd.argBuffer = argBuffer;
         m_commandList->write(std::move(cmd));
@@ -311,6 +362,9 @@ void ComputePassEncoder::writeTimestamp(IQueryPool* queryPool, uint32_t queryInd
 
 void ComputePassEncoder::end()
 {
+    m_pipeline = nullptr;
+    m_rootObject = nullptr;
+    m_fixedBindingData = nullptr;
     if (m_commandList)
     {
         commands::EndComputePass cmd;

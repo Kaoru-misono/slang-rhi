@@ -2686,6 +2686,14 @@ public:
     virtual SLANG_NO_THROW void SLANG_MCALL drawMeshTasks(uint32_t x, uint32_t y, uint32_t z) = 0;
 };
 
+/// Flat buffer accesses for bindless compute parameters. Every buffer reached through
+/// a descriptor handle must be listed, including transitively accessed buffers.
+struct ComputeBufferAccess
+{
+    IBuffer* buffer;
+    ResourceState state;
+};
+
 class IComputePassEncoder : public IPassEncoder
 {
     SLANG_COM_INTERFACE(0x8479334f, 0xfb45, 0x471c, {0xb7, 0x75, 0x94, 0xa5, 0x76, 0x72, 0x32, 0xc8});
@@ -2693,6 +2701,21 @@ class IComputePassEncoder : public IPassEncoder
 public:
     virtual SLANG_NO_THROW IShaderObject* SLANG_MCALL bindPipeline(IComputePipeline* pipeline) = 0;
     virtual SLANG_NO_THROW void SLANG_MCALL bindPipeline(IComputePipeline* pipeline, IShaderObject* rootObject) = 0;
+
+    /// April extension: bind a fully specialized single-entry-point compute program
+    /// with only ordinary entry-point data (no globals, resource slots or subobjects).
+    /// The data is copied immediately and must exactly match the reflected layout,
+    /// be nonempty, at most 128 bytes, and a multiple of four bytes.
+    /// Buffers are retained until command completion and transitioned to their listed
+    /// ShaderResource/UnorderedAccess states. Aliased accesses must use the same state.
+    /// Failure clears the current binding. Textures and samplers are not supported.
+    virtual SLANG_NO_THROW Result SLANG_MCALL bindPipelineWithData(
+        IComputePipeline* pipeline,
+        const void* data,
+        size_t size,
+        const ComputeBufferAccess* buffers,
+        uint32_t bufferCount
+    ) = 0;
 
     virtual SLANG_NO_THROW void SLANG_MCALL dispatchCompute(uint32_t x, uint32_t y, uint32_t z) = 0;
     virtual SLANG_NO_THROW void SLANG_MCALL dispatchComputeIndirect(BufferOffsetPair argBuffer) = 0;

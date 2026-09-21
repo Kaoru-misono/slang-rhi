@@ -389,6 +389,19 @@ void DebugComputePassEncoder::bindPipeline(IComputePipeline* pipeline, IShaderOb
     m_pipelineBound = true;
 }
 
+Result DebugComputePassEncoder::bindPipelineWithData(
+    IComputePipeline* pipeline, const void* data, size_t size,
+    const ComputeBufferAccess* buffers, uint32_t bufferCount
+)
+{
+    SLANG_RHI_DEBUG_API(IComputePassEncoder, bindPipelineWithData);
+    m_commandEncoder->requireOpen();
+    m_commandEncoder->requireComputePass();
+    Result result = baseObject->bindPipelineWithData(pipeline, data, size, buffers, bufferCount);
+    m_pipelineBound = SLANG_SUCCEEDED(result);
+    return result;
+}
+
 void DebugComputePassEncoder::dispatchCompute(uint32_t x, uint32_t y, uint32_t z)
 {
     SLANG_RHI_DEBUG_API(IComputePassEncoder, dispatchCompute);

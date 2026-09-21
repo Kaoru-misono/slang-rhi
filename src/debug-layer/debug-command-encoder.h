@@ -68,6 +68,13 @@ public:
         IShaderObject* rootObject
     ) override;
 
+    virtual SLANG_NO_THROW Result SLANG_MCALL bindPipelineWithData(
+        IComputePipeline* pipeline,
+        const void* data,
+        size_t size,
+        const ComputeBufferAccess* buffers,
+        uint32_t bufferCount
+    ) override;
     virtual SLANG_NO_THROW void SLANG_MCALL dispatchCompute(uint32_t x, uint32_t y, uint32_t z) override;
     virtual SLANG_NO_THROW void SLANG_MCALL dispatchComputeIndirect(BufferOffsetPair argBuffer) override;
 
