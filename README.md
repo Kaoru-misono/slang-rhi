@@ -8,6 +8,12 @@ SPDX-License-Identifier: CC-BY-4.0
 
 # slang-rhi
 
+This April2 fork supports **Vulkan and D3D12 only**. It is based on upstream
+`82c03494bed8e2d42d65555e33b30a18d3d8f071` (2026-09-18) and uses Slang
+`2026.17.1`. Compute/transfer queues, queue ownership transfers, Vulkan VMA
+allocation, and April binding caches are maintained here. Other backend enum
+values remain reserved for API compatibility, but cannot create devices.
+
 ## Introduction
 
 The `slang-rhi` library provides a render hardware interface for the Slang shading language.
@@ -21,7 +27,6 @@ This library is under active refactoring and development, and is not yet ready f
 `slang-rhi` depends on the following third-party libraries, which have their own license:
 
 - [doctest](https://github.com/doctest/doctest) (MIT)
-- [metal-cpp](https://developer.apple.com/metal/cpp) (Apache 2.0)
 - [RenderDoc API](https://github.com/baldurk/renderdoc) (MIT)
 - [stb](https://github.com/nothings/stb) (Public Domain)
 - [Vulkan-Headers](https://github.com/KhronosGroup/Vulkan-Headers) (MIT)

@@ -9,7 +9,7 @@ This file provides guidance to agents when working with code in this repository.
 
 ## Repository Overview
 
-slang-rhi is a render hardware interface library for the Slang shading language. It provides abstraction layers for multiple graphics APIs including D3D11, D3D12, Vulkan, Metal, CUDA, WebGPU, and a CPU backend.
+slang-rhi is a render hardware interface library for the Slang shading language. This fork supports Vulkan and D3D12. Other backend enum values are reserved for source compatibility; their implementations have been removed.
 
 ## Build Instructions
 
@@ -55,12 +55,8 @@ Tests are built when `SLANG_RHI_BUILD_TESTS` is ON (default for the master proje
 
 - **src/**: Implementation files organized by backend
   - `core/`: Common utilities (allocators, smart pointers, platform abstractions)
-  - `cpu/`: CPU backend implementation
-  - `cuda/`: CUDA backend
-  - `d3d11/`, `d3d12/`: Direct3D backends
+  - `d3d12/`: Direct3D 12 backend
   - `vulkan/`: Vulkan backend
-  - `metal/`: Metal backend (macOS/iOS)
-  - `wgpu/`: WebGPU backend
   - `debug-layer/`: Debug validation layer
 
 ### Key Concepts
@@ -73,9 +69,9 @@ Tests are built when `SLANG_RHI_BUILD_TESTS` is ON (default for the master proje
 ### Backend Selection
 
 Backends are conditionally compiled based on platform:
-- Windows: D3D11, D3D12, Vulkan, CUDA, WebGPU
-- Linux: Vulkan, CUDA, WebGPU
-- macOS: Metal, Vulkan, WebGPU
+- Windows: D3D12 and Vulkan
+- Linux: Vulkan
+- macOS: Vulkan via an installed Vulkan loader (not validated by this fork CI)
 
 ## Development Guidelines
 

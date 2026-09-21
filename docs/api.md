@@ -2,55 +2,55 @@
 
 ## `IDevice` interface
 
-| API                                | CPU     | CUDA | D3D11 | D3D12 | Vulkan | Metal   | WGPU |
-|------------------------------------|---------|------|-------|-------|--------|---------|------|
-| `getNativeDeviceHandles`           | :x:     | yes  | :x:   | yes   | yes    | yes     | :x:  |
-| `getInfo`                          | yes     | yes  | yes   | yes   | yes    | yes     | yes  |
-| `hasFeature`                       | yes     | yes  | yes   | yes   | yes    | yes     | yes  |
-| `getFeatures`                      | yes     | yes  | yes   | yes   | yes    | yes     | yes  |
-| `getCapabilities`                  | yes     | yes  | yes   | yes   | yes    | yes     | yes  |
-| `hasCapability`                    | yes     | yes  | yes   | yes   | yes    | yes     | yes  |
-| `getFormatSupport`                 | yes     | yes  | yes   | yes   | yes    | yes (1) | yes  |
-| `getSlangSession`                  | yes     | yes  | yes   | yes   | yes    | yes     | yes  |
-| `getQueue`                         | yes     | yes  | yes   | yes   | yes    | yes     | yes  |
-| `createTexture`                    | yes     | yes  | yes   | yes   | yes    | yes     | yes  |
-| `createTextureFromNativeHandle`    | :x:     | :x:  | :x:   | yes   | yes    | yes     | :x:  |
-| `createTextureFromSharedHandle`    | :x:     | yes  | :x:   | :x:   | :x:    | :x:     | :x:  |
-| `createBuffer`                     | yes     | yes  | yes   | yes   | yes    | yes     | yes  |
-| `createBufferFromNativeHandle`     | :x:     | yes  | :x:   | yes   | yes    | yes     | yes  |
-| `createBufferFromSharedHandle`     | :x:     | yes  | :x:   | :x:   | :x:    | :x:     | :x:  |
-| `mapBuffer`                        | yes     | yes  | yes   | yes   | yes    | yes     | yes  |
-| `unmapBuffer`                      | yes     | yes  | yes   | yes   | yes    | yes     | yes  |
-| `createSampler`                    | yes (2) | yes  | yes   | yes   | yes    | yes     | yes  |
-| `createTextureView`                | yes     | yes  | yes   | yes   | yes    | yes     | yes  |
-| `createSurface`                    | :x:     | yes  | yes   | yes   | yes    | yes     | yes  |
-| `createInputLayout`                | :x:     | :x:  | yes   | yes   | yes    | yes     | yes  |
-| `createShaderObject`               | yes     | yes  | yes   | yes   | yes    | yes     | yes  |
-| `createShaderObjectFromTypeLayout` | yes     | yes  | yes   | yes   | yes    | yes     | yes  |
-| `createRootShaderObject`           | yes     | yes  | yes   | yes   | yes    | yes     | yes  |
-| `createShaderTable`                | :x:     | yes  | :x:   | yes   | yes    | :x:     | :x:  |
-| `createShaderProgram`              | yes     | yes  | yes   | yes   | yes    | yes     | yes  |
-| `createRenderPipeline`             | :x:     | :x:  | yes   | yes   | yes    | yes     | yes  |
-| `createComputePipeline`            | yes     | yes  | yes   | yes   | yes    | yes     | yes  |
-| `createRayTracingPipeline`         | :x:     | yes  | :x:   | yes   | yes    | :x:     | :x:  |
-| `readTexture`                      | yes     | yes  | yes   | yes   | yes    | yes     | yes  |
-| `readBuffer`                       | yes     | yes  | yes   | yes   | yes    | yes     | yes  |
-| `createQueryPool`                  | yes     | yes  | yes   | yes   | yes    | yes     | yes  |
-| `getAccelerationStructureSizes`    | :x:     | yes  | :x:   | yes   | yes    | yes     | :x:  |
-| `getMicromapSizes`                 | :x:     | yes  | :x:   | yes   | yes    | :x:     | :x:  |
-| `getClusterOperationSizes`         | :x:     | yes  | :x:   | yes   | yes    | :x:     | :x:  |
-| `createAccelerationStructure`      | :x:     | yes  | :x:   | yes   | yes    | yes     | :x:  |
-| `createMicromap`                   | :x:     | yes  | :x:   | yes   | yes    | :x:     | :x:  |
-| `createFence`                      | yes     | yes  | :x:   | yes   | yes    | yes     | yes  |
-| `waitForFences`                    | yes     | yes  | :x:   | yes   | yes    | yes     | yes  |
-| `createHeap`                       | :x:     | yes  | :x:   | yes   | yes    | :x:     | :x:  |
-| `getTextureAllocationInfo`         | yes     | yes  | :x:   | yes   | yes    | yes     | :x:  |
-| `getTextureRowAlignment`           | yes     | yes  | :x:   | yes   | yes    | yes     | yes  |
-| `getCooperativeVectorProperties`   | :x:     | yes  | :x:   | yes   | yes    | :x:     | :x:  |
-| `getCooperativeVectorMatrixSize`   | :x:     | yes  | :x:   | yes   | yes    | :x:     | :x:  |
-| `convertCooperativeVectorMatrix`   | :x:     | yes  | :x:   | yes   | yes    | :x:     | :x:  |
-| `isCooperativeMatrixSupported` (3) | yes     | yes  | yes   | yes   | yes    | yes     | yes  |
-| `reportHeaps`                      | yes     | yes  | yes   | yes   | yes    | yes     | yes  |
+| API | D3D12 | Vulkan |
+| ------------------------------------ | ------- | -------- |
+| `getNativeDeviceHandles` | yes | yes |
+| `getInfo` | yes | yes |
+| `hasFeature` | yes | yes |
+| `getFeatures` | yes | yes |
+| `getCapabilities` | yes | yes |
+| `hasCapability` | yes | yes |
+| `getFormatSupport` | yes | yes |
+| `getSlangSession` | yes | yes |
+| `getQueue` | yes | yes |
+| `createTexture` | yes | yes |
+| `createTextureFromNativeHandle` | yes | yes |
+| `createTextureFromSharedHandle` | :x: | :x: |
+| `createBuffer` | yes | yes |
+| `createBufferFromNativeHandle` | yes | yes |
+| `createBufferFromSharedHandle` | :x: | :x: |
+| `mapBuffer` | yes | yes |
+| `unmapBuffer` | yes | yes |
+| `createSampler` | yes | yes |
+| `createTextureView` | yes | yes |
+| `createSurface` | yes | yes |
+| `createInputLayout` | yes | yes |
+| `createShaderObject` | yes | yes |
+| `createShaderObjectFromTypeLayout` | yes | yes |
+| `createRootShaderObject` | yes | yes |
+| `createShaderTable` | yes | yes |
+| `createShaderProgram` | yes | yes |
+| `createRenderPipeline` | yes | yes |
+| `createComputePipeline` | yes | yes |
+| `createRayTracingPipeline` | yes | yes |
+| `readTexture` | yes | yes |
+| `readBuffer` | yes | yes |
+| `createQueryPool` | yes | yes |
+| `getAccelerationStructureSizes` | yes | yes |
+| `getMicromapSizes` | yes | yes |
+| `getClusterOperationSizes` | yes | yes |
+| `createAccelerationStructure` | yes | yes |
+| `createMicromap` | yes | yes |
+| `createFence` | yes | yes |
+| `waitForFences` | yes | yes |
+| `createHeap` | yes | yes |
+| `getTextureAllocationInfo` | yes | yes |
+| `getTextureRowAlignment` | yes | yes |
+| `getCooperativeVectorProperties` | yes | yes |
+| `getCooperativeVectorMatrixSize` | yes | yes |
+| `convertCooperativeVectorMatrix` | yes | yes |
+| `isCooperativeMatrixSupported` (3) | yes | yes |
+| `reportHeaps` | yes | yes |
 
 (1) dummy implementation only
 (2) returns nullptr but succeeds
@@ -58,229 +58,244 @@
 
 ## `IBuffer` interface
 
-| API                   | CPU     | CUDA | D3D11 | D3D12 | Vulkan | Metal | WGPU |
-|-----------------------|---------|------|-------|-------|--------|-------|------|
-| `getDesc`             | yes     | yes  | yes   | yes   | yes    | yes   | yes  |
-| `getSharedHandle`     | :x:     | :x:  | :x:   | yes   | yes    | :x:   | :x:  |
-| `getDeviceAddress`    | yes (1) | yes  | :x:   | yes   | yes    | yes   | :x:  |
-| `getDescriptorHandle` | :x:     | :x:  | :x:   | yes   | yes    | :x:   | :x:  |
+| API | D3D12 | Vulkan |
+| ----------------------- | ------- | -------- |
+| `getDesc` | yes | yes |
+| `getSharedHandle` | yes | yes |
+| `getDeviceAddress` | yes | yes |
+| `getDescriptorHandle` | yes | yes |
 
 (1) returns host address
 
 ## `ITexture` interface
 
-| API                    | CPU | CUDA | D3D11 | D3D12 | Vulkan | Metal | WGPU |
-|------------------------|-----|------|-------|-------|--------|-------|------|
-| `getDesc`              | yes | yes  | yes   | yes   | yes    | yes   | yes  |
-| `getSharedHandle`      | :x: | :x:  | :x:   | yes   | yes    | :x:   | :x:  |
-| `createView`           | yes | yes  | yes   | yes   | yes    | yes   | yes  |
-| `getDefaultView`       | yes | yes  | yes   | yes   | yes    | yes   | yes  |
-| `getSubresourceLayout` | yes | yes  | yes   | yes   | yes    | yes   | yes  |
+| API | D3D12 | Vulkan |
+| ------------------------ | ------- | -------- |
+| `getDesc` | yes | yes |
+| `getSharedHandle` | yes | yes |
+| `createView` | yes | yes |
+| `getDefaultView` | yes | yes |
+| `getSubresourceLayout` | yes | yes |
 
 ## `ITextureView` interface
 
-| API                                        | CPU | CUDA | D3D11 | D3D12 | Vulkan | Metal | WGPU |
-|--------------------------------------------|-----|------|-------|-------|--------|-------|------|
-| `getDesc`                                  | yes | yes  | yes   | yes   | yes    | yes   | yes  |
-| `getTexture`                               | yes | yes  | yes   | yes   | yes    | yes   | yes  |
-| `getDescriptorHandle`                      | :x: | yes  | :x:   | yes   | yes    | :x:   | :x:  |
-| `getCombinedTextureSamplerDescriptorHandle`| :x: | yes  | :x:   | yes   | yes    | :x:   | :x:  |
+| API | D3D12 | Vulkan |
+| -------------------------------------------- | ------- | -------- |
+| `getDesc` | yes | yes |
+| `getTexture` | yes | yes |
+| `getDescriptorHandle` | yes | yes |
+| `getCombinedTextureSamplerDescriptorHandle` | yes | yes |
 
 ## `ISampler` interface
 
-| API                   | CPU | CUDA | D3D11 | D3D12 | Vulkan | Metal | WGPU |
-|-----------------------|-----|------|-------|-------|--------|-------|------|
-| `getDesc`             | yes | yes  | yes   | yes   | yes    | yes   | yes  |
-| `getDescriptorHandle` | :x: | :x:  | :x:   | yes   | yes    | :x:   | :x:  |
+| API | D3D12 | Vulkan |
+| ----------------------- | ------- | -------- |
+| `getDesc` | yes | yes |
+| `getDescriptorHandle` | yes | yes |
 
 ## `IFence` interface
 
-| API               | CPU | CUDA | D3D11 | D3D12 | Vulkan | Metal | WGPU |
-|-------------------|-----|------|-------|-------|--------|-------|------|
-| `getCurrentValue` | yes | yes  | :x:   | yes   | yes    | yes   | yes  |
-| `setCurrentValue` | yes | yes  | :x:   | yes   | yes    | yes   | yes  |
-| `getNativeHandle` | :x: | :x:  | :x:   | yes   | yes    | yes   | :x:  |
-| `getSharedHandle` | :x: | :x:  | :x:   | yes   | yes    | :x:   | :x:  |
+| API | D3D12 | Vulkan |
+| ------------------- | ------- | -------- |
+| `getCurrentValue` | yes | yes |
+| `setCurrentValue` | yes | yes |
+| `getNativeHandle` | yes | yes |
+| `getSharedHandle` | yes | yes |
 
 ## `IShaderObject` interface
 
-| API                         | CPU | CUDA | D3D11 | D3D12 | Vulkan | Metal | WGPU |
-|-----------------------------|-----|------|-------|-------|--------|-------|------|
-| `getElementTypeLayout`      | yes | yes  | yes   | yes   | yes    | yes   | yes  |
-| `getContainerType`          | yes | yes  | yes   | yes   | yes    | yes   | yes  |
-| `getEntryPointCount`        | yes | yes  | yes   | yes   | yes    | yes   | yes  |
-| `getEntryPoint`             | yes | yes  | yes   | yes   | yes    | yes   | yes  |
-| `setData`                   | yes | yes  | yes   | yes   | yes    | yes   | yes  |
-| `getObject`                 | yes | yes  | yes   | yes   | yes    | yes   | yes  |
-| `setObject`                 | yes | yes  | yes   | yes   | yes    | yes   | yes  |
-| `setBinding`                | yes | yes  | yes   | yes   | yes    | yes   | yes  |
-| `setDescriptorHandle`       | yes | yes  | yes   | yes   | yes    | yes   | yes  |
-| `reserveData`               | yes | yes  | yes   | yes   | yes    | yes   | yes  |
-| `setSpecializationArgs`     | yes | yes  | yes   | yes   | yes    | yes   | yes  |
-| `getRawData`                | yes | yes  | yes   | yes   | yes    | yes   | yes  |
-| `getSize`                   | yes | yes  | yes   | yes   | yes    | yes   | yes  |
-| `setConstantBufferOverride` | :x: | :x:  | :x:   | :x:   | :x:    | :x:   | :x:  |
-| `finalize`                  | yes | yes  | yes   | yes   | yes    | yes   | yes  |
-| `isFinalized`               | yes | yes  | yes   | yes   | yes    | yes   | yes  |
+| API | D3D12 | Vulkan |
+| ----------------------------- | ------- | -------- |
+| `getElementTypeLayout` | yes | yes |
+| `getContainerType` | yes | yes |
+| `getEntryPointCount` | yes | yes |
+| `getEntryPoint` | yes | yes |
+| `setData` | yes | yes |
+| `getObject` | yes | yes |
+| `setObject` | yes | yes |
+| `setBinding` | yes | yes |
+| `setDescriptorHandle` | yes | yes |
+| `reserveData` | yes | yes |
+| `setSpecializationArgs` | yes | yes |
+| `getRawData` | yes | yes |
+| `getSize` | yes | yes |
+| `setConstantBufferOverride` | :x: | :x: |
+| `finalize` | yes | yes |
+| `isFinalized` | yes | yes |
 
 ## `IShaderTable` interface
 
 ## `IPipeline` interface
 
-| API               | CPU | CUDA | D3D11 | D3D12 | Vulkan | Metal | WGPU |
-|-------------------|-----|------|-------|-------|--------|-------|------|
-| `getProgram`      | yes | yes  | yes   | yes   | yes    | yes   | yes  |
-| `getNativeHandle` | :x: | yes  | yes   | yes   | yes    | yes   | yes  |
+| API | D3D12 | Vulkan |
+| ------------------- | ------- | -------- |
+| `getProgram` | yes | yes |
+| `getNativeHandle` | yes | yes |
 
 ## `IRenderPipeline` interface
 
-| API               | CPU | CUDA | D3D11 | D3D12 | Vulkan | Metal | WGPU |
-|-------------------|-----|------|-------|-------|--------|-------|------|
-| `getDesc`         | :x: | :x:  | yes   | yes   | yes    | yes   | yes  |
-| `getNativeHandle` | :x: | :x:  | :x:   | yes   | yes    | yes   | yes  |
+| API | D3D12 | Vulkan |
+| ------------------- | ------- | -------- |
+| `getDesc` | yes | yes |
+| `getNativeHandle` | yes | yes |
 
 ## `IComputePipeline` interface
 
-| API               | CPU | CUDA | D3D11 | D3D12 | Vulkan | Metal | WGPU |
-|-------------------|-----|------|-------|-------|--------|-------|------|
-| `getDesc`         | yes | yes  | yes   | yes   | yes    | yes   | yes  |
-| `getNativeHandle` | :x: | yes  | :x:   | yes   | yes    | yes   | yes  |
+| API | D3D12 | Vulkan |
+| ------------------- | ------- | -------- |
+| `getDesc` | yes | yes |
+| `getNativeHandle` | yes | yes |
 
 ## `IRayTracingPipeline` interface
 
-| API               | CPU | CUDA | D3D11 | D3D12 | Vulkan | Metal | WGPU |
-|-------------------|-----|------|-------|-------|--------|-------|------|
-| `getDesc`         | :x: | yes  | :x:   | yes   | yes    | :x:   | :x:  |
-| `getNativeHandle` | :x: | yes  | :x:   | yes   | yes    | :x:   | :x:  |
+| API | D3D12 | Vulkan |
+| ------------------- | ------- | -------- |
+| `getDesc` | yes | yes |
+| `getNativeHandle` | yes | yes |
 
 ## `IQueryPool` interface
 
-| API                         | CPU | CUDA | D3D11 | D3D12 | Vulkan | Metal | WGPU |
-|-----------------------------|-----|------|-------|-------|--------|-------|------|
-| `getDesc`                   | yes | yes  | yes   | yes   | yes    | yes   | yes  |
-| `getResultState`            | yes | yes  | yes   | yes   | yes    | :x:   | :x:  |
-| `getResult`                 | yes | yes  | yes   | yes   | yes    | :x:   | :x:  |
-| `reset`                     | yes | yes  | yes   | yes   | yes    | :x:   | :x:  |
-| `reset(queryIndex, count)`  | yes | yes  | yes   | yes   | yes    | :x:   | :x:  |
+| API | D3D12 | Vulkan |
+| ----------------------------- | ------- | -------- |
+| `getDesc` | yes | yes |
+| `getResultState` | yes | yes |
+| `getResult` | yes | yes |
+| `reset` | yes | yes |
+| `reset(queryIndex, count)` | yes | yes |
 
 ## `ICommandEncoder` interface
 
-| API                                    | CPU | CUDA | D3D11 | D3D12 | Vulkan | Metal | WGPU |
-|----------------------------------------|-----|------|-------|-------|--------|-------|------|
-| `getDesc`                              | yes | yes  | yes   | yes   | yes    | yes   | yes  |
-| `beginRenderPass`                      | :x: | :x:  | yes   | yes   | yes    | yes   | yes  |
-| `beginComputePass`                     | yes | yes  | yes   | yes   | yes    | yes   | yes  |
-| `beginRayTracingPass`                  | :x: | yes  | :x:   | yes   | yes    | :x:   | :x:  |
-| `copyBuffer`                           | yes | yes  | yes   | yes   | yes    | yes   | yes  |
-| `copyTexture`                          | :x: | yes  | yes   | yes   | yes    | yes   | yes  |
-| `copyTextureToBuffer`                  | :x: | yes  | :x:   | yes   | yes    | yes   | yes  |
-| `copyBufferToTexture`                  | yes | yes  | yes   | yes   | yes    | yes   | yes  |
-| `uploadTextureData`                    | :x: | yes  | :x:   | yes   | yes    | yes   | yes  |
-| `uploadBufferData`                     | yes | yes  | yes   | yes   | yes    | yes   | yes  |
-| `clearBuffer`                          | yes | yes  | yes   | yes   | yes    | yes   | yes  |
-| `clearTextureFloat`                    | :x: | yes  | yes   | yes   | yes    | yes   | :x:  |
-| `clearTextureUint`                     | :x: | yes  | yes   | yes   | yes    | yes   | :x:  |
-| `clearTextureSint`                     | :x: | yes  | yes   | yes   | yes    | yes   | :x:  |
-| `clearTextureDepthStencil`             | :x: | :x:  | yes   | yes   | yes    | yes   | :x:  |
-| `resolveQuery`                         | yes | :x:  | :x:   | yes   | yes    | yes   | :x:  |
-| `buildAccelerationStructure`           | :x: | yes  | :x:   | yes   | yes    | yes   | :x:  |
-| `buildMicromap`                        | :x: | yes  | :x:   | yes   | yes    | :x:   | :x:  |
-| `copyAccelerationStructure`            | :x: | yes  | :x:   | yes   | yes    | yes   | :x:  |
-| `queryAccelerationStructureProperties` | :x: | :x:  | :x:   | yes   | yes    | :x:   | :x:  |
-| `executeClusterOperation`              | :x: | yes  | :x:   | yes   | yes    | :x:   | :x:  |
-| `convertCooperativeVectorMatrix`       | :x: | yes  | :x:   | yes   | yes    | :x:   | :x:  |
-| `setBufferState`                       | :x: | :x:  | :x:   | yes   | yes    | :x:   | :x:  |
-| `setTextureState`                      | :x: | :x:  | :x:   | yes   | yes    | :x:   | :x:  |
-| `globalBarrier`                        | :x: | :x:  | :x:   | yes   | yes    | :x:   | :x:  |
-| `pushDebugGroup`                       | :x: | :x:  | :x:   | yes   | yes    | yes   | yes  |
-| `popDebugGroup`                        | :x: | :x:  | :x:   | yes   | yes    | yes   | yes  |
-| `insertDebugMarker`                    | :x: | :x:  | :x:   | yes   | yes    | yes   | yes  |
-| `writeTimestamp`                       | yes | yes  | yes   | yes   | yes    | :x:   | :x:  |
-| `finish`                               | yes | yes  | yes   | yes   | yes    | yes   | yes  |
-| `getNativeHandle`                      | :x: | :x:  | :x:   | :x:   | :x:    | :x:   | :x:  |
+| API | D3D12 | Vulkan |
+| ---------------------------------------- | ------- | -------- |
+| `getDesc` | yes | yes |
+| `beginRenderPass` | yes | yes |
+| `beginComputePass` | yes | yes |
+| `beginRayTracingPass` | yes | yes |
+| `copyBuffer` | yes | yes |
+| `copyTexture` | yes | yes |
+| `copyTextureToBuffer` | yes | yes |
+| `copyBufferToTexture` | yes | yes |
+| `uploadTextureData` | yes | yes |
+| `uploadBufferData` | yes | yes |
+| `clearBuffer` | yes | yes |
+| `clearTextureFloat` | yes | yes |
+| `clearTextureUint` | yes | yes |
+| `clearTextureSint` | yes | yes |
+| `clearTextureDepthStencil` | yes | yes |
+| `resolveQuery` | yes | yes |
+| `buildAccelerationStructure` | yes | yes |
+| `buildMicromap` | yes | yes |
+| `copyAccelerationStructure` | yes | yes |
+| `queryAccelerationStructureProperties` | yes | yes |
+| `executeClusterOperation` | yes | yes |
+| `convertCooperativeVectorMatrix` | yes | yes |
+| `setBufferState` | yes | yes |
+| `setTextureState` | yes | yes |
+| `globalBarrier` | yes | yes |
+| `releaseBufferForQueue` | yes | yes |
+| `releaseTextureForQueue` | yes | yes |
+| `acquireBufferFromQueue` | yes | yes |
+| `acquireTextureFromQueue` | yes | yes |
+| `pushDebugGroup` | yes | yes |
+| `popDebugGroup` | yes | yes |
+| `insertDebugMarker` | yes | yes |
+| `writeTimestamp` | yes | yes |
+| `finish` | yes | yes |
+| `getNativeHandle` | :x: | :x: |
 
 ## `IPassEncoder` interface
 
-| API                 | CPU | CUDA | D3D11 | D3D12 | Vulkan | Metal | WGPU |
-|---------------------|-----|------|-------|-------|--------|-------|------|
-| `pushDebugGroup`    | :x: | :x:  | yes   | yes   | yes    | yes   | yes  |
-| `popDebugGroup`     | :x: | :x:  | yes   | yes   | yes    | yes   | yes  |
-| `insertDebugMarker` | :x: | :x:  | yes   | yes   | yes    | yes   | yes  |
-| `writeTimestamp`    | :x: | :x:  | yes   | yes   | yes    | yes   | yes  |
-| `end`               | yes | yes  | yes   | yes   | yes    | yes   | yes  |
+| API | D3D12 | Vulkan |
+| --------------------- | ------- | -------- |
+| `pushDebugGroup` | yes | yes |
+| `popDebugGroup` | yes | yes |
+| `insertDebugMarker` | yes | yes |
+| `writeTimestamp` | yes | yes |
+| `end` | yes | yes |
 
 ## `IRenderPassEncoder` interface
 
-| API                   | CPU | CUDA | D3D11 | D3D12 | Vulkan | Metal | WGPU |
-|-----------------------|-----|------|-------|-------|--------|-------|------|
-| `bindPipeline`        | :x: | :x:  | yes   | yes   | yes    | yes   | yes  |
-| `setRenderState`      | :x: | :x:  | yes   | yes   | yes    | yes   | yes  |
-| `draw`                | :x: | :x:  | yes   | yes   | yes    | yes   | yes  |
-| `drawIndexed`         | :x: | :x:  | yes   | yes   | yes    | yes   | yes  |
-| `drawIndirect`        | :x: | :x:  | yes   | yes   | yes    | :x:   | yes  |
-| `drawIndexedIndirect` | :x: | :x:  | yes   | yes   | yes    | :x:   | yes  |
-| `drawMeshTasks`       | :x: | :x:  | :x:   | yes   | yes    | :x:   | :x:  |
+| API | D3D12 | Vulkan |
+| ----------------------- | ------- | -------- |
+| `bindPipeline` | yes | yes |
+| `setRenderState` | yes | yes |
+| `draw` | yes | yes |
+| `drawIndexed` | yes | yes |
+| `drawIndirect` | yes | yes |
+| `drawIndexedIndirect` | yes | yes |
+| `drawMeshTasks` | yes | yes |
 
 ## `IComputePassEncoder` interface
 
-| API                       | CPU | CUDA | D3D11 | D3D12 | Vulkan | Metal | WGPU |
-|---------------------------|-----|------|-------|-------|--------|-------|------|
-| `bindPipeline`            | yes | yes  | yes   | yes   | yes    | yes   | yes  |
-| `dispatchCompute`         | yes | yes  | yes   | yes   | yes    | yes   | yes  |
-| `dispatchComputeIndirect` | :x: | yes  | yes   | yes   | yes    | yes   | yes  |
+| API | D3D12 | Vulkan |
+| --------------------------- | ------- | -------- |
+| `bindPipeline` | yes | yes |
+| `dispatchCompute` | yes | yes |
+| `dispatchComputeIndirect` | yes | yes |
 
 ## `IRayTracingPassEncoder` interface
 
-| API            | CPU | CUDA | D3D11 | D3D12 | Vulkan | Metal | WGPU |
-|----------------|-----|------|-------|-------|--------|-------|------|
-| `bindPipeline` | :x: | yes  | :x:   | yes   | yes    | :x:   | :x:  |
-| `dispatchRays` | :x: | yes  | :x:   | yes   | yes    | :x:   | :x:  |
+| API | D3D12 | Vulkan |
+| ---------------- | ------- | -------- |
+| `bindPipeline` | yes | yes |
+| `dispatchRays` | yes | yes |
 
 ## `ICommandBuffer` interface
 
-| API               | CPU | CUDA | D3D11 | D3D12 | Vulkan | Metal | WGPU |
-|-------------------|-----|------|-------|-------|--------|-------|------|
-| `getDesc`         | yes | yes  | yes   | yes   | yes    | yes   | yes  |
-| `getNativeHandle` | :x: | :x:  | :x:   | yes   | yes    | yes   | yes  |
+| API | D3D12 | Vulkan |
+| ------------------- | ------- | -------- |
+| `getDesc` | yes | yes |
+| `getNativeHandle` | yes | yes |
 
 ## `ICommandQueue` interface
 
-| API                       | CPU | CUDA | D3D11 | D3D12 | Vulkan | Metal | WGPU |
-|---------------------------|-----|------|-------|-------|--------|-------|------|
-| `getType`                 | yes | yes  | yes   | yes   | yes    | yes   | yes  |
-| `createCommandEncoder`    | yes | yes  | yes   | yes   | yes    | yes   | yes  |
-| `submit`                  | yes | yes  | yes   | yes   | yes    | yes   | yes  |
-| `getNativeHandle`         | :x: | yes  | :x:   | yes   | yes    | yes   | yes  |
-| `waitOnHost`              | yes | yes  | yes   | yes   | yes    | yes   | yes  |
-| `getTimestampCalibration` | yes | yes  | yes   | yes   | yes    | :x:   | :x:  |
+| API | D3D12 | Vulkan |
+| --------------------------- | ------- | -------- |
+| `getType` | yes | yes |
+| `createCommandEncoder` | yes | yes |
+| `submit` | yes | yes |
+| `getNativeHandle` | yes | yes |
+| `waitOnHost` | yes | yes |
+| `getTimestampCalibration` | yes | yes |
+
+### Queue type support
+
+| Queue Type | D3D12 | Vulkan |
+| ------------------------ | ------- | -------- |
+| `QueueType::Graphics` | yes | yes |
+| `QueueType::Compute` | yes | yes |
+| `QueueType::Transfer` | yes | yes |
+
+The queue family ownership transfer (QFOT) methods (`releaseBufferForQueue`, `releaseTextureForQueue`,
+`acquireBufferFromQueue`, `acquireTextureFromQueue`) are used to transfer resource ownership between
+queues of different types. These are supported on D3D12 and Vulkan. On D3D12, they are implemented
+as resource state barriers. On Vulkan, they use queue family ownership transfer barriers.
 
 ## `ISurface` interface
 
-| API                 | CPU | CUDA | D3D11 | D3D12 | Vulkan | Metal | WGPU |
-|---------------------|-----|------|-------|-------|--------|-------|------|
-| `getInfo`           | :x: | yes  | yes   | yes   | yes    | yes   | yes  |
-| `getConfig`         | :x: | yes  | yes   | yes   | yes    | yes   | yes  |
-| `configure`         | :x: | yes  | yes   | yes   | yes    | yes   | yes  |
-| `unconfigure`       | :x: | yes  | yes   | yes   | yes    | yes   | yes  |
-| `acquireNextImage`  | :x: | yes  | yes   | yes   | yes    | yes   | yes  |
-| `present`           | :x: | yes  | yes   | yes   | yes    | yes   | yes  |
-
-Note: CUDA's surface is implemented using a Vulkan swapchain.
+| API | D3D12 | Vulkan |
+| --------------------- | ------- | -------- |
+| `getInfo` | yes | yes |
+| `getConfig` | yes | yes |
+| `configure` | yes | yes |
+| `unconfigure` | yes | yes |
+| `acquireNextImage` | yes | yes |
+| `present` | yes | yes |
 
 ## `IAccelerationStructure` interface
 
-| API                   | CPU | CUDA | D3D11 | D3D12 | Vulkan | Metal | WGPU |
-|-----------------------|-----|------|-------|-------|--------|-------|------|
-| `getHandle`           | :x: | yes  | :x:   | yes   | yes    | yes   | :x:  |
-| `getDeviceAddress`    | :x: | yes  | :x:   | yes   | yes    | yes   | :x:  |
-| `getDescriptorHandle` | :x: | :x:  | :x:   | yes   | yes    | :x:   | :x:  |
+| API | D3D12 | Vulkan |
+| ----------------------- | ------- | -------- |
+| `getHandle` | yes | yes |
+| `getDeviceAddress` | yes | yes |
+| `getDescriptorHandle` | yes | yes |
 
 ## `IHeap` interface
 
-| API                | CPU | CUDA | D3D11 | D3D12 | Vulkan | Metal | WGPU |
-|--------------------|-----|------|-------|-------|--------|-------|------|
-| `allocate`         | :x: | yes  | :x:   | yes   | yes    | :x:   | :x:  |
-| `free`             | :x: | yes  | :x:   | yes   | yes    | :x:   | :x:  |
-| `report`           | :x: | yes  | :x:   | yes   | yes    | :x:   | :x:  |
-| `flush`            | :x: | yes  | :x:   | yes   | yes    | :x:   | :x:  |
-| `removeEmptyPages` | :x: | yes  | :x:   | yes   | yes    | :x:   | :x:  |
+| API | D3D12 | Vulkan |
+| -------------------- | ------- | -------- |
+| `allocate` | yes | yes |
+| `free` | yes | yes |
+| `report` | yes | yes |
+| `flush` | yes | yes |
+| `removeEmptyPages` | yes | yes |
