@@ -219,6 +219,10 @@ Entry-point-scoped descriptors return `SLANG_E_NOT_IMPLEMENTED` at program creat
 | `setBufferState`                       | :x: | :x:  | :x:   | yes   | yes    | :x:   | :x:  |
 | `setTextureState`                      | :x: | :x:  | :x:   | yes   | yes    | :x:   | :x:  |
 | `globalBarrier`                        | :x: | :x:  | :x:   | yes   | yes    | :x:   | :x:  |
+| `releaseBufferForQueue`                | :x: | :x:  | :x:   | yes   | yes    | :x:   | :x:  |
+| `releaseTextureForQueue`               | :x: | :x:  | :x:   | yes   | yes    | :x:   | :x:  |
+| `acquireBufferFromQueue`               | :x: | :x:  | :x:   | yes   | yes    | :x:   | :x:  |
+| `acquireTextureFromQueue`              | :x: | :x:  | :x:   | yes   | yes    | :x:   | :x:  |
 | `pushDebugGroup`                       | :x: | :x:  | :x:   | yes   | yes    | yes   | yes  |
 | `popDebugGroup`                        | :x: | :x:  | :x:   | yes   | yes    | yes   | yes  |
 | `insertDebugMarker`                    | :x: | :x:  | :x:   | yes   | yes    | yes   | yes  |
@@ -287,6 +291,19 @@ for WebGPU recording errors and asynchronous validation.
 | `getNativeHandle`         | :x: | yes  | :x:   | yes   | yes    | yes   | yes  |
 | `waitOnHost`              | yes | yes  | yes   | yes   | yes    | yes   | yes  |
 | `getTimestampCalibration` | yes | yes  | yes   | yes   | yes    | :x:   | :x:  |
+
+### Queue type support
+
+| Queue Type | D3D12 | Vulkan |
+| ------------------------ | ------- | -------- |
+| `QueueType::Graphics` | yes | yes |
+| `QueueType::Compute` | yes | yes |
+| `QueueType::Transfer` | yes | yes |
+
+The queue family ownership transfer (QFOT) methods (`releaseBufferForQueue`, `releaseTextureForQueue`,
+`acquireBufferFromQueue`, `acquireTextureFromQueue`) are used to transfer resource ownership between
+queues of different types. These are supported on D3D12 and Vulkan. On D3D12, they are implemented
+as resource state barriers. On Vulkan, they use queue family ownership transfer barriers.
 
 ## `ISurface` interface
 
