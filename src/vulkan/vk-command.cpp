@@ -1139,10 +1139,11 @@ void CommandRecorder::cmdSetComputeState(const commands::SetComputeState& cmd)
     if (updateBindings)
     {
         m_bindingData = static_cast<BindingDataImpl*>(cmd.bindingData);
-        requireBindingStates(m_bindingData);
         setBindings(m_bindingData, VK_PIPELINE_BIND_POINT_COMPUTE);
     }
 
+    // Reused fixed parameters still need UAV ordering between dispatches.
+    requireBindingStates(m_bindingData);
     commitBarriers();
 
     m_computeStateValid = true;
@@ -2525,6 +2526,54 @@ Result CommandEncoderImpl::init()
 {
     SLANG_RETURN_ON_FAIL(m_queue->getOrCreateCommandBuffer(m_commandBuffer.writeRef()));
     m_commandList = &m_commandBuffer->m_commandList;
+    return SLANG_OK;
+}
+
+Result CommandEncoderImpl::getComputeBindingData(
+    ShaderProgram* program, const void* data, size_t size,
+    const ComputeBufferAccess* buffers, uint32_t bufferCount, BindingData*& outBindingData
+)
+{
+    auto* layout = checked_cast<RootShaderObjectLayoutImpl*>(program->getRootShaderObjectLayout());
+    auto ranges = layout->getAllPushConstantRanges();
+    if (layout->getTotalOrdinaryDataSize() || layout->getChildDescriptorSetCount() ||
+        ranges.size() != 1 || ranges[0].size != size || !(ranges[0].stageFlags & VK_SHADER_STAGE_COMPUTE_BIT))
+        return SLANG_E_INVALID_ARG;
+    for (const auto& set : layout->getOwnDescriptorSets())
+        if (!set.vkBindings.empty()) return SLANG_E_INVALID_ARG;
+
+    auto& arena = m_commandBuffer->m_allocator;
+    auto* binding = arena.allocate<BindingDataImpl>();
+    *binding = {};
+    binding->bufferStateCount = binding->bufferStateCapacity = bufferCount;
+    binding->bufferStates = arena.allocate<BindingDataImpl::BufferState>(bufferCount);
+    for (uint32_t i = 0; i < bufferCount; ++i)
+    {
+        auto* buffer = checked_cast<BufferImpl*>(buffers[i].buffer);
+        binding->bufferStates[i] = {buffer, buffers[i].state};
+        m_commandBuffer->m_trackedObjects.insert(buffer);
+    }
+    binding->pipelineLayout = layout->m_pipelineLayout;
+    binding->pushConstantCount = 1;
+    binding->pushConstantRanges = arena.allocate<VkPushConstantRange>();
+    binding->pushConstantRanges[0] = ranges[0];
+    binding->pushConstantData = arena.allocate<void*>();
+    binding->pushConstantData[0] = arena.allocate(size);
+    std::memcpy(binding->pushConstantData[0], data, size);
+    auto* bindless = getDevice<DeviceImpl>()->m_bindlessDescriptorSet.get();
+    binding->descriptorSets = arena.allocate<VkDescriptorSet>(layout->getOwnDescriptorSetCount() + (bindless ? 1 : 0));
+    // Slang can reserve empty sets before the global bindless table.
+    for (const auto& set : layout->getOwnDescriptorSets())
+    {
+        auto allocation = m_commandBuffer->m_descriptorSetAllocator.allocate(set.descriptorSetLayout);
+        if (!allocation.handle) return SLANG_E_OUT_OF_MEMORY;
+        binding->descriptorSets[binding->descriptorSetCount++] = allocation.handle;
+    }
+    if (bindless)
+    {
+        binding->descriptorSets[binding->descriptorSetCount++] = bindless->m_descriptorSet;
+    }
+    outBindingData = binding;
     return SLANG_OK;
 }
 

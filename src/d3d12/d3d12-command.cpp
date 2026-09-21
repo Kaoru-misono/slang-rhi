@@ -1102,7 +1102,6 @@ void CommandRecorder::cmdSetComputeState(const commands::SetComputeState& cmd)
         return;
 
     bool updatePipeline = !m_computeStateValid || cmd.pipeline != m_computePipeline;
-    bool updateBindings = updatePipeline || cmd.bindingData != m_bindingData;
 
     if (updatePipeline)
     {
@@ -1111,11 +1110,9 @@ void CommandRecorder::cmdSetComputeState(const commands::SetComputeState& cmd)
         m_cmdList->SetPipelineState(m_computePipeline->m_pipelineState);
     }
 
-    if (updateBindings)
-    {
-        m_bindingData = static_cast<BindingDataImpl*>(cmd.bindingData);
-        setBindings(m_bindingData, BindMode::Compute);
-    }
+    // setBindings also orders UAV accesses when fixed parameters are reused.
+    m_bindingData = static_cast<BindingDataImpl*>(cmd.bindingData);
+    setBindings(m_bindingData, BindMode::Compute);
 
     commitBarriers();
 
@@ -2314,6 +2311,49 @@ Result CommandEncoderImpl::init()
 {
     SLANG_RETURN_ON_FAIL(m_queue->getOrCreateCommandBuffer(m_commandBuffer.writeRef()));
     m_commandList = &m_commandBuffer->m_commandList;
+    return SLANG_OK;
+}
+
+Result CommandEncoderImpl::getComputeBindingData(
+    ShaderProgram* program, const void* data, size_t size,
+    const ComputeBufferAccess* buffers, uint32_t bufferCount, BindingData*& outBindingData
+)
+{
+    auto* layout = checked_cast<RootShaderObjectLayoutImpl*>(program->getRootShaderObjectLayout());
+    if (layout->getTotalOrdinaryDataSize() || layout->m_entryPoints.size() != 1 ||
+        layout->m_entryPoints[0].layout->getTotalOrdinaryDataSize() != size ||
+        layout->getTotalResourceDescriptorCount() != 1 || layout->getTotalSamplerDescriptorCount() ||
+        layout->m_rootSignatureRootParameterCount || layout->m_rootSignatureTotalParameterCount != 1 ||
+        layout->m_entryPoints[0].offset.resource != 0)
+        return SLANG_E_INVALID_ARG;
+
+    TransientBufferArena::Allocation allocation;
+    SLANG_RETURN_ON_FAIL(m_commandBuffer->m_constantBufferArena.allocate(256, &allocation));
+    auto descriptors = m_commandBuffer->m_cbvSrvUavArena.allocate(1);
+    if (!descriptors.isValid()) return SLANG_E_OUT_OF_MEMORY;
+    std::memcpy(allocation.mappedData, data, size);
+    D3D12_CONSTANT_BUFFER_VIEW_DESC view = {};
+    view.BufferLocation = checked_cast<BufferImpl*>(allocation.buffer)->getDeviceAddress() + allocation.offset;
+    view.SizeInBytes = 256;
+    getDevice<DeviceImpl>()->m_device->CreateConstantBufferView(&view, descriptors.getCpuHandle(0));
+
+    auto& arena = m_commandBuffer->m_allocator;
+    auto* binding = arena.allocate<BindingDataImpl>();
+    *binding = {};
+    binding->bufferStateCount = binding->bufferStateCapacity = bufferCount;
+    binding->bufferStates = arena.allocate<BindingDataImpl::BufferState>(bufferCount);
+    for (uint32_t i = 0; i < bufferCount; ++i)
+    {
+        auto* buffer = checked_cast<BufferImpl*>(buffers[i].buffer);
+        binding->bufferStates[i] = {buffer, buffers[i].state};
+        m_commandBuffer->m_trackedObjects.insert(buffer);
+    }
+    binding->rootParameterCount = 1;
+    binding->rootParameters = arena.allocate<BindingDataImpl::RootParameter>();
+    binding->rootParameters[0].type = BindingDataImpl::RootParameter::DescriptorTable;
+    binding->rootParameters[0].index = 0;
+    binding->rootParameters[0].baseDescriptor = descriptors.firstGpuHandle;
+    outBindingData = binding;
     return SLANG_OK;
 }
 

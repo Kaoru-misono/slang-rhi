@@ -898,6 +898,13 @@ Result RootShaderObjectLayoutImpl::addChildPushConstantRangesRec(ShaderObjectLay
 
 Result RootShaderObjectLayoutImpl::Builder::build(RootShaderObjectLayoutImpl** outLayout)
 {
+    // Push-constant reflection can enumerate a descriptor range without a Vulkan
+    // binding. It must not shift a bindless heap reflected at set zero to set one.
+    if (m_programLayout->getBindlessSpaceIndex() == 0 && m_childDescriptorSetCount == 0 &&
+        m_descriptorSetBuildInfos.size() == 1 && m_descriptorSetBuildInfos[0].vkBindings.empty())
+    {
+        m_descriptorSetBuildInfos.clear();
+    }
     RefPtr<RootShaderObjectLayoutImpl> layout = new RootShaderObjectLayoutImpl();
     SLANG_RETURN_ON_FAIL(layout->_init(this));
     returnRefPtrMove(outLayout, layout);

@@ -82,6 +82,10 @@ public:
     Result init();
 
     virtual Result getBindingData(RootShaderObject* rootObject, BindingData*& outBindingData) override;
+    virtual Result getComputeBindingData(
+        ShaderProgram* program, const void* data, size_t size,
+        const ComputeBufferAccess* buffers, uint32_t bufferCount, BindingData*& outBindingData
+    ) override;
 
     // ICommandEncoder implementation
     virtual SLANG_NO_THROW Result SLANG_MCALL finish(
