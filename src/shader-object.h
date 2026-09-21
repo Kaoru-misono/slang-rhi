@@ -311,6 +311,21 @@ public:
 
     void trackResources(std::set<InternalRefPtr<RefObject>>& resources);
 
+    /// Recursively compute a combined version hash for this object and all sub-objects.
+    uint32_t getSubTreeVersion() const
+    {
+        uint32_t version = m_version;
+        for (const auto& sub : m_objects)
+        {
+            if (sub)
+            {
+                uint32_t subVersion = sub->getSubTreeVersion();
+                version ^= subVersion + 0x9e3779b9 + (version << 6) + (version >> 2);
+            }
+        }
+        return version;
+    }
+
 protected:
     inline void incrementVersion() { m_version++; }
 
@@ -365,6 +380,8 @@ public:
     virtual Result collectSpecializationArgs(ExtendedShaderObjectTypeList& args) override;
 
     void trackResources(std::set<InternalRefPtr<RefObject>>& resources);
+
+
 };
 
 bool _doesValueFitInExistentialPayload(

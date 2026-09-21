@@ -435,7 +435,8 @@ Result DeviceImpl::createBuffer(const BufferDesc& desc_, const void* initData, I
     }
     else
     {
-        SLANG_RETURN_ON_FAIL(buffer->m_buffer.init(m_api, desc.size, usage, reqMemoryProperties));
+        SLANG_RETURN_ON_FAIL(buffer->m_buffer.init(m_api, desc.size, usage, reqMemoryProperties, 0,
+            queueFamilyCount, queueFamilyCount ? queueFamilies : nullptr));
     }
 
     _labelObject((uint64_t)buffer->m_buffer.m_buffer, VK_OBJECT_TYPE_BUFFER, desc.label);

@@ -2,6 +2,8 @@
 
 #include "rhi-shared.h"
 
+#include <atomic>
+
 namespace rhi {
 
 // ----------------------------------------------------------------------------
@@ -490,6 +492,9 @@ Result ShaderObject::create(
 
 Result ShaderObject::init(ShaderObjectLayout* layout, ShaderProgram* program)
 {
+    static std::atomic<uint32_t> s_nextUid{1};
+    m_uid = s_nextUid.fetch_add(1, std::memory_order_relaxed);
+
     m_shaderProgram = program;
     m_layout = layout;
 

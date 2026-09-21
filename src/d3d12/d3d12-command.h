@@ -17,6 +17,7 @@ public:
     ComPtr<ID3D12Fence> m_trackingFence;
     HANDLE m_globalWaitHandle;
     uint32_t m_queueIndex = 0;
+    D3D12_COMMAND_LIST_TYPE m_commandListType = D3D12_COMMAND_LIST_TYPE_DIRECT;
 
     uint64_t m_lastSubmittedID = 0;
     uint64_t m_lastFinishedID = 0;

@@ -8,6 +8,7 @@
 #include "core/static_vector.h"
 #include "core/sha1.h"
 
+#include <cstring>
 #include <map>
 #include <string>
 #include <vector>
@@ -171,9 +172,21 @@ Result getPipelineCacheKey(
     }
     // Hash global key.
     {
-        VkPipelineBinaryKeyKHR pipelineKey = {VK_STRUCTURE_TYPE_PIPELINE_BINARY_KEY_KHR};
-        SLANG_VK_RETURN_ON_FAIL_REPORT(api.vkGetPipelineKeyKHR(device->m_device, nullptr, &pipelineKey), device);
-        sha1.update(pipelineKey.key, pipelineKey.keySize);
+#if SLANG_WINDOWS_FAMILY
+        constexpr uint32_t kNvidiaVendorID = 0x10DE;
+        if (api.m_deviceProperties.vendorID == kNvidiaVendorID)
+        {
+            // NVIDIA 610.47 corrupts a callee-saved register when createInfo is null.
+            sha1.update(api.m_deviceProperties.pipelineCacheUUID, VK_UUID_SIZE);
+            sha1.update(&api.m_deviceProperties.driverVersion, sizeof(api.m_deviceProperties.driverVersion));
+        }
+        else
+#endif
+        {
+            VkPipelineBinaryKeyKHR pipelineKey = {VK_STRUCTURE_TYPE_PIPELINE_BINARY_KEY_KHR};
+            SLANG_VK_RETURN_ON_FAIL_REPORT(api.vkGetPipelineKeyKHR(device->m_device, nullptr, &pipelineKey), device);
+            sha1.update(pipelineKey.key, pipelineKey.keySize);
+        }
     }
     // Hash pipeline key.
     {

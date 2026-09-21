@@ -1083,9 +1083,12 @@ if(SLANG_RHI_BUILD_TESTS AND NOT SLANG_RHI_BUILD_SHARED AND NOT EMSCRIPTEN)
         tests/test-cmd-upload-buffer.cpp
         tests/test-cmd-upload-texture.cpp
         tests/test-combined-texture-sampler.cpp
+        tests/test-async-load.cpp
         tests/test-compute-indirect.cpp
+        tests/test-compute-queue.cpp
         tests/test-compute-smoke.cpp
         tests/test-compute-trivial.cpp
+        tests/test-transfer-queue.cpp
         tests/test-cooperative-matrix.cpp
         tests/test-cooperative-vector.cpp
         tests/test-cuda-external-devices.cpp
@@ -1139,6 +1142,7 @@ if(SLANG_RHI_BUILD_TESTS AND NOT SLANG_RHI_BUILD_SHARED AND NOT EMSCRIPTEN)
         tests/test-short-vector.cpp
         tests/test-staging-heap.cpp
         tests/test-transient-buffer-heap.cpp
+        tests/test-state-tracking.cpp
         tests/test-static-vector.cpp
         tests/test-storage-texture.cpp
         tests/test-surface.cpp
@@ -1178,6 +1182,9 @@ if(SLANG_RHI_BUILD_TESTS AND NOT SLANG_RHI_BUILD_SHARED AND NOT EMSCRIPTEN)
     target_link_libraries(slang-rhi-tests PRIVATE doctest slang-rhi-stb slang slang-rhi $<$<BOOL:${SLANG_RHI_BUILD_TESTS_WITH_GLFW}>:glfw> renderdoc)
     if(SLANG_RHI_ENABLE_VULKAN)
         target_link_libraries(slang-rhi-tests PRIVATE slang-rhi-vulkan-headers)
+    endif()
+    if(SLANG_RHI_ENABLE_D3D12)
+        target_link_libraries(slang-rhi-tests PRIVATE slang-rhi-d3d12ma)
     endif()
     if(SLANG_RHI_ENABLE_WGPU)
         target_link_libraries(slang-rhi-tests PRIVATE slang-rhi-dawn)

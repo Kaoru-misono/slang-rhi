@@ -325,7 +325,7 @@ struct DrawIndirectTest : BaseDrawTest
         BufferDesc bufferDesc;
         bufferDesc.size = sizeof(IndirectArgData);
         // Preserve the indirect flag when the buffer can also be written by compute.
-        bufferDesc.usage = BufferUsage::IndirectArgument | BufferUsage::UnorderedAccess;
+        bufferDesc.usage = BufferUsage::IndirectArgument | BufferUsage::ShaderResource | BufferUsage::UnorderedAccess;
         bufferDesc.defaultState = ResourceState::UnorderedAccess;
         ComPtr<IBuffer> buffer = device->createBuffer(bufferDesc, &kIndirectData);
         REQUIRE(buffer != nullptr);
@@ -338,6 +338,8 @@ struct DrawIndirectTest : BaseDrawTest
 
         auto queue = device->getQueue(QueueType::Graphics);
         auto commandEncoder = queue->createCommandEncoder();
+        if (device->getDeviceType() == DeviceType::D3D12)
+            commandEncoder->setBufferState(indirectBuffer, ResourceState::ShaderResource);
 
         RenderPassColorAttachment colorAttachment;
         colorAttachment.view = colorBufferView;
@@ -405,7 +407,8 @@ struct DrawIndexedIndirectTest : BaseDrawTest
 
         BufferDesc bufferDesc;
         bufferDesc.size = sizeof(IndexedIndirectArgData);
-        bufferDesc.usage = BufferUsage::IndirectArgument | BufferUsage::UnorderedAccess;
+        // Preserve the indirect flag when the buffer can also be written by compute.
+        bufferDesc.usage = BufferUsage::IndirectArgument | BufferUsage::ShaderResource | BufferUsage::UnorderedAccess;
         bufferDesc.defaultState = ResourceState::UnorderedAccess;
         ComPtr<IBuffer> buffer = device->createBuffer(bufferDesc, &kIndexedIndirectData);
         REQUIRE(buffer != nullptr);
@@ -418,6 +421,8 @@ struct DrawIndexedIndirectTest : BaseDrawTest
 
         auto queue = device->getQueue(QueueType::Graphics);
         auto commandEncoder = queue->createCommandEncoder();
+        if (device->getDeviceType() == DeviceType::D3D12)
+            commandEncoder->setBufferState(indirectBuffer, ResourceState::ShaderResource);
 
         RenderPassColorAttachment colorAttachment;
         colorAttachment.view = colorBufferView;

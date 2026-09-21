@@ -273,7 +273,12 @@ public:
     VulkanApi m_api;
 
     VulkanDeviceQueue m_deviceQueue;
+    // m_queueFamilyIndex is the graphics queue family. The compute/transfer
+    // families are selected separately (dedicated where available) to back the
+    // Compute/Transfer queues; they may alias the graphics family as a fallback.
     uint32_t m_queueFamilyIndex;
+    uint32_t m_computeQueueFamilyIndex;
+    uint32_t m_transferQueueFamilyIndex;
 
     struct CooperativeMatrixFlexibleProperty
     {
@@ -291,6 +296,8 @@ public:
     std::vector<CooperativeMatrixDesc> m_cooperativeMatrixFixedProperties;
     std::vector<CooperativeMatrixFlexibleProperty> m_cooperativeMatrixFlexibleProperties;
     InternalRefPtr<CommandQueueImpl> m_queue;
+    InternalRefPtr<CommandQueueImpl> m_computeQueue;
+    InternalRefPtr<CommandQueueImpl> m_transferQueue;
 
     DescriptorSetAllocator descriptorSetAllocator;
     RefPtr<BindlessDescriptorSet> m_bindlessDescriptorSet;

@@ -923,6 +923,14 @@ Result DeviceImpl::initialize(const DeviceDesc& desc, BackendImpl* backend)
             if (options.Int64ShaderOps)
             {
                 addFeature(Feature::Int64);
+                if (shaderModelData.HighestShaderModel >= D3D_SHADER_MODEL_6_6)
+                {
+                    // SM 6.6 requires 64-bit integer atomics for RWByteAddressBuffer and
+                    // RWStructuredBuffer when Int64ShaderOps is present. Typed resources,
+                    // groupshared memory, and descriptor-heap resources have separate
+                    // optional D3D12_OPTIONS9/11 capability bits.
+                    addFeature(Feature::AtomicInt64);
+                }
             }
         }
     }
@@ -1243,9 +1251,17 @@ Result DeviceImpl::initialize(const DeviceDesc& desc, BackendImpl* backend)
         std::array{slang::PreprocessorMacroDesc{"__D3D12__", "1"}}
     ));
 
-    // Create queue.
+    // Create graphics queue.
     m_queue = new CommandQueueImpl(this, QueueType::Graphics);
     SLANG_RETURN_ON_FAIL(m_queue->init(0));
+
+    // Create async compute queue.
+    m_computeQueue = new CommandQueueImpl(this, QueueType::Compute);
+    SLANG_RETURN_ON_FAIL(m_computeQueue->init(1));
+
+    // Create async transfer (copy) queue.
+    m_transferQueue = new CommandQueueImpl(this, QueueType::Transfer);
+    SLANG_RETURN_ON_FAIL(m_transferQueue->init(2));
 
     // Retrieve timestamp frequency.
     m_queue->m_d3dQueue->GetTimestampFrequency(&m_info.timestampFrequency);
@@ -1273,12 +1289,20 @@ Result DeviceImpl::getNativeDeviceHandles(DeviceNativeHandles* outHandles)
 
 Result DeviceImpl::getQueue(QueueType type, ICommandQueue** outQueue)
 {
-    if (type != QueueType::Graphics)
+    switch (type)
     {
+    case QueueType::Graphics:
+        returnComPtr(outQueue, m_queue);
+        return SLANG_OK;
+    case QueueType::Compute:
+        returnComPtr(outQueue, m_computeQueue);
+        return SLANG_OK;
+    case QueueType::Transfer:
+        returnComPtr(outQueue, m_transferQueue);
+        return SLANG_OK;
+    default:
         return SLANG_E_INVALID_ARG;
     }
-    returnComPtrCopy(outQueue, m_queue);
-    return SLANG_OK;
 }
 
 Result DeviceImpl::createSurface(WindowHandle windowHandle, ISurface** outSurface)
@@ -2298,6 +2322,14 @@ DeviceImpl::~DeviceImpl()
     {
         m_queue->waitAndReleaseCommandBuffers();
     }
+    if (m_computeQueue)
+    {
+        m_computeQueue->waitAndReleaseCommandBuffers();
+    }
+    if (m_transferQueue)
+    {
+        m_transferQueue->waitAndReleaseCommandBuffers();
+    }
 
     m_shaderCache.free();
     m_shaderObjectLayoutCache = decltype(m_shaderObjectLayoutCache)();
@@ -2305,6 +2337,18 @@ DeviceImpl::~DeviceImpl()
     m_uploadHeap.release();
     m_readbackHeap.release();
 
+    // Auxiliary queue shutdown can release resources into the graphics queue's
+    // deferred-delete list, so the graphics queue must remain alive until last.
+    if (m_computeQueue)
+    {
+        m_computeQueue->shutdown();
+        m_computeQueue.setNull();
+    }
+    if (m_transferQueue)
+    {
+        m_transferQueue->shutdown();
+        m_transferQueue.setNull();
+    }
     if (m_queue)
     {
         m_queue->shutdown();
