@@ -27,6 +27,23 @@ inline bool arraysEqual(uint32_t countA, uint32_t countB, const T* a, const T* b
     return (countA == countB) ? std::memcmp(a, b, countA * sizeof(T)) == 0 : false;
 }
 
+inline D3D12_RESOURCE_STATES translateBufferStateSet(const BufferStateSet& states, QueueType queueType)
+{
+    SLANG_RHI_ASSERT(isValidBufferStateSet(states));
+
+    D3D12_RESOURCE_STATES result = D3D12_RESOURCE_STATE_COMMON;
+    states.forEach(
+        [&](ResourceState state)
+        {
+            if (queueType == QueueType::Compute && state == ResourceState::ShaderResource)
+                result |= D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+            else
+                result |= translateResourceState(state);
+        }
+    );
+    return result;
+}
+
 class CommandRecorder
 {
 public:
@@ -36,6 +53,11 @@ public:
     ComPtr<ID3D12GraphicsCommandList1> m_cmdList1;
     ComPtr<ID3D12GraphicsCommandList4> m_cmdList4;
     ComPtr<ID3D12GraphicsCommandList6> m_cmdList6;
+
+    // Command-list type of the buffer being recorded. A COPY list (transfer queue)
+    // permits only COMMON/COPY_SOURCE/COPY_DEST states, so commitBarriers() clamps to them.
+    D3D12_COMMAND_LIST_TYPE m_commandListType = D3D12_COMMAND_LIST_TYPE_DIRECT;
+    QueueType m_queueType = QueueType::Graphics;
 
     GPUDescriptorArena* m_cbvSrvUavArena = nullptr;
     GPUDescriptorArena* m_samplerArena = nullptr;
@@ -112,6 +134,10 @@ public:
     void cmdSetBufferState(const commands::SetBufferState& cmd);
     void cmdSetTextureState(const commands::SetTextureState& cmd);
     void cmdGlobalBarrier(const commands::GlobalBarrier& cmd);
+    void cmdReleaseBufferForQueue(const commands::ReleaseBufferForQueue& cmd);
+    void cmdReleaseTextureForQueue(const commands::ReleaseTextureForQueue& cmd);
+    void cmdAcquireBufferFromQueue(const commands::AcquireBufferFromQueue& cmd);
+    void cmdAcquireTextureFromQueue(const commands::AcquireTextureFromQueue& cmd);
     void cmdPushDebugGroup(const commands::PushDebugGroup& cmd);
     void cmdPopDebugGroup(const commands::PopDebugGroup& cmd);
     void cmdInsertDebugMarker(const commands::InsertDebugMarker& cmd);
@@ -147,6 +173,8 @@ public:
 Result CommandRecorder::record(CommandBufferImpl* commandBuffer)
 {
     m_cmdList = commandBuffer->m_d3dCommandList;
+    m_commandListType = commandBuffer->m_queue->m_commandListType;
+    m_queueType = commandBuffer->m_queue->m_type;
     m_cmdList->QueryInterface<ID3D12GraphicsCommandList1>(m_cmdList1.writeRef());
     m_cmdList->QueryInterface<ID3D12GraphicsCommandList4>(m_cmdList4.writeRef());
     m_cmdList->QueryInterface<ID3D12GraphicsCommandList6>(m_cmdList6.writeRef());
@@ -1013,6 +1041,7 @@ void CommandRecorder::cmdDrawIndirect(const commands::DrawIndirect& cmd)
     {
         requireBufferState(countBuffer, ResourceState::IndirectArgument);
     }
+    commitBarriers();
 
     m_cmdList->ExecuteIndirect(
         m_device->drawIndirectCmdSignature,
@@ -1037,6 +1066,7 @@ void CommandRecorder::cmdDrawIndexedIndirect(const commands::DrawIndexedIndirect
     {
         requireBufferState(countBuffer, ResourceState::IndirectArgument);
     }
+    commitBarriers();
 
     m_cmdList->ExecuteIndirect(
         m_device->drawIndexedIndirectCmdSignature,
@@ -1618,6 +1648,37 @@ void CommandRecorder::cmdGlobalBarrier(const commands::GlobalBarrier& cmd)
     m_cmdList->ResourceBarrier(1, &barrier);
 }
 
+// On D3D12 cross-queue resource ownership is implicit (no Vulkan-style QFOT
+// barriers); record the resource's state so the state tracker emits the right
+// transition barriers on whichever queue next uses it.
+void CommandRecorder::cmdReleaseBufferForQueue(const commands::ReleaseBufferForQueue& cmd)
+{
+    m_stateTracking.setBufferState(checked_cast<BufferImpl*>(cmd.buffer), cmd.currentState);
+}
+
+void CommandRecorder::cmdReleaseTextureForQueue(const commands::ReleaseTextureForQueue& cmd)
+{
+    m_stateTracking.setTextureState(
+        checked_cast<TextureImpl*>(cmd.texture),
+        cmd.subresourceRange,
+        cmd.currentState
+    );
+}
+
+void CommandRecorder::cmdAcquireBufferFromQueue(const commands::AcquireBufferFromQueue& cmd)
+{
+    m_stateTracking.setBufferState(checked_cast<BufferImpl*>(cmd.buffer), cmd.desiredState);
+}
+
+void CommandRecorder::cmdAcquireTextureFromQueue(const commands::AcquireTextureFromQueue& cmd)
+{
+    m_stateTracking.setTextureState(
+        checked_cast<TextureImpl*>(cmd.texture),
+        cmd.subresourceRange,
+        cmd.desiredState
+    );
+}
+
 void CommandRecorder::cmdPushDebugGroup(const commands::PushDebugGroup& cmd)
 {
 #if SLANG_RHI_ENABLE_AFTERMATH
@@ -1760,7 +1821,7 @@ void CommandRecorder::setBindings(BindingDataImpl* bindingData, BindMode bindMod
 
 void CommandRecorder::requireBufferState(BufferImpl* buffer, ResourceState state)
 {
-    m_stateTracking.setBufferState(buffer, state);
+    m_stateTracking.requireBufferState(buffer, state, getBufferReadStatePolicy(m_queueType));
 }
 
 void CommandRecorder::requireTextureState(TextureImpl* texture, SubresourceRange subresourceRange, ResourceState state)
@@ -1775,12 +1836,30 @@ void CommandRecorder::commitBarriers()
 
     short_vector<D3D12_RESOURCE_BARRIER, 16> barriers;
 
+    // A COPY command list (transfer queue) permits only COMMON/COPY_SOURCE/COPY_DEST
+    // resource states. Clamp any tracked graphics/compute state down so an illegal
+    // transition is never emitted there (e.g. a graphics-default-state resource first
+    // used on the transfer queue). COMMON == 0, so a non-copy state collapses to it and
+    // a resulting before==after barrier is skipped by the existing equality checks below.
+    bool const isCopyList = (m_commandListType == D3D12_COMMAND_LIST_TYPE_COPY);
+    auto const clampState = [isCopyList](D3D12_RESOURCE_STATES s) -> D3D12_RESOURCE_STATES
+    {
+        return isCopyList ? (s & (D3D12_RESOURCE_STATE_COPY_SOURCE | D3D12_RESOURCE_STATE_COPY_DEST)) : s;
+    };
+
     for (const auto& bufferBarrier : m_stateTracking.getBufferBarriers())
     {
         BufferImpl* buffer = checked_cast<BufferImpl*>(bufferBarrier.buffer);
         D3D12_RESOURCE_BARRIER barrier = {};
-        D3D12_RESOURCE_STATES stateBefore = translateResourceState(bufferBarrier.stateBefore);
-        D3D12_RESOURCE_STATES stateAfter = translateResourceState(bufferBarrier.stateAfter);
+        D3D12_RESOURCE_STATES stateBefore =
+            clampState(translateBufferStateSet(bufferBarrier.stateBefore, m_queueType));
+        D3D12_RESOURCE_STATES stateAfter =
+            clampState(translateBufferStateSet(bufferBarrier.stateAfter, m_queueType));
+        bool const isAccelerationStructureReadWriteTransition =
+            (bufferBarrier.stateBefore.isExactly(ResourceState::AccelerationStructureWrite) &&
+             bufferBarrier.stateAfter.isExactly(ResourceState::AccelerationStructureRead)) ||
+            (bufferBarrier.stateBefore.isExactly(ResourceState::AccelerationStructureRead) &&
+             bufferBarrier.stateAfter.isExactly(ResourceState::AccelerationStructureWrite));
         // Acceleration structure buffers need to be treated specially.
         // D3D12 doesn't allow to transition to/from D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE state.
         // Instead, UAV barriers are used to synchronize accesses.
@@ -1795,15 +1874,12 @@ void CommandRecorder::commitBarriers()
             barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
             barriers.push_back(barrier);
         }
-        else if ((bufferBarrier.stateBefore == ResourceState::AccelerationStructureWrite &&
-                  bufferBarrier.stateAfter == ResourceState::AccelerationStructureRead) ||
-                 (bufferBarrier.stateBefore == ResourceState::AccelerationStructureRead &&
-                  bufferBarrier.stateAfter == ResourceState::AccelerationStructureWrite) ||
-                 (bufferBarrier.stateBefore == ResourceState::MicromapWrite &&
-                  bufferBarrier.stateAfter == ResourceState::MicromapRead) ||
-                 (bufferBarrier.stateBefore == ResourceState::MicromapRead &&
-                  bufferBarrier.stateAfter == ResourceState::MicromapWrite) ||
-                 ((stateAfter & D3D12_RESOURCE_STATE_UNORDERED_ACCESS) != 0))
+        else if (isAccelerationStructureReadWriteTransition ||
+                 (bufferBarrier.stateBefore.isExactly(ResourceState::MicromapWrite) &&
+                  bufferBarrier.stateAfter.isExactly(ResourceState::MicromapRead)) ||
+                 (bufferBarrier.stateBefore.isExactly(ResourceState::MicromapRead) &&
+                  bufferBarrier.stateAfter.isExactly(ResourceState::MicromapWrite)) ||
+                 (stateAfter & D3D12_RESOURCE_STATE_UNORDERED_ACCESS) != 0)
         {
             barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
             barrier.UAV.pResource = buffer->m_resource;
@@ -1813,10 +1889,13 @@ void CommandRecorder::commitBarriers()
 
     for (const auto& textureBarrier : m_stateTracking.getTextureBarriers())
     {
+        // COPY queues access textures in COMMON through implicit promotion and decay.
+        if (isCopyList)
+            continue;
         TextureImpl* texture = checked_cast<TextureImpl*>(textureBarrier.texture);
         D3D12_RESOURCE_BARRIER barrier = {};
-        D3D12_RESOURCE_STATES stateBefore = translateResourceState(textureBarrier.stateBefore);
-        D3D12_RESOURCE_STATES stateAfter = translateResourceState(textureBarrier.stateAfter);
+        D3D12_RESOURCE_STATES stateBefore = clampState(translateResourceState(textureBarrier.stateBefore));
+        D3D12_RESOURCE_STATES stateAfter = clampState(translateResourceState(textureBarrier.stateAfter));
         if (stateBefore != stateAfter)
         {
             barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
@@ -1939,8 +2018,21 @@ Result CommandQueueImpl::init(uint32_t queueIndex)
     m_queueIndex = queueIndex;
     m_d3dDevice = device->m_device;
 
+    switch (m_type)
+    {
+    case QueueType::Compute:
+        m_commandListType = D3D12_COMMAND_LIST_TYPE_COMPUTE;
+        break;
+    case QueueType::Transfer:
+        m_commandListType = D3D12_COMMAND_LIST_TYPE_COPY;
+        break;
+    default:
+        m_commandListType = D3D12_COMMAND_LIST_TYPE_DIRECT;
+        break;
+    }
+
     D3D12_COMMAND_QUEUE_DESC queueDesc = {};
-    queueDesc.Type = D3D12_COMMAND_LIST_TYPE_DIRECT;
+    queueDesc.Type = m_commandListType;
     SLANG_D3D_RETURN_ON_FAIL_REPORT(
         m_d3dDevice->CreateCommandQueue(&queueDesc, IID_PPV_ARGS(m_d3dQueue.writeRef())),
         m_device
@@ -2246,11 +2338,16 @@ Result CommandEncoderImpl::getBindingData(RootShaderObject* rootObject, BindingD
 
 Result CommandEncoderImpl::finish(const CommandBufferDesc& desc, ICommandBuffer** outCommandBuffer)
 {
-    bool hadLabel = m_commandBuffer->m_desc.label != nullptr;
     m_commandBuffer->setDesc(desc);
-    if (hadLabel)
+    // Set the d3d command list debug name only when THIS finish provides a non-null
+    // label. The previous logic derived `hadLabel` from the command buffer's prior
+    // (possibly pooled/stale) label and then passed the encoder's `m_desc.label`
+    // (set at createCommandEncoder, normally null) to SetName — so a reused pooled
+    // buffer finished without a new label called SetName(nullptr) -> wcslen(nullptr)
+    // -> crash. Triggered by the retained-labeled-command-buffer + pool-reuse path.
+    if (desc.label)
     {
-        m_commandBuffer->m_d3dCommandList->SetName(m_desc.label ? string::to_wstring(m_desc.label).c_str() : nullptr);
+        m_commandBuffer->m_d3dCommandList->SetName(string::to_wstring(desc.label).c_str());
     }
     SLANG_RETURN_ON_FAIL(resolvePipelines(m_device));
     CommandRecorder recorder(getDevice<DeviceImpl>());
@@ -2296,15 +2393,15 @@ CommandBufferImpl::~CommandBufferImpl()
 Result CommandBufferImpl::init()
 {
     DeviceImpl* device = getDevice<DeviceImpl>();
+    D3D12_COMMAND_LIST_TYPE listType = m_queue->m_commandListType;
     SLANG_D3D_RETURN_ON_FAIL_REPORT(
-        device->m_device
-            ->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(m_d3dCommandAllocator.writeRef())),
+        device->m_device->CreateCommandAllocator(listType, IID_PPV_ARGS(m_d3dCommandAllocator.writeRef())),
         device
     );
     SLANG_D3D_RETURN_ON_FAIL_REPORT(
         device->m_device->CreateCommandList(
             0,
-            D3D12_COMMAND_LIST_TYPE_DIRECT,
+            listType,
             m_d3dCommandAllocator,
             nullptr,
             IID_PPV_ARGS(m_d3dCommandList.writeRef())
@@ -2319,11 +2416,15 @@ Result CommandBufferImpl::init()
     }
 #endif
 
-    ID3D12DescriptorHeap* heaps[] = {
-        device->m_gpuCbvSrvUavHeap->getHeap(),
-        device->m_gpuSamplerHeap->getHeap(),
-    };
-    m_d3dCommandList->SetDescriptorHeaps(SLANG_COUNT_OF(heaps), heaps);
+    // SetDescriptorHeaps is not valid on COPY command lists.
+    if (listType != D3D12_COMMAND_LIST_TYPE_COPY)
+    {
+        ID3D12DescriptorHeap* heaps[] = {
+            device->m_gpuCbvSrvUavHeap->getHeap(),
+            device->m_gpuSamplerHeap->getHeap(),
+        };
+        m_d3dCommandList->SetDescriptorHeaps(SLANG_COUNT_OF(heaps), heaps);
+    }
 
     m_constantBufferArena.initialize(&m_queue->m_constantBufferHeap);
 
@@ -2338,11 +2439,15 @@ Result CommandBufferImpl::reset()
     DeviceImpl* device = getDevice<DeviceImpl>();
     SLANG_D3D_RETURN_ON_FAIL_REPORT(m_d3dCommandAllocator->Reset(), device);
     SLANG_D3D_RETURN_ON_FAIL_REPORT(m_d3dCommandList->Reset(m_d3dCommandAllocator, nullptr), device);
-    ID3D12DescriptorHeap* heaps[] = {
-        device->m_gpuCbvSrvUavHeap->getHeap(),
-        device->m_gpuSamplerHeap->getHeap(),
-    };
-    m_d3dCommandList->SetDescriptorHeaps(SLANG_COUNT_OF(heaps), heaps);
+    // SetDescriptorHeaps is not valid on COPY command lists.
+    if (m_queue->m_commandListType != D3D12_COMMAND_LIST_TYPE_COPY)
+    {
+        ID3D12DescriptorHeap* heaps[] = {
+            device->m_gpuCbvSrvUavHeap->getHeap(),
+            device->m_gpuSamplerHeap->getHeap(),
+        };
+        m_d3dCommandList->SetDescriptorHeaps(SLANG_COUNT_OF(heaps), heaps);
+    }
 
     m_cbvSrvUavArena.reset();
     m_samplerArena.reset();

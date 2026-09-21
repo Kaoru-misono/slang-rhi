@@ -32,12 +32,7 @@ protected:
     std::once_flag m_adaptersOnce;
 };
 
-Result createD3D11Backend(Backend** outBackend);
 Result createD3D12Backend(Backend** outBackend);
 Result createVKBackend(Backend** outBackend);
-Result createMetalBackend(Backend** outBackend);
-Result createCUDABackend(Backend** outBackend);
-Result createCPUBackend(Backend** outBackend);
-Result createWGPUBackend(Backend** outBackend);
 
 } // namespace rhi

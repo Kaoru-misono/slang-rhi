@@ -286,3 +286,105 @@ GPU_TEST_CASE("compute-indirect-offset", D3D12 | Vulkan | Metal | CUDA)
     // Verify correct number of threads ran (3 groups * 16 threads = 48)
     compareComputeResult(device, outputBuffer, makeArray<uint32_t>(48));
 }
+
+static void runComputeIndirectShaderRead(IDevice* device, QueueType queueType)
+{
+    ComPtr<IShaderProgram> writeProgram;
+    REQUIRE_CALL(loadProgram(device, "test-compute-indirect", "writeDispatchRecord", writeProgram.writeRef()));
+
+    ComPtr<IShaderProgram> consumeProgram;
+    REQUIRE_CALL(loadProgram(device, "test-compute-indirect", "consumeDispatchRecord", consumeProgram.writeRef()));
+
+    ComputePipelineDesc pipelineDesc = {};
+    pipelineDesc.program = writeProgram.get();
+    ComPtr<IComputePipeline> writePipeline;
+    REQUIRE_CALL(device->createComputePipeline(pipelineDesc, writePipeline.writeRef()));
+
+    pipelineDesc.program = consumeProgram.get();
+    ComPtr<IComputePipeline> consumePipeline;
+    REQUIRE_CALL(device->createComputePipeline(pipelineDesc, consumePipeline.writeRef()));
+
+    BufferDesc recordDesc = {};
+    recordDesc.size = 8 * sizeof(uint32_t);
+    recordDesc.elementSize = recordDesc.size;
+    recordDesc.usage = BufferUsage::UnorderedAccess | BufferUsage::ShaderResource | BufferUsage::IndirectArgument |
+                       BufferUsage::CopyDestination;
+    recordDesc.defaultState = ResourceState::UnorderedAccess;
+    recordDesc.memoryType = MemoryType::DeviceLocal;
+
+    ComPtr<IBuffer> recordBuffer;
+    REQUIRE_CALL(device->createBuffer(recordDesc, nullptr, recordBuffer.writeRef()));
+
+    BufferDesc outputDesc = {};
+    outputDesc.size = sizeof(uint32_t);
+    outputDesc.elementSize = sizeof(uint32_t);
+    outputDesc.usage = BufferUsage::UnorderedAccess | BufferUsage::CopySource | BufferUsage::CopyDestination;
+    outputDesc.defaultState = ResourceState::UnorderedAccess;
+    outputDesc.memoryType = MemoryType::DeviceLocal;
+
+    ComPtr<IBuffer> outputBuffer;
+    REQUIRE_CALL(device->createBuffer(outputDesc, nullptr, outputBuffer.writeRef()));
+
+    ComPtr<IBuffer> outputReadback;
+    if (queueType == QueueType::Compute)
+    {
+        BufferDesc readbackDesc = {};
+        readbackDesc.size = sizeof(uint32_t);
+        readbackDesc.usage = BufferUsage::CopyDestination;
+        readbackDesc.defaultState = ResourceState::CopyDestination;
+        readbackDesc.memoryType = MemoryType::ReadBack;
+        REQUIRE_CALL(device->createBuffer(readbackDesc, nullptr, outputReadback.writeRef()));
+    }
+
+    auto queue = device->getQueue(queueType);
+    auto commandEncoder = queue->createCommandEncoder();
+
+    {
+        auto passEncoder = commandEncoder->beginComputePass();
+        auto rootObject = passEncoder->bindPipeline(writePipeline);
+        ShaderCursor cursor(rootObject);
+        cursor["dispatchRecords"].setBinding(recordBuffer);
+        cursor["itemCount"].setData(uint32_t(41));
+        cursor["itemStart"].setData(uint32_t(32));
+        passEncoder->dispatchCompute(1, 1, 1);
+        passEncoder->end();
+    }
+
+    {
+        auto passEncoder = commandEncoder->beginComputePass();
+        auto rootObject = passEncoder->bindPipeline(consumePipeline);
+        ShaderCursor cursor(rootObject);
+        cursor["dispatchRecords"].setBinding(recordBuffer);
+        cursor["outputBuffer"].setBinding(outputBuffer);
+        passEncoder->dispatchComputeIndirect({recordBuffer, 0});
+        passEncoder->end();
+    }
+
+    if (outputReadback)
+        commandEncoder->copyBuffer(outputReadback, 0, outputBuffer, 0, sizeof(uint32_t));
+
+    REQUIRE_CALL(queue->submit(commandEncoder->finish()));
+    REQUIRE_CALL(queue->waitOnHost());
+
+    if (outputReadback)
+    {
+        void* mappedData = nullptr;
+        REQUIRE_CALL(device->mapBuffer(outputReadback, CpuAccessMode::Read, &mappedData));
+        CHECK(*static_cast<uint32_t const*>(mappedData) == 73);
+        REQUIRE_CALL(device->unmapBuffer(outputReadback));
+    }
+    else
+    {
+        compareComputeResult(device, outputBuffer, makeArray<uint32_t>(73));
+    }
+}
+
+GPU_TEST_CASE("compute-indirect-shader-read", D3D12 | Vulkan)
+{
+    runComputeIndirectShaderRead(device, QueueType::Graphics);
+}
+
+GPU_TEST_CASE("compute-indirect-shader-read-compute-queue", D3D12 | Vulkan)
+{
+    runComputeIndirectShaderRead(device, QueueType::Compute);
+}

@@ -17,7 +17,6 @@ include(CMakeDependentOption)
 include(FetchPackage)
 include(DetermineTargetArchitecture)
 include(GNUInstallDirs)
-include(CMakeRC)
 
 # Determine the target architecture we build for.
 # CMAKE_SYSTEM_PROCESSOR is not a reliable way to determine the target architecture.
@@ -112,48 +111,19 @@ if(SLANG_RHI_ENABLE_ASAN OR SLANG_RHI_ENABLE_UBSAN OR SLANG_RHI_ENABLE_TSAN)
     endif()
 endif()
 
-# Determine available backends
+# This fork supports Vulkan and D3D12 only.
+set(SLANG_RHI_HAS_D3D12 OFF)
 if(CMAKE_SYSTEM_NAME STREQUAL "Windows")
-    set(SLANG_RHI_HAS_CPU ON)
-    set(SLANG_RHI_HAS_D3D11 ON)
     set(SLANG_RHI_HAS_D3D12 ON)
-    set(SLANG_RHI_HAS_VULKAN ON)
-    set(SLANG_RHI_HAS_METAL OFF)
-    set(SLANG_RHI_HAS_CUDA ON)
-    set(SLANG_RHI_HAS_WGPU ON)
-elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
-    set(SLANG_RHI_HAS_CPU ON)
-    set(SLANG_RHI_HAS_D3D11 OFF)
-    set(SLANG_RHI_HAS_D3D12 OFF)
-    set(SLANG_RHI_HAS_VULKAN ON)
-    set(SLANG_RHI_HAS_METAL OFF)
-    set(SLANG_RHI_HAS_CUDA ON)
-    set(SLANG_RHI_HAS_WGPU ON)
-elseif(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
-    set(SLANG_RHI_HAS_CPU ON)
-    set(SLANG_RHI_HAS_D3D11 OFF)
-    set(SLANG_RHI_HAS_D3D12 OFF)
-    set(SLANG_RHI_HAS_VULKAN ON)
-    set(SLANG_RHI_HAS_METAL ON)
-    set(SLANG_RHI_HAS_CUDA OFF)
-    set(SLANG_RHI_HAS_WGPU ON)
-elseif(CMAKE_SYSTEM_NAME STREQUAL "Android")
-    set(SLANG_RHI_HAS_CPU OFF)
-    set(SLANG_RHI_HAS_D3D11 OFF)
-    set(SLANG_RHI_HAS_D3D12 OFF)
-    set(SLANG_RHI_HAS_VULKAN ON)
-    set(SLANG_RHI_HAS_METAL OFF)
-    set(SLANG_RHI_HAS_CUDA OFF)
-    set(SLANG_RHI_HAS_WGPU OFF)
-elseif(CMAKE_SYSTEM_NAME STREQUAL "Emscripten")
-    set(SLANG_RHI_HAS_CPU OFF)
-    set(SLANG_RHI_HAS_D3D11 OFF)
-    set(SLANG_RHI_HAS_D3D12 OFF)
-    set(SLANG_RHI_HAS_VULKAN OFF)
-    set(SLANG_RHI_HAS_METAL OFF)
-    set(SLANG_RHI_HAS_CUDA OFF)
-    set(SLANG_RHI_HAS_WGPU ON)
 endif()
+set(SLANG_RHI_HAS_VULKAN ON)
+if(EMSCRIPTEN)
+    message(FATAL_ERROR "This fork requires Vulkan or D3D12")
+endif()
+foreach(backend CPU D3D11 METAL CUDA OPTIX WGPU)
+    set(SLANG_RHI_HAS_${backend} OFF)
+    set(SLANG_RHI_ENABLE_${backend} OFF CACHE BOOL "Backend removed from this fork" FORCE)
+endforeach()
 
 set(SLANG_RHI_HAS_AGILITY_SDK OFF)
 if(SLANG_RHI_HAS_D3D12 AND (CMAKE_SYSTEM_NAME STREQUAL "Windows"))
@@ -161,36 +131,25 @@ if(SLANG_RHI_HAS_D3D12 AND (CMAKE_SYSTEM_NAME STREQUAL "Windows"))
 endif()
 
 set(SLANG_RHI_HAS_AFTERMATH OFF)
-if(SLANG_RHI_HAS_CUDA AND (CMAKE_SYSTEM_NAME STREQUAL "Windows" OR CMAKE_SYSTEM_NAME STREQUAL "Linux") AND (SLANG_RHI_ARCHITECTURE MATCHES "x86_64"))
+if(SLANG_RHI_HAS_VULKAN AND (CMAKE_SYSTEM_NAME STREQUAL "Windows" OR CMAKE_SYSTEM_NAME STREQUAL "Linux") AND (SLANG_RHI_ARCHITECTURE MATCHES "x86_64"))
     set(SLANG_RHI_HAS_AFTERMATH ON)
 endif()
 
 set(SLANG_RHI_HAS_NVAPI OFF)
-if((SLANG_RHI_HAS_D3D11 OR SLANG_RHI_HAS_D3D12) AND (CMAKE_SYSTEM_NAME STREQUAL "Windows") AND (SLANG_RHI_ARCHITECTURE MATCHES "x86_64"))
+if(SLANG_RHI_HAS_D3D12 AND (CMAKE_SYSTEM_NAME STREQUAL "Windows") AND (SLANG_RHI_ARCHITECTURE MATCHES "x86_64"))
     set(SLANG_RHI_HAS_NVAPI ON)
 endif()
 
 # Backend options
-cmake_dependent_option(SLANG_RHI_ENABLE_CPU "Enable CPU backend" ON "SLANG_RHI_HAS_CPU" OFF)
-cmake_dependent_option(SLANG_RHI_ENABLE_D3D11 "Enable D3D11 backend" ON "SLANG_RHI_HAS_D3D11" OFF)
 cmake_dependent_option(SLANG_RHI_ENABLE_D3D12 "Enable D3D12 backend" ON "SLANG_RHI_HAS_D3D12" OFF)
 cmake_dependent_option(SLANG_RHI_ENABLE_AGILITY_SDK "Enable Agility SDK" ON "SLANG_RHI_HAS_AGILITY_SDK" OFF)
 cmake_dependent_option(SLANG_RHI_ENABLE_NVAPI "Enable NVAPI support" ON "SLANG_RHI_HAS_NVAPI" OFF)
 cmake_dependent_option(SLANG_RHI_ENABLE_VULKAN "Enable Vulkan backend" ON "SLANG_RHI_HAS_VULKAN" OFF)
-cmake_dependent_option(SLANG_RHI_ENABLE_METAL "Enable Metal backend" ON "SLANG_RHI_HAS_METAL" OFF)
-cmake_dependent_option(SLANG_RHI_ENABLE_CUDA "Enable CUDA backend" ON "SLANG_RHI_HAS_CUDA" OFF)
-cmake_dependent_option(SLANG_RHI_ENABLE_OPTIX "Enable OptiX support" ON "SLANG_RHI_HAS_CUDA" OFF)
-cmake_dependent_option(SLANG_RHI_ENABLE_WGPU "Enable WebGPU backend" ON "SLANG_RHI_HAS_WGPU" OFF)
 option(SLANG_RHI_ENABLE_AFTERMATH "Enable Aftermath support" OFF)
 
 # Check Aftermath availability
 if(SLANG_RHI_ENABLE_AFTERMATH AND NOT SLANG_RHI_HAS_AFTERMATH)
     message(FATAL_ERROR "Aftermath SDK is not available on this platform")
-endif()
-
-# Enabled OptiX versions
-if(NOT DEFINED SLANG_RHI_OPTIX_VERSIONS)
-    set(SLANG_RHI_OPTIX_VERSIONS "8_0;8_1;9_0")
 endif()
 
 # Fetch slang options
@@ -246,65 +205,11 @@ if(NOT DEFINED SLANG_RHI_NVAPI_URL)
     set(SLANG_RHI_NVAPI_URL_HASH "SHA256=e9832432139331aef90356c78f92a0ad7d238fc527128ad9f51350614d3c598a")
 endif()
 
-# OptiX headers
-if(NOT DEFINED SLANG_RHI_OPTIX_8_0_URL)
-    set(SLANG_RHI_OPTIX_8_0_URL "https://github.com/NVIDIA/optix-dev/archive/f60c1e44f18426f426a2ed948f28515b3cf67b8a.zip")
-    set(SLANG_RHI_OPTIX_8_0_URL_HASH "SHA256=e4f0ee5027a3c94434ad4da3d8ce3297df222050c165387f65d66b31503445dd")
-endif()
-if(NOT DEFINED SLANG_RHI_OPTIX_8_1_URL)
-    set(SLANG_RHI_OPTIX_8_1_URL "https://github.com/NVIDIA/optix-dev/archive/50021ea0af6d41609a97777ceebbdf1e1d34efe7.zip")
-    set(SLANG_RHI_OPTIX_8_1_URL_HASH "SHA256=0effdbbc283c3c4408bc6cade5fa3fbc16dfed6fa6d8611d286f00db8727e66a")
-endif()
-if(NOT DEFINED SLANG_RHI_OPTIX_9_0_URL)
-    set(SLANG_RHI_OPTIX_9_0_URL "https://github.com/NVIDIA/optix-dev/archive/a1280c1863ff19d87f8e827468a4cc906ba9032a.zip")
-    set(SLANG_RHI_OPTIX_9_0_URL_HASH "SHA256=e3b234db6cf9e0b01c4b29af73b14aa9a43f908ddf89917f5f5ff5bbc4a7cbc5")
-endif()
-
 # Vulkan headers
 if(NOT DEFINED SLANG_RHI_VULKAN_HEADERS_URL)
     set(SLANG_RHI_VULKAN_HEADERS_URL "https://github.com/KhronosGroup/Vulkan-Headers/archive/refs/tags/v1.4.347.zip")
     set(SLANG_RHI_VULKAN_HEADERS_URL_HASH "SHA256=ac260b9d0bacbdff95c6eda03f9af48a4d235eeba76b2bc55db26e970219687e")
 endif()
-
-# Metal C++ headers
-if(NOT DEFINED SLANG_RHI_METAL_CPP_URL)
-    set(SLANG_RHI_METAL_CPP_URL "https://developer.apple.com/metal/cpp/files/metal-cpp_macOS15.2_iOS18.2.zip")
-    set(SLANG_RHI_METAL_CPP_URL_HASH "SHA256=3437e4abfbd3d45217f34772ef3502f31ba3358e5fb6ac9d0ca952a047bcfe25")
-endif()
-
-# Dawn WebGPU (not used for Emscripten - uses emdawnwebgpu port instead)
-if(NOT DEFINED SLANG_RHI_DAWN_URL AND NOT EMSCRIPTEN)
-    set(DAWN_VERSION "138.0.7204.168")
-    if(CMAKE_SYSTEM_NAME STREQUAL "Windows")
-        set(DAWN_OS "windows")
-    elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
-        set(DAWN_OS "linux")
-    elseif(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
-        set(DAWN_OS "macos")
-    endif()
-    if(SLANG_RHI_ARCHITECTURE MATCHES "x86_64")
-        set(DAWN_ARCH "x86_64")
-    elseif(SLANG_RHI_ARCHITECTURE MATCHES "aarch64|arm64")
-        set(DAWN_ARCH "aarch64")
-    else()
-        message(FATAL_ERROR "Unsupported processor architecture")
-    endif()
-    set(SLANG_RHI_DAWN_URL "https://github.com/shader-slang/webgpu-dawn-binaries/releases/download/v${DAWN_VERSION}/webgpu-dawn-${DAWN_VERSION}-${DAWN_OS}-${DAWN_ARCH}.zip")
-    if(DAWN_OS STREQUAL "windows" AND DAWN_ARCH STREQUAL "x86_64")
-        set(SLANG_RHI_DAWN_URL_HASH "SHA256=b4343ce0f44a99c1ca76c2c4ac4a0406f6cb0550d51522d45fad171f12e19e5c")
-    elseif(DAWN_OS STREQUAL "windows" AND DAWN_ARCH STREQUAL "aarch64")
-        set(SLANG_RHI_DAWN_URL_HASH "SHA256=fd45fc360d1563b1b1d9c6411b4203e2e6de9e843a96d6a11612b73f27af8b3b")
-    elseif(DAWN_OS STREQUAL "linux" AND DAWN_ARCH STREQUAL "x86_64")
-        set(SLANG_RHI_DAWN_URL_HASH "SHA256=527216981b1e486ec03470ae5af1b7f8020fd2de042b4ace12b10281d08fe669")
-    elseif(DAWN_OS STREQUAL "linux" AND DAWN_ARCH STREQUAL "aarch64")
-        set(SLANG_RHI_DAWN_URL_HASH "SHA256=128a58d6ae967966af39003b05848d4ae59a7048a88a3b5374c94c73fbdba4b1")
-    elseif(DAWN_OS STREQUAL "macos" AND DAWN_ARCH STREQUAL "x86_64")
-        set(SLANG_RHI_DAWN_URL_HASH "SHA256=1727b4242c65d8be37b1225cb94eaf6d45dd2e715d6c07f83e380441fea8b936")
-    elseif(DAWN_OS STREQUAL "macos" AND DAWN_ARCH STREQUAL "aarch64")
-        set(SLANG_RHI_DAWN_URL_HASH "SHA256=8a17471681a5158a2c6cf607c2201384030d5a02404aeb87fddedd4d087c6285")
-    endif()
-endif()
-
 
 if(SLANG_RHI_BUILD_SHARED)
     add_library(slang-rhi SHARED)
@@ -508,7 +413,10 @@ endif()
 if(SLANG_RHI_ENABLE_VULKAN)
     add_library(slang-rhi-vma STATIC)
     target_sources(slang-rhi-vma PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/external/vma/vk_mem_alloc.cpp)
-    target_include_directories(slang-rhi-vma PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/external/vma)
+    # SYSTEM so consumers that include <vk_mem_alloc.h> (our VulkanMemoryAllocator
+    # wrapper, transitively via vk-device.h) don't trip slang-rhi's -Werror on
+    # VMA's Clang nullability extensions.
+    target_include_directories(slang-rhi-vma SYSTEM PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/external/vma)
     target_link_libraries(slang-rhi-vma PUBLIC slang-rhi-vulkan-headers)
     target_compile_features(slang-rhi-vma PRIVATE cxx_std_20)
     target_compile_options(slang-rhi-vma PRIVATE
@@ -603,65 +511,12 @@ if(SLANG_RHI_ENABLE_NVAPI)
     set(SLANG_RHI_NVAPI_INCLUDE_DIR ${nvapi_SOURCE_DIR})
 endif()
 
-# Fetch & setup OptiX headers
-if(SLANG_RHI_ENABLE_OPTIX)
-    message(STATUS "Fetching OptiX headers ...")
-    foreach(optix_version IN LISTS SLANG_RHI_OPTIX_VERSIONS)
-        set(fetch_name "optix_${optix_version}")
-        set(fetch_url "${SLANG_RHI_OPTIX_${optix_version}_URL}")
-        set(fetch_hash "${SLANG_RHI_OPTIX_${optix_version}_URL_HASH}")
-        FetchPackage(${fetch_name} URL "${fetch_url}" URL_HASH "${fetch_hash}")
-        set(target_name "slang-rhi-optix-${optix_version}")
-        add_library(${target_name} INTERFACE)
-        target_include_directories(${target_name} INTERFACE "${${fetch_name}_SOURCE_DIR}/include")
-        # Copy device side headers
-        set(src_dir "${${fetch_name}_SOURCE_DIR}/include")
-        set(dst_dir "optix/${optix_version}")
-        copy_file(${src_dir}/optix.h ${dst_dir})
-        copy_file(${src_dir}/optix_device.h ${dst_dir})
-        copy_file(${src_dir}/optix_types.h ${dst_dir})
-        copy_file(${src_dir}/internal/optix_device_impl.h ${dst_dir}/internal)
-        copy_file(${src_dir}/internal/optix_device_impl_transformations.h ${dst_dir}/internal)
-    endforeach()
-    set(SLANG_RHI_OPTIX_DEVICE_HEADER_INCLUDE_DIR ${SLANG_RHI_BINARY_DIR}/optix)
-endif()
-
 # Fetch & setup Vulkan headers
 if(SLANG_RHI_ENABLE_VULKAN)
     message(STATUS "Fetching Vulkan headers ...")
     FetchPackage(vulkan_headers URL "${SLANG_RHI_VULKAN_HEADERS_URL}" URL_HASH "${SLANG_RHI_VULKAN_HEADERS_URL_HASH}")
     add_library(slang-rhi-vulkan-headers INTERFACE)
     target_include_directories(slang-rhi-vulkan-headers INTERFACE ${vulkan_headers_SOURCE_DIR}/include)
-endif()
-
-# Fetch & setup Metal C++ headers
-if(SLANG_RHI_ENABLE_METAL)
-    message(STATUS "Fetching Metal C++ headers ...")
-    FetchPackage(metal_cpp URL "${SLANG_RHI_METAL_CPP_URL}" URL_HASH "${SLANG_RHI_METAL_CPP_URL_HASH}")
-    add_library(slang-rhi-metal-cpp INTERFACE)
-    target_include_directories(slang-rhi-metal-cpp SYSTEM INTERFACE ${metal_cpp_SOURCE_DIR})
-endif()
-
-# Fetch & setup Dawn WebGPU
-if(SLANG_RHI_ENABLE_WGPU AND NOT EMSCRIPTEN)
-    message(STATUS "Fetching Dawn WebGPU ...")
-    FetchPackage(dawn URL "${SLANG_RHI_DAWN_URL}" URL_HASH "${SLANG_RHI_DAWN_URL_HASH}")
-    add_library(slang-rhi-dawn INTERFACE)
-    target_include_directories(slang-rhi-dawn INTERFACE ${dawn_SOURCE_DIR}/include)
-    if(CMAKE_SYSTEM_NAME STREQUAL "Windows")
-        copy_file(${dawn_SOURCE_DIR}/bin/dawn.dll .)
-    elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
-        copy_file(${dawn_SOURCE_DIR}/lib64/libdawn.so .)
-    elseif(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
-        copy_file(${dawn_SOURCE_DIR}/lib/libdawn.dylib .)
-    endif()
-    target_link_libraries(slang-rhi PRIVATE slang-rhi-dawn)
-endif()
-
-# For Emscripten, use the emdawnwebgpu port for WebGPU support.
-if(SLANG_RHI_ENABLE_WGPU AND EMSCRIPTEN)
-    # For Emscripten, WebGPU headers are provided by emdawnwebgpu port
-    target_compile_options(slang-rhi PRIVATE "--use-port=emdawnwebgpu")
 endif()
 
 # Fetch glfw
@@ -675,30 +530,7 @@ if(((SLANG_RHI_BUILD_TESTS AND SLANG_RHI_BUILD_TESTS_WITH_GLFW) OR SLANG_RHI_BUI
     FetchContent_MakeAvailable(glfw)
 endif()
 
-# Resources
-cmrc_add_resource_library(
-    slang-rhi-resources
-    NAMESPACE resources
-    src/cuda/kernels/clear-texture.cu
-    src/metal/shaders/clear-texture.metal
-)
-set_target_properties(slang-rhi-resources PROPERTIES POSITION_INDEPENDENT_CODE ON)
-target_link_libraries(slang-rhi PRIVATE slang-rhi-resources)
-
-# Create an "x" for the enabled OptiX versions for use in the config header
-# Sort the versions in descending order so that the highest version is first
-set(SLANG_RHI_OPTIX_VERSIONS_SORTED ${SLANG_RHI_OPTIX_VERSIONS})
-list(SORT SLANG_RHI_OPTIX_VERSIONS_SORTED COMPARE NATURAL)
-list(REVERSE SLANG_RHI_OPTIX_VERSIONS_SORTED)
 set(SLANG_RHI_OPTIX_VERSIONS_X "")
-foreach(ver IN LISTS SLANG_RHI_OPTIX_VERSIONS_SORTED)
-    # Compute OptiX version integer (major * 10000 + minor * 100)
-    string(REPLACE "_" ";" ver_parts "${ver}")
-    list(GET ver_parts 0 ver_major)
-    list(GET ver_parts 1 ver_minor)
-    math(EXPR ver_int "${ver_major} * 10000 + ${ver_minor} * 100")
-    string(APPEND SLANG_RHI_OPTIX_VERSIONS_X " x(v${ver}, ${ver_int})")
-endforeach()
 
 # Generate config header
 configure_file(
@@ -795,7 +627,6 @@ target_sources(slang-rhi PRIVATE
     src/aftermath.cpp
     src/command-buffer.cpp
     src/command-list.cpp
-    src/cuda-driver-api.cpp
     src/device.cpp
     src/device-child.cpp
     src/enum-strings.cpp
@@ -838,46 +669,10 @@ if(APPLE)
     target_link_libraries(slang-rhi INTERFACE "-framework Foundation" "-framework QuartzCore")
 endif()
 
-if(SLANG_RHI_ENABLE_CPU)
-    target_sources(slang-rhi PRIVATE
-        src/cpu/cpu-backend.cpp
-        src/cpu/cpu-buffer.cpp
-        src/cpu/cpu-command.cpp
-        src/cpu/cpu-device.cpp
-        src/cpu/cpu-fence.cpp
-        src/cpu/cpu-pipeline.cpp
-        src/cpu/cpu-query.cpp
-        src/cpu/cpu-shader-object-layout.cpp
-        src/cpu/cpu-shader-object.cpp
-        src/cpu/cpu-shader-program.cpp
-        src/cpu/cpu-texture.cpp
-    )
-endif()
-
-if(SLANG_RHI_ENABLE_D3D11 OR SLANG_RHI_HAS_D3D12)
+if(SLANG_RHI_ENABLE_D3D12)
     target_sources(slang-rhi PRIVATE
         src/d3d/d3d-utils.cpp
         src/nvapi/nvapi-util.cpp
-    )
-endif()
-
-if(SLANG_RHI_ENABLE_D3D11)
-    target_sources(slang-rhi PRIVATE
-        src/d3d11/d3d11-backend.cpp
-        src/d3d11/d3d11-buffer.cpp
-        src/d3d11/d3d11-command.cpp
-        src/d3d11/d3d11-constant-buffer-pool.cpp
-        src/d3d11/d3d11-device.cpp
-        src/d3d11/d3d11-input-layout.cpp
-        src/d3d11/d3d11-pipeline.cpp
-        src/d3d11/d3d11-query.cpp
-        src/d3d11/d3d11-sampler.cpp
-        src/d3d11/d3d11-shader-object-layout.cpp
-        src/d3d11/d3d11-shader-object.cpp
-        src/d3d11/d3d11-shader-program.cpp
-        src/d3d11/d3d11-surface.cpp
-        src/d3d11/d3d11-texture.cpp
-        src/d3d11/d3d11-utils.cpp
     )
 endif()
 
@@ -919,6 +714,7 @@ if(SLANG_RHI_ENABLE_VULKAN)
         src/vulkan/vk-device.cpp
         src/vulkan/vk-fence.cpp
         src/vulkan/vk-heap.cpp
+        src/vulkan/vk-memory-allocator.cpp
         src/vulkan/vk-pipeline.cpp
         src/vulkan/vk-query.cpp
         src/vulkan/vk-sampler.cpp
@@ -931,87 +727,6 @@ if(SLANG_RHI_ENABLE_VULKAN)
         src/vulkan/vk-utils.cpp
     )
     target_link_libraries(slang-rhi PRIVATE slang-rhi-vulkan-headers)
-endif()
-
-if(SLANG_RHI_ENABLE_METAL)
-    target_sources(slang-rhi PRIVATE
-        src/metal/metal-acceleration-structure.cpp
-        src/metal/metal-api.cpp
-        src/metal/metal-backend.cpp
-        src/metal/metal-buffer.cpp
-        src/metal/metal-clear-engine.cpp
-        src/metal/metal-command.cpp
-        src/metal/metal-device.cpp
-        src/metal/metal-fence.cpp
-        src/metal/metal-input-layout.cpp
-        src/metal/metal-pipeline.cpp
-        src/metal/metal-query.cpp
-        src/metal/metal-sampler.cpp
-        src/metal/metal-shader-object-layout.cpp
-        src/metal/metal-shader-object.cpp
-        src/metal/metal-shader-program.cpp
-        src/metal/metal-shader-table.cpp
-        src/metal/metal-surface.cpp
-        src/metal/metal-texture.cpp
-        src/metal/metal-utils.cpp
-    )
-    target_link_libraries(slang-rhi-metal-cpp INTERFACE "-framework Metal")
-    target_link_libraries(slang-rhi PRIVATE slang-rhi-metal-cpp)
-endif()
-
-if(SLANG_RHI_ENABLE_CUDA)
-    target_sources(slang-rhi PRIVATE
-        src/cuda/cuda-acceleration-structure.cpp
-        src/cuda/cuda-backend.cpp
-        src/cuda/cuda-buffer.cpp
-        src/cuda/cuda-clear-engine.cpp
-        src/cuda/cuda-command.cpp
-        src/cuda/cuda-constant-buffer-pool.cpp
-        src/cuda/cuda-device.cpp
-        src/cuda/cuda-fence.cpp
-        src/cuda/cuda-heap.cpp
-        src/cuda/cuda-nvrtc.cpp
-        src/cuda/cuda-pipeline.cpp
-        src/cuda/cuda-query.cpp
-        src/cuda/cuda-sampler.cpp
-        src/cuda/cuda-shader-object-layout.cpp
-        src/cuda/cuda-shader-object.cpp
-        src/cuda/cuda-shader-program.cpp
-        src/cuda/cuda-shader-table.cpp
-        src/cuda/cuda-surface.cpp
-        src/cuda/cuda-texture.cpp
-        src/cuda/cuda-utils.cpp
-        src/cuda/optix-api.cpp
-    )
-    if(SLANG_RHI_ENABLE_OPTIX)
-        foreach(optix_version IN LISTS SLANG_RHI_OPTIX_VERSIONS)
-            target_sources(slang-rhi PRIVATE "src/cuda/optix-api-impl-${optix_version}.cpp")
-            get_target_property(optix_include_dir "slang-rhi-optix-${optix_version}" INTERFACE_INCLUDE_DIRECTORIES)
-            set_source_files_properties(src/cuda/optix-api-impl-${optix_version}.cpp PROPERTIES COMPILE_FLAGS "-I${optix_include_dir}")
-        endforeach()
-    endif()
-endif()
-
-if(SLANG_RHI_ENABLE_WGPU)
-    target_sources(slang-rhi PRIVATE
-        src/wgpu/wgpu-api.cpp
-        src/wgpu/wgpu-backend.cpp
-        src/wgpu/wgpu-buffer.cpp
-        src/wgpu/wgpu-command.cpp
-        src/wgpu/wgpu-constant-buffer-pool.cpp
-        src/wgpu/wgpu-device.cpp
-        src/wgpu/wgpu-fence.cpp
-        src/wgpu/wgpu-input-layout.cpp
-        src/wgpu/wgpu-pipeline.cpp
-        src/wgpu/wgpu-query.cpp
-        src/wgpu/wgpu-sampler.cpp
-        src/wgpu/wgpu-shader-object-layout.cpp
-        src/wgpu/wgpu-shader-object.cpp
-        src/wgpu/wgpu-shader-program.cpp
-        src/wgpu/wgpu-surface.cpp
-        src/wgpu/wgpu-texture.cpp
-        src/wgpu/wgpu-utils.cpp
-    )
 endif()
 
 target_include_directories(slang-rhi PUBLIC include)
@@ -1079,12 +794,14 @@ if(SLANG_RHI_BUILD_TESTS AND NOT SLANG_RHI_BUILD_SHARED AND NOT EMSCRIPTEN)
         tests/test-cmd-upload-buffer.cpp
         tests/test-cmd-upload-texture.cpp
         tests/test-combined-texture-sampler.cpp
+        tests/test-async-load.cpp
         tests/test-compute-indirect.cpp
+        tests/test-compute-queue.cpp
         tests/test-compute-smoke.cpp
         tests/test-compute-trivial.cpp
+        tests/test-transfer-queue.cpp
         tests/test-cooperative-matrix.cpp
         tests/test-cooperative-vector.cpp
-        tests/test-cuda-external-devices.cpp
         tests/test-deferred-delete.cpp
         tests/test-device-from-handle.cpp
         tests/test-device-lifetime.cpp
@@ -1134,6 +851,7 @@ if(SLANG_RHI_BUILD_TESTS AND NOT SLANG_RHI_BUILD_SHARED AND NOT EMSCRIPTEN)
         tests/test-short-vector.cpp
         tests/test-staging-heap.cpp
         tests/test-transient-buffer-heap.cpp
+        tests/test-state-tracking.cpp
         tests/test-static-vector.cpp
         tests/test-surface.cpp
         tests/test-texture-allocation-info.cpp
@@ -1147,6 +865,7 @@ if(SLANG_RHI_BUILD_TESTS AND NOT SLANG_RHI_BUILD_SHARED AND NOT EMSCRIPTEN)
         tests/test-timer.cpp
         tests/test-uint16-structured-buffer.cpp
         tests/memory-report.cpp
+        tests/test-vma.cpp
         tests/testing.cpp
         tests/texture-utils.cpp
         tests/texture-test.cpp
@@ -1176,9 +895,6 @@ if(SLANG_RHI_BUILD_TESTS AND NOT SLANG_RHI_BUILD_SHARED AND NOT EMSCRIPTEN)
     if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
         find_package(Threads REQUIRED)
         target_link_libraries(slang-rhi-tests PRIVATE Threads::Threads ${CMAKE_DL_LIBS})
-    endif()
-    if(SLANG_RHI_ENABLE_METAL)
-        target_link_libraries(slang-rhi-tests PRIVATE slang-rhi-metal-cpp)
     endif()
 
     if(CMAKE_SYSTEM_NAME STREQUAL "Windows")
@@ -1215,7 +931,6 @@ if(SLANG_RHI_BUILD_EXAMPLES)
         )
     endif()
 endif()
-
 
 add_custom_target(slang-rhi-copy-files ALL DEPENDS ${SLANG_RHI_COPY_FILES})
 add_dependencies(slang-rhi slang-rhi-copy-files)

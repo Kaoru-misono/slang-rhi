@@ -285,7 +285,9 @@ Result AccelerationStructureBuildDescConverter::convert(
                 geometry.geometry.triangles.pNext = &ommData;
             }
 
-            primitiveCounts[i] = max(triangles.vertexCount, triangles.indexCount) / 3;
+            primitiveCounts[i] = (triangles.indexCount > 0)
+                ? (triangles.indexCount / 3)
+                : (triangles.vertexCount / 3);
         }
 
         buildInfo.type = VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR;

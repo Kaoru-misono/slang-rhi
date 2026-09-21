@@ -9,6 +9,22 @@
 using namespace rhi;
 using namespace rhi::testing;
 
+TEST_CASE("supported-backend-boundary")
+{
+    auto* rhi = getRHI();
+    CHECK(rhi->isDeviceTypeSupported(DeviceType::Vulkan) == bool(SLANG_RHI_ENABLE_VULKAN));
+    CHECK(rhi->isDeviceTypeSupported(DeviceType::D3D12) == bool(SLANG_RHI_ENABLE_D3D12));
+    for (auto type : {DeviceType::D3D11, DeviceType::Metal, DeviceType::CUDA, DeviceType::CPU, DeviceType::WGPU})
+    {
+        CHECK_FALSE(rhi->isDeviceTypeSupported(type));
+        DeviceDesc desc{};
+        desc.deviceType = type;
+        ComPtr<IDevice> device;
+        CHECK(SLANG_FAILED(rhi->createDevice(desc, device.writeRef())));
+        CHECK(device == nullptr);
+    }
+}
+
 GPU_TEST_CASE("device-wave-size-limits", ALL)
 {
     REQUIRE(device);

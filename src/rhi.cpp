@@ -10,13 +10,10 @@
 #include "core/common.h"
 #include "core/task-pool.h"
 
-#if SLANG_RHI_ENABLE_D3D11 || SLANG_RHI_ENABLE_D3D12
+#if SLANG_RHI_ENABLE_D3D12
 #include "d3d/d3d-utils.h"
 #endif
 
-#if SLANG_RHI_ENABLE_CUDA
-#include <slang-rhi/cuda-driver-api.h>
-#endif
 
 #include <cstring>
 #include <vector>
@@ -163,15 +160,12 @@ Result RHI::destroy()
     RootShaderObject::getAllocator().releasePages();
 
     // Release DXGI factory and module.
-#if SLANG_RHI_ENABLE_D3D11 || SLANG_RHI_ENABLE_D3D12
+#if SLANG_RHI_ENABLE_D3D12
     clearDXGIFactory();
     clearDXGIModule();
 #endif
 
     // Release CUDA driver API.
-#if SLANG_RHI_ENABLE_CUDA
-    rhiCudaDriverApiShutdown();
-#endif
 
     return SLANG_OK;
 }
@@ -315,16 +309,8 @@ Result RHI::createDeviceImpl(const DeviceDesc& desc, IDevice** outDevice)
         newDesc.deviceType = DeviceType::Vulkan;
         if (SLANG_SUCCEEDED(createDeviceImpl(newDesc, outDevice)))
             return SLANG_OK;
-#elif SLANG_LINUX_FAMILY
+#else
         newDesc.deviceType = DeviceType::Vulkan;
-        if (SLANG_SUCCEEDED(createDeviceImpl(newDesc, outDevice)))
-            return SLANG_OK;
-#elif SLANG_APPLE_FAMILY
-        newDesc.deviceType = DeviceType::Metal;
-        if (SLANG_SUCCEEDED(createDeviceImpl(newDesc, outDevice)))
-            return SLANG_OK;
-#elif SLANG_WASM
-        newDesc.deviceType = DeviceType::WGPU;
         if (SLANG_SUCCEEDED(createDeviceImpl(newDesc, outDevice)))
             return SLANG_OK;
 #endif
@@ -380,7 +366,7 @@ Result RHI::reportLiveObjects()
 #if SLANG_RHI_ENABLE_REF_OBJECT_TRACKING
     RefObjectTracker::instance().reportLiveObjects();
 #endif
-#if SLANG_RHI_ENABLE_D3D11 | SLANG_RHI_ENABLE_D3D12
+#if SLANG_RHI_ENABLE_D3D12
     SLANG_RETURN_ON_FAIL(reportD3DLiveObjects());
 #endif
     return SLANG_OK;
@@ -419,11 +405,6 @@ Backend* RHI::getBackend(DeviceType type)
     Result result = SLANG_FAIL;
     switch (type)
     {
-#if SLANG_RHI_ENABLE_D3D11
-    case DeviceType::D3D11:
-        result = createD3D11Backend(backend.writeRef());
-        break;
-#endif
 #if SLANG_RHI_ENABLE_D3D12
     case DeviceType::D3D12:
         result = createD3D12Backend(backend.writeRef());
@@ -432,26 +413,6 @@ Backend* RHI::getBackend(DeviceType type)
 #if SLANG_RHI_ENABLE_VULKAN
     case DeviceType::Vulkan:
         result = createVKBackend(backend.writeRef());
-        break;
-#endif
-#if SLANG_RHI_ENABLE_METAL
-    case DeviceType::Metal:
-        result = createMetalBackend(backend.writeRef());
-        break;
-#endif
-#if SLANG_RHI_ENABLE_CUDA
-    case DeviceType::CUDA:
-        result = createCUDABackend(backend.writeRef());
-        break;
-#endif
-#if SLANG_RHI_ENABLE_CPU
-    case DeviceType::CPU:
-        result = createCPUBackend(backend.writeRef());
-        break;
-#endif
-#if SLANG_RHI_ENABLE_WGPU
-    case DeviceType::WGPU:
-        result = createWGPUBackend(backend.writeRef());
         break;
 #endif
     default:
