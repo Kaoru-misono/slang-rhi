@@ -508,7 +508,10 @@ endif()
 if(SLANG_RHI_ENABLE_VULKAN)
     add_library(slang-rhi-vma STATIC)
     target_sources(slang-rhi-vma PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/external/vma/vk_mem_alloc.cpp)
-    target_include_directories(slang-rhi-vma PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/external/vma)
+    # SYSTEM so consumers that include <vk_mem_alloc.h> (our VulkanMemoryAllocator
+    # wrapper, transitively via vk-device.h) don't trip slang-rhi's -Werror on
+    # VMA's Clang nullability extensions.
+    target_include_directories(slang-rhi-vma SYSTEM PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/external/vma)
     target_link_libraries(slang-rhi-vma PUBLIC slang-rhi-vulkan-headers)
     target_compile_features(slang-rhi-vma PRIVATE cxx_std_20)
     target_compile_options(slang-rhi-vma PRIVATE
@@ -919,6 +922,7 @@ if(SLANG_RHI_ENABLE_VULKAN)
         src/vulkan/vk-device.cpp
         src/vulkan/vk-fence.cpp
         src/vulkan/vk-heap.cpp
+        src/vulkan/vk-memory-allocator.cpp
         src/vulkan/vk-pipeline.cpp
         src/vulkan/vk-query.cpp
         src/vulkan/vk-sampler.cpp
@@ -1079,9 +1083,12 @@ if(SLANG_RHI_BUILD_TESTS AND NOT SLANG_RHI_BUILD_SHARED AND NOT EMSCRIPTEN)
         tests/test-cmd-upload-buffer.cpp
         tests/test-cmd-upload-texture.cpp
         tests/test-combined-texture-sampler.cpp
+        tests/test-async-load.cpp
         tests/test-compute-indirect.cpp
+        tests/test-compute-queue.cpp
         tests/test-compute-smoke.cpp
         tests/test-compute-trivial.cpp
+        tests/test-transfer-queue.cpp
         tests/test-cooperative-matrix.cpp
         tests/test-cooperative-vector.cpp
         tests/test-cuda-external-devices.cpp
@@ -1134,6 +1141,7 @@ if(SLANG_RHI_BUILD_TESTS AND NOT SLANG_RHI_BUILD_SHARED AND NOT EMSCRIPTEN)
         tests/test-short-vector.cpp
         tests/test-staging-heap.cpp
         tests/test-transient-buffer-heap.cpp
+        tests/test-state-tracking.cpp
         tests/test-static-vector.cpp
         tests/test-surface.cpp
         tests/test-texture-allocation-info.cpp
@@ -1147,6 +1155,7 @@ if(SLANG_RHI_BUILD_TESTS AND NOT SLANG_RHI_BUILD_SHARED AND NOT EMSCRIPTEN)
         tests/test-timer.cpp
         tests/test-uint16-structured-buffer.cpp
         tests/memory-report.cpp
+        tests/test-vma.cpp
         tests/testing.cpp
         tests/texture-utils.cpp
         tests/texture-test.cpp

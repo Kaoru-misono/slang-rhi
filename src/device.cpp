@@ -1158,6 +1158,7 @@ Result Device::getShaderObjectLayout(
     // outlive the entry. See the invariant on m_shaderObjectLayoutCache.
     auto typeLayout = session->getTypeLayout(type);
 
+    std::lock_guard<std::mutex> lock(m_shaderObjectLayoutCacheMutex);
     RefPtr<ShaderObjectLayout> shaderObjectLayout;
     auto it = m_shaderObjectLayoutCache.find(typeLayout);
     if (it != m_shaderObjectLayoutCache.end())

@@ -324,7 +324,7 @@ struct DrawIndirectTest : BaseDrawTest
 
         BufferDesc bufferDesc;
         bufferDesc.size = sizeof(IndirectArgData);
-        bufferDesc.usage = BufferUsage::IndirectArgument;
+        bufferDesc.usage = BufferUsage::IndirectArgument | BufferUsage::ShaderResource;
         bufferDesc.defaultState = ResourceState::IndirectArgument;
         ComPtr<IBuffer> buffer = device->createBuffer(bufferDesc, &kIndirectData);
         REQUIRE(buffer != nullptr);
@@ -337,6 +337,8 @@ struct DrawIndirectTest : BaseDrawTest
 
         auto queue = device->getQueue(QueueType::Graphics);
         auto commandEncoder = queue->createCommandEncoder();
+        if (device->getDeviceType() == DeviceType::D3D12)
+            commandEncoder->setBufferState(indirectBuffer, ResourceState::ShaderResource);
 
         RenderPassColorAttachment colorAttachment;
         colorAttachment.view = colorBufferView;
@@ -404,7 +406,7 @@ struct DrawIndexedIndirectTest : BaseDrawTest
 
         BufferDesc bufferDesc;
         bufferDesc.size = sizeof(IndexedIndirectArgData);
-        bufferDesc.usage = BufferUsage::IndirectArgument;
+        bufferDesc.usage = BufferUsage::IndirectArgument | BufferUsage::ShaderResource;
         bufferDesc.defaultState = ResourceState::IndirectArgument;
         ComPtr<IBuffer> buffer = device->createBuffer(bufferDesc, &kIndexedIndirectData);
         REQUIRE(buffer != nullptr);
@@ -417,6 +419,8 @@ struct DrawIndexedIndirectTest : BaseDrawTest
 
         auto queue = device->getQueue(QueueType::Graphics);
         auto commandEncoder = queue->createCommandEncoder();
+        if (device->getDeviceType() == DeviceType::D3D12)
+            commandEncoder->setBufferState(indirectBuffer, ResourceState::ShaderResource);
 
         RenderPassColorAttachment colorAttachment;
         colorAttachment.view = colorBufferView;

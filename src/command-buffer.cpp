@@ -887,6 +887,53 @@ void CommandEncoder::globalBarrier()
     m_commandList->write(std::move(cmd));
 }
 
+void CommandEncoder::releaseBufferForQueue(IBuffer* buffer, ResourceState currentState, QueueType dstQueue)
+{
+    commands::ReleaseBufferForQueue cmd;
+    cmd.buffer = checked_cast<Buffer*>(buffer);
+    cmd.currentState = currentState;
+    cmd.dstQueue = dstQueue;
+    m_commandList->write(std::move(cmd));
+}
+
+void CommandEncoder::releaseTextureForQueue(
+    ITexture* texture,
+    SubresourceRange subresourceRange,
+    ResourceState currentState,
+    QueueType dstQueue
+)
+{
+    commands::ReleaseTextureForQueue cmd;
+    cmd.texture = checked_cast<Texture*>(texture);
+    cmd.subresourceRange = subresourceRange;
+    cmd.currentState = currentState;
+    cmd.dstQueue = dstQueue;
+    m_commandList->write(std::move(cmd));
+}
+
+void CommandEncoder::acquireBufferFromQueue(IBuffer* buffer, ResourceState desiredState, QueueType srcQueue)
+{
+    commands::AcquireBufferFromQueue cmd;
+    cmd.buffer = checked_cast<Buffer*>(buffer);
+    cmd.desiredState = desiredState;
+    cmd.srcQueue = srcQueue;
+    m_commandList->write(std::move(cmd));
+}
+
+void CommandEncoder::acquireTextureFromQueue(
+    ITexture* texture,
+    SubresourceRange subresourceRange,
+    ResourceState desiredState,
+    QueueType srcQueue
+)
+{
+    commands::AcquireTextureFromQueue cmd;
+    cmd.texture = checked_cast<Texture*>(texture);
+    cmd.subresourceRange = subresourceRange;
+    cmd.desiredState = desiredState;
+    cmd.srcQueue = srcQueue;
+    m_commandList->write(std::move(cmd));
+}
 
 void CommandEncoder::pushDebugGroup(const char* name, const MarkerColor& color)
 {

@@ -9,6 +9,36 @@
 using namespace rhi;
 using namespace rhi::testing;
 
+TEST_CASE("supported-backend-boundary")
+{
+    struct BackendSwitch
+    {
+        DeviceType type;
+        bool enabled;
+    };
+    const BackendSwitch backends[] = {
+        {DeviceType::D3D11, SLANG_RHI_ENABLE_D3D11},
+        {DeviceType::D3D12, SLANG_RHI_ENABLE_D3D12},
+        {DeviceType::Vulkan, SLANG_RHI_ENABLE_VULKAN},
+        {DeviceType::Metal, SLANG_RHI_ENABLE_METAL},
+        {DeviceType::CPU, SLANG_RHI_ENABLE_CPU},
+        {DeviceType::CUDA, SLANG_RHI_ENABLE_CUDA},
+        {DeviceType::WGPU, SLANG_RHI_ENABLE_WGPU},
+    };
+    auto* rhi = getRHI();
+    for (const BackendSwitch& backend : backends)
+    {
+        CHECK(rhi->isDeviceTypeSupported(backend.type) == backend.enabled);
+        if (backend.enabled)
+            continue;
+        DeviceDesc desc{};
+        desc.deviceType = backend.type;
+        ComPtr<IDevice> device;
+        CHECK(SLANG_FAILED(rhi->createDevice(desc, device.writeRef())));
+        CHECK(device == nullptr);
+    }
+}
+
 GPU_TEST_CASE("device-wave-size-limits", ALL)
 {
     REQUIRE(device);

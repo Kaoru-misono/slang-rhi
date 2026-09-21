@@ -24,6 +24,115 @@ inline bool arraysEqual(uint32_t countA, uint32_t countB, const T* a, const T* b
     return (countA == countB) ? std::memcmp(a, b, countA * sizeof(T)) == 0 : false;
 }
 
+struct BarrierScope
+{
+    VkPipelineStageFlags stages = 0;
+    VkAccessFlags access = 0;
+};
+
+inline VkPipelineStageFlags getQueuePipelineStageMask(QueueType queueType)
+{
+    if (queueType == QueueType::Compute)
+    {
+        return VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT | VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT |
+               VK_PIPELINE_STAGE_TRANSFER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT |
+               VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR |
+               VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR | VK_PIPELINE_STAGE_ALL_COMMANDS_BIT |
+               VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT;
+    }
+    if (queueType == QueueType::Transfer)
+    {
+        return VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT | VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT |
+               VK_PIPELINE_STAGE_TRANSFER_BIT | VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
+    }
+    return ~VkPipelineStageFlags(0);
+}
+
+inline VkPipelineStageFlags getQueueFallbackPipelineStage(QueueType queueType)
+{
+    if (queueType == QueueType::Compute)
+        return VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
+    if (queueType == QueueType::Transfer)
+        return VK_PIPELINE_STAGE_TRANSFER_BIT;
+    return VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
+}
+
+template<typename GetAccessFlags>
+inline BarrierScope calcBarrierScope(
+    VkPipelineStageFlags supportedShaderStageFlags,
+    const BufferStateSet& states,
+    bool src,
+    QueueType queueType,
+    GetAccessFlags&& getAccessFlags
+)
+{
+    SLANG_RHI_ASSERT(isValidBufferStateSet(states));
+
+    BarrierScope result;
+    VkPipelineStageFlags const queueStageMask = getQueuePipelineStageMask(queueType);
+    states.forEach(
+        [&](ResourceState state)
+        {
+            VkPipelineStageFlags const stateStages =
+                calcPipelineStageFlags(supportedShaderStageFlags, state, src) & queueStageMask;
+            if (stateStages != 0)
+            {
+                result.stages |= stateStages;
+                result.access |= getAccessFlags(state);
+            }
+        }
+    );
+    if (result.stages == 0)
+        result.stages = getQueueFallbackPipelineStage(queueType);
+    return result;
+}
+
+inline BarrierScope calcBufferBarrierScope(
+    VkPipelineStageFlags supportedShaderStageFlags,
+    const BufferStateSet& states,
+    bool src,
+    QueueType queueType
+)
+{
+    return calcBarrierScope(
+        supportedShaderStageFlags,
+        states,
+        src,
+        queueType,
+        [](ResourceState state)
+        {
+            return state == ResourceState::ShaderResource ? VkAccessFlags(VK_ACCESS_SHADER_READ_BIT)
+                                                          : VkAccessFlags(calcAccessFlags(state));
+        }
+    );
+}
+
+inline BarrierScope calcTextureBarrierScope(
+    VkPipelineStageFlags supportedShaderStageFlags,
+    ResourceState state,
+    bool src,
+    QueueType queueType
+)
+{
+    return calcBarrierScope(
+        supportedShaderStageFlags,
+        BufferStateSet(state),
+        src,
+        queueType,
+        [queueType](ResourceState textureState)
+        {
+            if (textureState == ResourceState::ShaderResource)
+            {
+                VkAccessFlags access = VK_ACCESS_SHADER_READ_BIT;
+                if (queueType == QueueType::Graphics)
+                    access |= VK_ACCESS_INPUT_ATTACHMENT_READ_BIT;
+                return access;
+            }
+            return VkAccessFlags(calcAccessFlags(textureState));
+        }
+    );
+}
+
 class CommandRecorder
 {
 public:
@@ -31,6 +140,7 @@ public:
     VulkanApi& m_api;
 
     VkCommandBuffer m_cmdBuffer;
+    QueueType m_queueType = QueueType::Graphics;
 
     StateTracking m_stateTracking;
 
@@ -112,6 +222,10 @@ public:
     void cmdSetBufferState(const commands::SetBufferState& cmd);
     void cmdSetTextureState(const commands::SetTextureState& cmd);
     void cmdGlobalBarrier(const commands::GlobalBarrier& cmd);
+    void cmdReleaseBufferForQueue(const commands::ReleaseBufferForQueue& cmd);
+    void cmdReleaseTextureForQueue(const commands::ReleaseTextureForQueue& cmd);
+    void cmdAcquireBufferFromQueue(const commands::AcquireBufferFromQueue& cmd);
+    void cmdAcquireTextureFromQueue(const commands::AcquireTextureFromQueue& cmd);
     void cmdPushDebugGroup(const commands::PushDebugGroup& cmd);
     void cmdPopDebugGroup(const commands::PopDebugGroup& cmd);
     void cmdInsertDebugMarker(const commands::InsertDebugMarker& cmd);
@@ -138,6 +252,7 @@ public:
 Result CommandRecorder::record(CommandBufferImpl* commandBuffer)
 {
     m_cmdBuffer = commandBuffer->m_commandBuffer;
+    m_queueType = commandBuffer->m_queue->m_type;
 
 #if SLANG_RHI_ENABLE_AFTERMATH
     // Enable aftermath marker tracking if aftermath is enabled and extension is available.
@@ -1561,6 +1676,183 @@ void CommandRecorder::cmdGlobalBarrier(const commands::GlobalBarrier& cmd)
     );
 }
 
+void CommandRecorder::cmdReleaseBufferForQueue(const commands::ReleaseBufferForQueue& cmd)
+{
+    BufferImpl* buffer = checked_cast<BufferImpl*>(cmd.buffer);
+
+    uint32_t srcFamily = m_device->getQueueFamilyIndex(m_queueType);
+    uint32_t dstFamily = m_device->getQueueFamilyIndex(cmd.dstQueue);
+
+    if (srcFamily == dstFamily)
+    {
+        m_stateTracking.setBufferState(buffer, cmd.currentState);
+        return;
+    }
+
+    m_stateTracking.setBufferState(buffer, cmd.currentState);
+    commitBarriers();
+
+    BufferStateSet const currentStates(cmd.currentState);
+
+    VkBufferMemoryBarrier barrier = {};
+    barrier.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
+    BarrierScope const currentScope =
+        calcBufferBarrierScope(m_api.m_supportedShaderStageFlags, currentStates, true, m_queueType);
+    barrier.srcAccessMask = currentScope.access;
+    barrier.dstAccessMask = 0;
+    barrier.srcQueueFamilyIndex = srcFamily;
+    barrier.dstQueueFamilyIndex = dstFamily;
+    barrier.buffer = buffer->m_buffer.m_buffer;
+    barrier.offset = 0;
+    barrier.size = buffer->m_desc.size;
+
+    m_api.vkCmdPipelineBarrier(
+        m_cmdBuffer,
+        currentScope.stages, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
+        0,
+        0, nullptr,
+        1, &barrier,
+        0, nullptr
+    );
+
+    m_stateTracking.forgetBufferState(buffer);
+}
+
+void CommandRecorder::cmdReleaseTextureForQueue(const commands::ReleaseTextureForQueue& cmd)
+{
+    TextureImpl* texture = checked_cast<TextureImpl*>(cmd.texture);
+
+    uint32_t srcFamily = m_device->getQueueFamilyIndex(m_queueType);
+    uint32_t dstFamily = m_device->getQueueFamilyIndex(cmd.dstQueue);
+
+    if (srcFamily == dstFamily)
+    {
+        m_stateTracking.setTextureState(texture, cmd.subresourceRange, cmd.currentState);
+        return;
+    }
+
+    commitBarriers();
+
+    VkImageLayout currentLayout = translateImageLayout(cmd.currentState);
+
+    VkImageMemoryBarrier barrier = {};
+    barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+    barrier.image = texture->m_image;
+    barrier.oldLayout = currentLayout;
+    barrier.newLayout = currentLayout;
+    BarrierScope const currentScope =
+        calcTextureBarrierScope(m_api.m_supportedShaderStageFlags, cmd.currentState, true, m_queueType);
+    barrier.srcAccessMask = currentScope.access;
+    barrier.dstAccessMask = 0;
+    barrier.srcQueueFamilyIndex = srcFamily;
+    barrier.dstQueueFamilyIndex = dstFamily;
+    barrier.subresourceRange.aspectMask = getAspectMaskFromFormat(getVkFormat(texture->m_desc.format));
+    barrier.subresourceRange.baseMipLevel = cmd.subresourceRange.mip;
+    barrier.subresourceRange.levelCount = cmd.subresourceRange.mipCount == 0
+        ? VK_REMAINING_MIP_LEVELS : cmd.subresourceRange.mipCount;
+    barrier.subresourceRange.baseArrayLayer = cmd.subresourceRange.layer;
+    barrier.subresourceRange.layerCount = cmd.subresourceRange.layerCount == 0
+        ? VK_REMAINING_ARRAY_LAYERS : cmd.subresourceRange.layerCount;
+
+    m_api.vkCmdPipelineBarrier(
+        m_cmdBuffer,
+        currentScope.stages, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
+        0,
+        0, nullptr,
+        0, nullptr,
+        1, &barrier
+    );
+}
+
+void CommandRecorder::cmdAcquireBufferFromQueue(const commands::AcquireBufferFromQueue& cmd)
+{
+    BufferImpl* buffer = checked_cast<BufferImpl*>(cmd.buffer);
+
+    uint32_t srcFamily = m_device->getQueueFamilyIndex(cmd.srcQueue);
+    uint32_t dstFamily = m_device->getQueueFamilyIndex(m_queueType);
+
+    if (srcFamily == dstFamily)
+    {
+        m_stateTracking.setBufferState(buffer, cmd.desiredState);
+        return;
+    }
+
+    commitBarriers();
+
+    BufferStateSet const desiredStates(cmd.desiredState);
+
+    VkBufferMemoryBarrier barrier = {};
+    barrier.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
+    barrier.srcAccessMask = 0;
+    BarrierScope const desiredScope =
+        calcBufferBarrierScope(m_api.m_supportedShaderStageFlags, desiredStates, false, m_queueType);
+    barrier.dstAccessMask = desiredScope.access;
+    barrier.srcQueueFamilyIndex = srcFamily;
+    barrier.dstQueueFamilyIndex = dstFamily;
+    barrier.buffer = buffer->m_buffer.m_buffer;
+    barrier.offset = 0;
+    barrier.size = buffer->m_desc.size;
+
+    m_api.vkCmdPipelineBarrier(
+        m_cmdBuffer,
+        VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, desiredScope.stages,
+        0,
+        0, nullptr,
+        1, &barrier,
+        0, nullptr
+    );
+
+    m_stateTracking.assumeBufferState(buffer, cmd.desiredState);
+}
+
+void CommandRecorder::cmdAcquireTextureFromQueue(const commands::AcquireTextureFromQueue& cmd)
+{
+    TextureImpl* texture = checked_cast<TextureImpl*>(cmd.texture);
+
+    uint32_t srcFamily = m_device->getQueueFamilyIndex(cmd.srcQueue);
+    uint32_t dstFamily = m_device->getQueueFamilyIndex(m_queueType);
+
+    if (srcFamily == dstFamily)
+    {
+        m_stateTracking.setTextureState(texture, cmd.subresourceRange, cmd.desiredState);
+        return;
+    }
+
+    commitBarriers();
+
+    VkImageLayout desiredLayout = translateImageLayout(cmd.desiredState);
+
+    VkImageMemoryBarrier barrier = {};
+    barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+    barrier.image = texture->m_image;
+    barrier.oldLayout = desiredLayout;
+    barrier.newLayout = desiredLayout;
+    barrier.srcAccessMask = 0;
+    BarrierScope const desiredScope =
+        calcTextureBarrierScope(m_api.m_supportedShaderStageFlags, cmd.desiredState, false, m_queueType);
+    barrier.dstAccessMask = desiredScope.access;
+    barrier.srcQueueFamilyIndex = srcFamily;
+    barrier.dstQueueFamilyIndex = dstFamily;
+    barrier.subresourceRange.aspectMask = getAspectMaskFromFormat(getVkFormat(texture->m_desc.format));
+    barrier.subresourceRange.baseMipLevel = cmd.subresourceRange.mip;
+    barrier.subresourceRange.levelCount = cmd.subresourceRange.mipCount == 0
+        ? VK_REMAINING_MIP_LEVELS : cmd.subresourceRange.mipCount;
+    barrier.subresourceRange.baseArrayLayer = cmd.subresourceRange.layer;
+    barrier.subresourceRange.layerCount = cmd.subresourceRange.layerCount == 0
+        ? VK_REMAINING_ARRAY_LAYERS : cmd.subresourceRange.layerCount;
+
+    m_api.vkCmdPipelineBarrier(
+        m_cmdBuffer,
+        VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, desiredScope.stages,
+        0,
+        0, nullptr,
+        0, nullptr,
+        1, &barrier
+    );
+
+    m_stateTracking.setTextureState(texture, cmd.subresourceRange, cmd.desiredState);
+}
+
 void CommandRecorder::cmdPushDebugGroup(const commands::PushDebugGroup& cmd)
 {
 #if SLANG_RHI_ENABLE_AFTERMATH
@@ -1691,7 +1983,7 @@ void CommandRecorder::requireBindingStates(BindingDataImpl* bindingData)
 
 void CommandRecorder::requireBufferState(BufferImpl* buffer, ResourceState state)
 {
-    m_stateTracking.setBufferState(buffer, state);
+    m_stateTracking.requireBufferState(buffer, state, getBufferReadStatePolicy(m_queueType));
 }
 
 void CommandRecorder::requireTextureState(TextureImpl* texture, SubresourceRange subresourceRange, ResourceState state)
@@ -1746,10 +2038,20 @@ void CommandRecorder::commitBarriers()
     {
         BufferImpl* buffer = checked_cast<BufferImpl*>(bufferBarrier.buffer);
 
-        VkPipelineStageFlags beforeStageFlags =
-            calcPipelineStageFlags(m_api.m_supportedShaderStageFlags, bufferBarrier.stateBefore, true);
-        VkPipelineStageFlags afterStageFlags =
-            calcPipelineStageFlags(m_api.m_supportedShaderStageFlags, bufferBarrier.stateAfter, false);
+        BarrierScope const beforeScope = calcBufferBarrierScope(
+            m_api.m_supportedShaderStageFlags,
+            bufferBarrier.stateBefore,
+            true,
+            m_queueType
+        );
+        BarrierScope const afterScope = calcBufferBarrierScope(
+            m_api.m_supportedShaderStageFlags,
+            bufferBarrier.stateAfter,
+            false,
+            m_queueType
+        );
+        VkPipelineStageFlags const beforeStageFlags = beforeScope.stages;
+        VkPipelineStageFlags const afterStageFlags = afterScope.stages;
 
         if ((beforeStageFlags != activeBeforeStageFlags || afterStageFlags != activeAfterStageFlags) &&
             !bufferBarriers.empty())
@@ -1763,8 +2065,8 @@ void CommandRecorder::commitBarriers()
 
         VkBufferMemoryBarrier barrier = {};
         barrier.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
-        barrier.srcAccessMask = calcAccessFlags(bufferBarrier.stateBefore);
-        barrier.dstAccessMask = calcAccessFlags(bufferBarrier.stateAfter);
+        barrier.srcAccessMask = beforeScope.access;
+        barrier.dstAccessMask = afterScope.access;
         barrier.buffer = buffer->m_buffer.m_buffer;
         barrier.offset = 0;
         barrier.size = buffer->m_desc.size;
@@ -1783,10 +2085,20 @@ void CommandRecorder::commitBarriers()
     {
         TextureImpl* texture = checked_cast<TextureImpl*>(textureBarrier.texture);
 
-        VkPipelineStageFlags beforeStageFlags =
-            calcPipelineStageFlags(m_api.m_supportedShaderStageFlags, textureBarrier.stateBefore, true);
-        VkPipelineStageFlags afterStageFlags =
-            calcPipelineStageFlags(m_api.m_supportedShaderStageFlags, textureBarrier.stateAfter, false);
+        BarrierScope const beforeScope = calcTextureBarrierScope(
+            m_api.m_supportedShaderStageFlags,
+            textureBarrier.stateBefore,
+            true,
+            m_queueType
+        );
+        BarrierScope const afterScope = calcTextureBarrierScope(
+            m_api.m_supportedShaderStageFlags,
+            textureBarrier.stateAfter,
+            false,
+            m_queueType
+        );
+        VkPipelineStageFlags const beforeStageFlags = beforeScope.stages;
+        VkPipelineStageFlags const afterStageFlags = afterScope.stages;
 
         if ((beforeStageFlags != activeBeforeStageFlags || afterStageFlags != activeAfterStageFlags) &&
             !imageBarriers.empty())
@@ -1817,8 +2129,8 @@ void CommandRecorder::commitBarriers()
         barrier.subresourceRange.baseMipLevel = textureBarrier.entireTexture ? 0 : textureBarrier.mip;
         barrier.subresourceRange.layerCount = textureBarrier.entireTexture ? VK_REMAINING_ARRAY_LAYERS : 1;
         barrier.subresourceRange.levelCount = textureBarrier.entireTexture ? VK_REMAINING_MIP_LEVELS : 1;
-        barrier.srcAccessMask = calcAccessFlags(textureBarrier.stateBefore);
-        barrier.dstAccessMask = calcAccessFlags(textureBarrier.stateAfter);
+        barrier.srcAccessMask = beforeScope.access;
+        barrier.dstAccessMask = afterScope.access;
         imageBarriers.push_back(barrier);
     }
     if (!imageBarriers.empty())
@@ -2078,7 +2390,10 @@ Result CommandQueueImpl::submit(const SubmitDesc& desc)
     for (uint32_t i = 0; i < desc.waitFenceCount; ++i)
     {
         FenceImpl* fence = checked_cast<FenceImpl*>(desc.waitFences[i]);
-        addWaitSemaphore(fence->m_semaphore, desc.waitFenceValues[i]);
+        // Use ALL_COMMANDS_BIT to establish a full memory dependency for cross-queue synchronization.
+        // BOTTOM_OF_PIPE_BIT would create an empty access scope, making writes from the signaling
+        // queue invisible to subsequent operations on this queue.
+        addWaitSemaphore(fence->m_semaphore, desc.waitFenceValues[i], VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
     }
 
     // Setup signal semaphores.

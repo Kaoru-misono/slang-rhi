@@ -78,9 +78,6 @@ Result BindingDataBuilder::bindAsRoot(
     BindingDataImpl*& outBindingData
 )
 {
-    // Create a new set of binding data to populate.
-    // TODO: In the future we should lookup the cache for existing
-    // binding data and reuse that if possible.
     BindingDataImpl* bindingData = m_allocator->allocate<BindingDataImpl>();
     m_bindingData = bindingData;
 
@@ -189,6 +186,14 @@ Result BindingDataBuilder::allocateDescriptorSets(
         auto allocation = m_cbvSrvUavArena->allocate(descriptorCount);
         if (!allocation.isValid())
         {
+            auto* typeLayout = specializedLayout->getElementTypeLayout();
+            auto const* typeName = typeLayout ? typeLayout->getName() : nullptr;
+            m_device->printError(
+                "D3D12 resource descriptor allocation failed (count=%u, samplerCount=%u, type=%s).",
+                descriptorCount,
+                specializedLayout->getTotalSamplerDescriptorCount(),
+                typeName ? typeName : "<unknown>"
+            );
             return SLANG_E_OUT_OF_MEMORY;
         }
         SLANG_RHI_ASSERT(rootParamIndex < m_bindingData->rootParameterCount);
@@ -198,10 +203,25 @@ Result BindingDataBuilder::allocateDescriptorSets(
     }
     if (auto descriptorCount = specializedLayout->getTotalSamplerDescriptorCount())
     {
-        auto allocation = m_samplerArena->allocate(descriptorCount);
+        // Check the sampler cache first to avoid exhausting the 2048-descriptor GPU sampler heap.
+        // Sampler bindings don't change between draw calls (only uniform data changes via setData),
+        // so we can safely reuse the same sampler descriptor range.
+        GPUDescriptorRange allocation = m_bindingCache->lookupSamplers(shaderObject->m_uid, specializedLayout);
         if (!allocation.isValid())
         {
-            return SLANG_E_OUT_OF_MEMORY;
+            allocation = m_samplerArena->allocate(descriptorCount);
+            if (!allocation.isValid())
+            {
+                auto* typeLayout = specializedLayout->getElementTypeLayout();
+                auto const* typeName = typeLayout ? typeLayout->getName() : nullptr;
+                m_device->printError(
+                    "D3D12 sampler descriptor allocation failed (count=%u, type=%s).",
+                    descriptorCount,
+                    typeName ? typeName : "<unknown>"
+                );
+                return SLANG_E_OUT_OF_MEMORY;
+            }
+            m_bindingCache->storeSamplers(shaderObject->m_uid, specializedLayout, allocation);
         }
         SLANG_RHI_ASSERT(rootParamIndex < m_bindingData->rootParameterCount);
         m_bindingData->rootParameters[rootParamIndex++] =

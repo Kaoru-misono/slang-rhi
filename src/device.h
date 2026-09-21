@@ -524,6 +524,7 @@ public:
     /// address turns the next lookup into a use-after-free. That is
     /// shader-slang/slang#10893, which is why createShaderObjectFromTypeLayout builds
     /// its layout directly instead of caching one.
+    mutable std::mutex m_shaderObjectLayoutCacheMutex;
     std::map<slang::TypeLayoutReflection*, RefPtr<ShaderObjectLayout>> m_shaderObjectLayoutCache;
 
     // List of heaps managed by this device. DeviceImpl is expected

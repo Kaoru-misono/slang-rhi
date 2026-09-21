@@ -1,6 +1,7 @@
 #pragma once
 
 #include "vk-base.h"
+#include "vk-memory-allocator.h"
 
 namespace rhi::vk {
 
@@ -31,6 +32,9 @@ public:
     VkImage m_image = VK_NULL_HANDLE;
     VkFormat m_vkformat = VK_FORMAT_UNDEFINED;
     VkDeviceMemory m_imageMemory = VK_NULL_HANDLE;
+    // VMA tracking for image memory (null for shared/external or swapchain images).
+    VulkanMemoryAllocator* m_allocator = nullptr;
+    VmaAllocation m_allocation = VK_NULL_HANDLE;
     // False for swap chain or externally-owned native images.
     bool m_shouldDestroyImage = true;
     // True if this texture is created from a swap chain buffer.

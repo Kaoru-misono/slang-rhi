@@ -132,9 +132,43 @@ public:
     uint32_t rootParameterCount;
 };
 
+/// Cache for sampler descriptor allocations to avoid exhausting the 2048-descriptor
+/// GPU sampler heap. Sampler bindings don't change between draw calls (only uniform
+/// data changes via setData), so we can safely reuse the same sampler descriptor
+/// range across draws that share the same shader object and layout.
 struct BindingCache
 {
-    void reset() {}
+    static constexpr uint32_t kMaxSamplerEntries = 16;
+
+    struct SamplerEntry
+    {
+        uint32_t objectUid;
+        ShaderObjectLayoutImpl* layout;
+        GPUDescriptorRange samplers;
+    };
+
+    SamplerEntry samplerEntries[kMaxSamplerEntries] = {};
+    uint32_t samplerEntryCount = 0;
+
+    GPUDescriptorRange lookupSamplers(uint32_t objectUid, ShaderObjectLayoutImpl* layout)
+    {
+        for (uint32_t i = 0; i < samplerEntryCount; ++i)
+        {
+            if (samplerEntries[i].objectUid == objectUid && samplerEntries[i].layout == layout)
+                return samplerEntries[i].samplers;
+        }
+        return {};
+    }
+
+    void storeSamplers(uint32_t objectUid, ShaderObjectLayoutImpl* layout, GPUDescriptorRange samplers)
+    {
+        if (samplerEntryCount < kMaxSamplerEntries)
+        {
+            samplerEntries[samplerEntryCount++] = {objectUid, layout, samplers};
+        }
+    }
+
+    void reset() { samplerEntryCount = 0; }
 };
 
 } // namespace rhi::d3d12
