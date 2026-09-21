@@ -11,6 +11,8 @@ This file provides guidance to agents when working with code in this repository.
 
 slang-rhi is a render hardware interface library for the Slang shading language. It provides abstraction layers for multiple graphics APIs including D3D11, D3D12, Vulkan, Metal, CUDA, WebGPU, and a CPU backend.
 
+This fork maintains the D3D12 and Vulkan backends only. The other backends stay as upstream ships them so upstream merges stay small; April builds them disabled, and they are not updated for the fork's API changes.
+
 ## Build Instructions
 
 This project uses CMake with presets for different configurations:

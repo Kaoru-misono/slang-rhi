@@ -9,6 +9,13 @@ SPDX-License-Identifier: CC-BY-4.0
 
 # slang-rhi
 
+This April2 fork supports **Vulkan and D3D12 only**. It is based on upstream
+`01ea5f6e9fceb0b1835c5c58006a95fb6b76a6c9` (2026-10-16) and uses Slang
+`2026.17.1`. Compute/transfer queues, queue ownership transfers and April
+binding caches are maintained here. The other upstream
+backends stay unchanged to keep upstream merges small; April builds them
+disabled, and they are not updated for the fork's API changes.
+
 `slang-rhi` is a C++ render hardware interface for the Slang shading language,
 originally based on Slang's "gfx" layer. It provides a common API for resource
 management, shader binding, and graphics, compute, and ray tracing workloads.
