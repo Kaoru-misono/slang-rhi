@@ -400,6 +400,30 @@ void CommandList::write(commands::AliasResources&& cmd)
     writeCommand(std::move(cmd));
 }
 
+void CommandList::write(commands::ReleaseBufferForQueue&& cmd)
+{
+    retainResource<Buffer>(cmd.buffer);
+    writeCommand(std::move(cmd));
+}
+
+void CommandList::write(commands::ReleaseTextureForQueue&& cmd)
+{
+    retainResource<Texture>(cmd.texture);
+    writeCommand(std::move(cmd));
+}
+
+void CommandList::write(commands::AcquireBufferFromQueue&& cmd)
+{
+    retainResource<Buffer>(cmd.buffer);
+    writeCommand(std::move(cmd));
+}
+
+void CommandList::write(commands::AcquireTextureFromQueue&& cmd)
+{
+    retainResource<Texture>(cmd.texture);
+    writeCommand(std::move(cmd));
+}
+
 void CommandList::write(commands::PushDebugGroup&& cmd)
 {
     if (cmd.name)

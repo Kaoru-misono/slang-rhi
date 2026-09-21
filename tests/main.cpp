@@ -10,6 +10,10 @@
 #include <charconv>
 #include <cstdio>
 #include <string_view>
+#if SLANG_WINDOWS_FAMILY
+#    include <crtdbg.h>
+#    include <cstdlib>
+#endif
 
 // Due to current issues in slang we don't enable Agility SDK yet
 SLANG_RHI_EXPORT_AGILITY_SDK
@@ -59,6 +63,15 @@ bool checkRequiredDevices()
 
 int main(int argc, const char** argv)
 {
+#if SLANG_WINDOWS_FAMILY
+    // Device-cache teardown runs after doctest restores its fatal-condition
+    // handler. Keep late assertions on stderr instead of opening a modal dialog.
+    _set_abort_behavior(0, _WRITE_ABORT_MSG | _CALL_REPORTFAULT);
+    _set_error_mode(_OUT_TO_STDERR);
+    _CrtSetReportMode(_CRT_ASSERT, _CRTDBG_MODE_FILE);
+    _CrtSetReportFile(_CRT_ASSERT, _CRTDBG_FILE_STDERR);
+#endif
+
     // Store path to the executable.
     rhi::testing::exePath() = argv[0];
 

@@ -1,5 +1,7 @@
 #include "d3d12-descriptor-heap.h"
 
+#include <cstdio>
+
 namespace rhi::d3d12 {
 
 // DescriptorHeap
@@ -205,11 +207,17 @@ GPUDescriptorRangeAllocation GPUDescriptorHeap::allocate(uint32_t count)
         allocation.heapOffset = heapOffset;
         return allocation;
     }
+
     return {};
 }
 
 void GPUDescriptorHeap::free(const GPUDescriptorRangeAllocation& allocation)
 {
+    if (!allocation.isValid())
+    {
+        return;
+    }
+
     std::lock_guard<std::mutex> lock(m_mutex);
 
     SLANG_RHI_ASSERT(allocation.heapOffset);
@@ -252,7 +260,13 @@ GPUDescriptorRange GPUDescriptorArena::allocate(uint32_t count)
     if (count > m_currentChunkSpace)
     {
         uint32_t chunkSize = max(count, m_chunkSize);
-        m_chunks.push_back(m_heap->allocate(chunkSize));
+        auto chunk = m_heap->allocate(chunkSize);
+        if (!chunk.isValid())
+        {
+            // Allocation failed — return invalid range.
+            return {};
+        }
+        m_chunks.push_back(chunk);
         m_currentChunkSpace = chunkSize;
         m_currentChunkOffset = 0;
     }
