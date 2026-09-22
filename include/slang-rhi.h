@@ -3068,6 +3068,9 @@ struct SubmitDesc
     // If set to `kInvalidCUDAStream`, the CUDA stream associated with the device
     // queue is used, which in the default case the default (NULL) stream.
     void* cudaStream = kInvalidCUDAStream;
+
+    /// Optional. Receives the queue-local sequence assigned to this submission on success.
+    uint64_t* outSequence = nullptr;
 };
 
 class ICommandQueue : public ISlangUnknown
@@ -3118,6 +3121,18 @@ public:
     }
 
     virtual SLANG_NO_THROW Result SLANG_MCALL waitOnHost() = 0;
+
+    /// Reports the highest queue-local sequence known to have completed, in the numbering of
+    /// `SubmitDesc::outSequence`. A queue that never submitted reports 0.
+    /// Returns `SLANG_E_INVALID_ARG` if `outSequence` is null, and `SLANG_FAIL` once the device
+    /// is lost, where no sequence can be proven complete.
+    virtual SLANG_NO_THROW Result SLANG_MCALL getCompletedSequence(uint64_t* outSequence) = 0;
+
+    /// Blocks the calling thread until `getCompletedSequence` covers `sequence`, or until
+    /// `timeoutNs` nanoseconds elapse; `kTimeoutInfinite` waits indefinitely.
+    /// Returns `SLANG_E_INVALID_ARG` for a sequence this queue never issued, `SLANG_E_TIME_OUT`
+    /// when the timeout expires first, and `SLANG_FAIL` once the device is lost.
+    virtual SLANG_NO_THROW Result SLANG_MCALL waitForSequence(uint64_t sequence, uint64_t timeoutNs) = 0;
 
     virtual SLANG_NO_THROW Result SLANG_MCALL getNativeHandle(NativeHandle* outHandle) = 0;
 

@@ -18,6 +18,7 @@
 #include "core/short_vector.h"
 #include "core/common.h"
 #include "core/platform.h"
+#include "core/deferred.h"
 
 namespace rhi::d3d12 {
 
@@ -2046,9 +2047,6 @@ Result CommandQueueImpl::init(uint32_t queueIndex)
         m_d3dDevice->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(m_trackingFence.writeRef())),
         m_device
     );
-    m_globalWaitHandle =
-        CreateEventEx(nullptr, nullptr, CREATE_EVENT_INITIAL_SET | CREATE_EVENT_MANUAL_RESET, EVENT_ALL_ACCESS);
-
     TransientBufferHeapDesc constantBufferHeapDesc;
     constantBufferHeapDesc.initialPageSize = 64 * 1024;
     constantBufferHeapDesc.maxPageSize = 4 * 1024 * 1024;
@@ -2072,10 +2070,6 @@ void CommandQueueImpl::shutdown()
     m_commandBuffersPool.clear();
     // Release the shared constant-buffer pages while deferred deletion is still available.
     m_constantBufferHeap.release();
-    // Execute remaining deferred deletes.
-    executeDeferredDeletes();
-    SLANG_RHI_ASSERT(m_deferredDeleteQueue.empty());
-    ::CloseHandle(m_globalWaitHandle);
 }
 
 Result CommandQueueImpl::createCommandBuffer(CommandBufferImpl** outCommandBuffer)
@@ -2088,17 +2082,24 @@ Result CommandQueueImpl::createCommandBuffer(CommandBufferImpl** outCommandBuffe
 
 Result CommandQueueImpl::getOrCreateCommandBuffer(CommandBufferImpl** outCommandBuffer)
 {
+    if (getDevice()->m_deviceLost)
+        return SLANG_FAIL;
     std::lock_guard<std::mutex> lock(m_mutex);
     RefPtr<CommandBufferImpl> commandBuffer;
-    if (m_commandBuffersPool.empty())
+    auto reusable = m_commandBuffersPool.begin();
+    while (reusable != m_commandBuffersPool.end() && (*reusable)->getReferenceCount() != 1)
+        ++reusable;
+    if (reusable == m_commandBuffersPool.end())
     {
         SLANG_RETURN_ON_FAIL(createCommandBuffer(commandBuffer.writeRef()));
     }
     else
     {
-        commandBuffer = m_commandBuffersPool.front();
-        m_commandBuffersPool.pop_front();
+        // Only the pool owns this object; no old handle can observe its new recording.
+        commandBuffer = std::move(*reusable);
+        m_commandBuffersPool.erase(reusable);
         commandBuffer->setInternalReferenceCount(0);
+        commandBuffer->m_submissionID = 0;
     }
     returnRefPtr(outCommandBuffer, commandBuffer);
     return SLANG_OK;
@@ -2116,54 +2117,50 @@ void CommandQueueImpl::retireCommandBuffer(CommandBufferImpl* commandBuffer)
 
 void CommandQueueImpl::retireCommandBuffers()
 {
-    std::list<RefPtr<CommandBufferImpl>> commandBuffers = std::move(m_commandBuffersInFlight);
-    m_commandBuffersInFlight.clear();
-
-    uint64_t lastFinishedID = updateLastFinishedID();
-    for (const auto& commandBuffer : commandBuffers)
-    {
-        if (commandBuffer->m_submissionID <= lastFinishedID)
-        {
-            retireCommandBuffer(commandBuffer);
-        }
-        else
-        {
-            m_commandBuffersInFlight.push_back(commandBuffer);
-        }
-    }
-
-    // Delete deferred resources that are no longer in use by the GPU.
-    executeDeferredDeletes();
-
-    // Flush all device heaps
-    getDevice<DeviceImpl>()->flushHeaps();
+    getDevice<DeviceImpl>()->collectGarbage();
 }
 
-void CommandQueueImpl::deferDelete(Resource* resource)
+void CommandQueueImpl::retireCompletedCommandBuffers(uint64_t completed)
 {
-    std::lock_guard<std::mutex> lock(m_deferredDeleteQueueMutex);
-    // Use current submission ID - resource will be released after this submission completes.
-    // This is conservative but simple: the resource may have been used in an earlier submission,
-    // but using the current ID ensures we don't release too early.
-    m_deferredDeleteQueue.push({m_lastSubmittedID, resource});
+    std::list<RefPtr<CommandBufferImpl>> ready;
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        for (auto it = m_commandBuffersInFlight.begin(); it != m_commandBuffersInFlight.end();)
+        {
+            auto current = it++;
+            if ((*current)->m_submissionID <= completed)
+                ready.splice(ready.end(), m_commandBuffersInFlight, current);
+        }
+    }
+    for (const auto& commandBuffer : ready)
+    {
+        retireCommandBuffer(commandBuffer);
+    }
 }
 
-void CommandQueueImpl::executeDeferredDeletes()
+void CommandQueueImpl::abandonCommandBuffersAfterDeviceLoss()
 {
-    uint64_t lastFinishedID = m_lastFinishedID;
-    std::lock_guard<std::mutex> lock(m_deferredDeleteQueueMutex);
-    while (!m_deferredDeleteQueue.empty() && m_deferredDeleteQueue.front().submissionID <= lastFinishedID)
+    std::list<RefPtr<CommandBufferImpl>> abandoned;
     {
-        // GPU is done with this resource - delete it.
-        delete m_deferredDeleteQueue.front().resource;
-        m_deferredDeleteQueue.pop();
+        std::lock_guard<std::mutex> lock(m_mutex);
+        abandoned.splice(abandoned.end(), m_commandBuffersInFlight);
+        abandoned.splice(abandoned.end(), m_commandBuffersPool);
     }
+    for (const auto& commandBuffer : abandoned)
+        commandBuffer->reset();
 }
 
 uint64_t CommandQueueImpl::updateLastFinishedID()
 {
-    m_lastFinishedID = m_trackingFence->GetCompletedValue();
-    return m_lastFinishedID;
+    if (m_trackingFence)
+    {
+        uint64_t completed = m_trackingFence->GetCompletedValue();
+        if (completed == UINT64_MAX)
+            getDevice()->m_deviceLost = true;
+        else if (!getDevice()->m_deviceLost)
+            advanceLastFinishedID(completed);
+    }
+    return m_lastFinishedID.load();
 }
 
 Result CommandQueueImpl::createCommandEncoder(const CommandEncoderDesc& desc, ICommandEncoder** outEncoder)
@@ -2174,76 +2171,137 @@ Result CommandQueueImpl::createCommandEncoder(const CommandEncoderDesc& desc, IC
     return SLANG_OK;
 }
 
-Result CommandQueueImpl::submit(const SubmitDesc& desc)
+void CommandQueueImpl::consumeCommandBuffers(const SubmitDesc& desc, uint64_t sequence)
 {
-    // Increment last submitted ID which is used to track command buffer completion.
-    ++m_lastSubmittedID;
-
-    // Wait on fences.
-    for (uint32_t i = 0; i < desc.waitFenceCount; ++i)
+    for (uint32_t i = 0; i < desc.commandBufferCount; ++i)
     {
-        FenceImpl* fence = checked_cast<FenceImpl*>(desc.waitFences[i]);
-        SLANG_D3D_RETURN_ON_FAIL_REPORT(m_d3dQueue->Wait(fence->m_fence.get(), desc.waitFenceValues[i]), m_device);
-    }
-
-    // Execute command lists.
-    short_vector<ID3D12CommandList*> commandLists;
-    for (uint32_t i = 0; i < desc.commandBufferCount; i++)
-    {
-        CommandBufferImpl* commandBuffer = checked_cast<CommandBufferImpl*>(desc.commandBuffers[i]);
-        commandBuffer->m_submissionID = m_lastSubmittedID;
+        auto* commandBuffer = checked_cast<CommandBufferImpl*>(desc.commandBuffers[i]);
+        commandBuffer->m_submissionID = sequence;
         for (const auto& queryWrite : commandBuffer->m_commandList.getQueryWrites())
         {
             checked_cast<QueryPool*>(queryWrite.queryPool)
-                ->markQueryRangeSubmitted(queryWrite.index, queryWrite.count, m_lastSubmittedID);
+                ->markQueryRangeSubmitted(queryWrite.index, queryWrite.count, sequence);
         }
-        m_commandBuffersInFlight.push_back(commandBuffer);
-        commandLists.push_back(commandBuffer->m_d3dCommandList);
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_commandBuffersInFlight.emplace_back(commandBuffer);
     }
-    if (commandLists.size() > 0)
-    {
-        m_d3dQueue->ExecuteCommandLists(commandLists.size(), commandLists.data());
-    }
+}
 
-    // Signal fences.
-    for (uint32_t i = 0; i < desc.signalFenceCount; ++i)
-    {
-        FenceImpl* fence = checked_cast<FenceImpl*>(desc.signalFences[i]);
-        SLANG_D3D_RETURN_ON_FAIL_REPORT(m_d3dQueue->Signal(fence->m_fence.get(), desc.signalFenceValues[i]), m_device);
-    }
-
-    SLANG_D3D_RETURN_ON_FAIL_REPORT(m_d3dQueue->Signal(m_trackingFence.get(), m_lastSubmittedID), m_device);
-
-    retireCommandBuffers();
-
-#if SLANG_RHI_ENABLE_AFTERMATH
-    // Check for device removal. When not using a swapchain, we cannot rely on present calls to detect device removal.
-    // This is a workaround to ensure we catch device removal in such scenarios.
+Result CommandQueueImpl::submit(const SubmitDesc& desc)
+{
     DeviceImpl* device = getDevice<DeviceImpl>();
-    if (device->m_aftermathCrashDumper && FAILED(m_d3dDevice->GetDeviceRemovedReason()))
-    {
-        AftermathCrashDumper::waitForDump();
-        SLANG_RHI_ASSERT_FAILURE("D3D12 device lost");
-    }
-#endif
+    if (device->m_deviceLost)
+        return SLANG_FAIL;
 
+    short_vector<ID3D12CommandList*> commandLists;
+    for (uint32_t i = 0; i < desc.commandBufferCount; ++i)
+        commandLists.push_back(checked_cast<CommandBufferImpl*>(desc.commandBuffers[i])->m_d3dCommandList);
+
+    std::unique_lock<std::mutex> submitLock(m_submitMutex);
+    for (uint32_t i = 0; i < desc.commandBufferCount; ++i)
+        if (checked_cast<CommandBufferImpl*>(desc.commandBuffers[i])->m_submissionID != 0)
+            return SLANG_E_INVALID_ARG;
+    uint64_t sequence = m_lastSubmittedID.load() + 1;
+    HRESULT result = S_OK;
+    for (uint32_t i = 0; i < desc.waitFenceCount && SUCCEEDED(result); ++i)
+        result = m_d3dQueue->Wait(checked_cast<FenceImpl*>(desc.waitFences[i])->m_fence.get(), desc.waitFenceValues[i]);
+    if (SUCCEEDED(result) && !commandLists.empty())
+        m_d3dQueue->ExecuteCommandLists(commandLists.size(), commandLists.data());
+    for (uint32_t i = 0; i < desc.signalFenceCount && SUCCEEDED(result); ++i)
+    {
+        auto* fence = checked_cast<FenceImpl*>(desc.signalFences[i]);
+        result = m_d3dQueue->Signal(fence->m_fence.get(), desc.signalFenceValues[i]);
+    }
+    if (SUCCEEDED(result))
+        result = m_d3dQueue->Signal(m_trackingFence.get(), sequence);
+    if (SUCCEEDED(result))
+        result = m_d3dDevice->GetDeviceRemovedReason();
+    // Any failure here is a device removal, so the recordings are consumed either way and wait for
+    // the device-lost discard rather than for a completion that will never be signalled.
+    consumeCommandBuffers(desc, sequence);
+    if (FAILED(result))
+    {
+        device->m_deviceLost = true;
+        submitLock.unlock();
+#if SLANG_RHI_ENABLE_AFTERMATH
+        if (device->m_aftermathCrashDumper)
+            AftermathCrashDumper::waitForDump();
+#endif
+        device->printError("D3D12 submission failed and the device is lost (HRESULT=0x%08x).", unsigned(result));
+        return SLANG_FAIL;
+    }
+    m_lastSubmittedID = sequence;
+    if (desc.outSequence)
+        *desc.outSequence = sequence;
+    submitLock.unlock();
+    retireCommandBuffers();
     return SLANG_OK;
 }
 
 Result CommandQueueImpl::waitOnHost()
 {
     DeviceImpl* device = getDevice<DeviceImpl>();
-    m_lastSubmittedID++;
-    SLANG_D3D_RETURN_ON_FAIL_REPORT(m_d3dQueue->Signal(m_trackingFence.get(), m_lastSubmittedID), m_device);
-    ResetEvent(m_globalWaitHandle);
-    SLANG_D3D_RETURN_ON_FAIL_REPORT(
-        m_trackingFence->SetEventOnCompletion(m_lastSubmittedID, m_globalWaitHandle),
-        m_device
-    );
-    WaitForSingleObject(m_globalWaitHandle, INFINITE);
+    if (device->m_deviceLost)
+    {
+        device->collectGarbage();
+        return SLANG_FAIL;
+    }
+    uint64_t sequence;
+    HRESULT result;
+    {
+        std::lock_guard<std::mutex> submitLock(m_submitMutex);
+        sequence = m_lastSubmittedID.load() + 1;
+        result = m_d3dQueue->Signal(m_trackingFence.get(), sequence);
+        if (SUCCEEDED(result))
+            m_lastSubmittedID = sequence;
+    }
+    if (FAILED(result))
+    {
+        device->m_deviceLost = true;
+        device->collectGarbage();
+        return SLANG_FAIL;
+    }
+    SLANG_RETURN_ON_FAIL(waitForSequence(sequence, kTimeoutInfinite));
     device->flushValidationMessages();
-    retireCommandBuffers();
     return SLANG_OK;
+}
+
+Result CommandQueueImpl::waitForSequence(uint64_t sequence, uint64_t timeoutNs)
+{
+    if (sequence > m_lastSubmittedID.load())
+        return SLANG_E_INVALID_ARG;
+    DeviceImpl* device = getDevice<DeviceImpl>();
+    auto loseDevice = [&]() -> Result
+    {
+        device->m_deviceLost = true;
+        device->collectGarbage();
+        return SLANG_FAIL;
+    };
+    if (device->m_deviceLost)
+        return SLANG_FAIL;
+    if (m_trackingFence->GetCompletedValue() < sequence)
+    {
+        // A private event per call keeps concurrent waiters on different targets independent.
+        HANDLE waitHandle = CreateEventEx(nullptr, nullptr, 0, EVENT_ALL_ACCESS);
+        if (!waitHandle)
+            return SLANG_FAIL;
+        SLANG_RHI_DEFERRED({ ::CloseHandle(waitHandle); });
+        if (FAILED(m_trackingFence->SetEventOnCompletion(sequence, waitHandle)))
+            return loseDevice();
+        uint64_t milliseconds = timeoutNs / 1'000'000 + (timeoutNs % 1'000'000 != 0);
+        DWORD waitMilliseconds =
+            timeoutNs == kTimeoutInfinite ? INFINITE : DWORD(std::min<uint64_t>(milliseconds, INFINITE - 1));
+        DWORD waitResult = WaitForSingleObject(waitHandle, waitMilliseconds);
+        if (waitResult == WAIT_TIMEOUT)
+            return FAILED(m_d3dDevice->GetDeviceRemovedReason()) ? loseDevice() : SLANG_E_TIME_OUT;
+        if (waitResult != WAIT_OBJECT_0)
+            return loseDevice();
+    }
+    if (m_trackingFence->GetCompletedValue() == UINT64_MAX || FAILED(m_d3dDevice->GetDeviceRemovedReason()))
+        return loseDevice();
+    advanceLastFinishedID(sequence);
+    retireCommandBuffers();
+    return device->m_deviceLost ? SLANG_FAIL : SLANG_OK;
 }
 
 Result CommandQueueImpl::getNativeHandle(NativeHandle* outHandle)
@@ -2477,16 +2535,19 @@ Result CommandBufferImpl::init()
 Result CommandBufferImpl::reset()
 {
     DeviceImpl* device = getDevice<DeviceImpl>();
-    SLANG_D3D_RETURN_ON_FAIL_REPORT(m_d3dCommandAllocator->Reset(), device);
-    SLANG_D3D_RETURN_ON_FAIL_REPORT(m_d3dCommandList->Reset(m_d3dCommandAllocator, nullptr), device);
-    // SetDescriptorHeaps is not valid on COPY command lists.
-    if (m_queue->m_commandListType != D3D12_COMMAND_LIST_TYPE_COPY)
+    if (!device->m_deviceLost)
     {
-        ID3D12DescriptorHeap* heaps[] = {
-            device->m_gpuCbvSrvUavHeap->getHeap(),
-            device->m_gpuSamplerHeap->getHeap(),
-        };
-        m_d3dCommandList->SetDescriptorHeaps(SLANG_COUNT_OF(heaps), heaps);
+        SLANG_D3D_RETURN_ON_FAIL_REPORT(m_d3dCommandAllocator->Reset(), device);
+        SLANG_D3D_RETURN_ON_FAIL_REPORT(m_d3dCommandList->Reset(m_d3dCommandAllocator, nullptr), device);
+        // SetDescriptorHeaps is not valid on COPY command lists.
+        if (m_queue->m_commandListType != D3D12_COMMAND_LIST_TYPE_COPY)
+        {
+            ID3D12DescriptorHeap* heaps[] = {
+                device->m_gpuCbvSrvUavHeap->getHeap(),
+                device->m_gpuSamplerHeap->getHeap(),
+            };
+            m_d3dCommandList->SetDescriptorHeaps(SLANG_COUNT_OF(heaps), heaps);
+        }
     }
 
     m_cbvSrvUavArena.reset();

@@ -256,7 +256,10 @@
 | `submit`                  | yes | yes  | yes   | yes   | yes    | yes   | yes  |
 | `getNativeHandle`         | :x: | yes  | :x:   | yes   | yes    | yes   | yes  |
 | `waitOnHost`              | yes | yes  | yes   | yes   | yes    | yes   | yes  |
+| `getCompletedSequence`    | :x: | :x:  | :x:   | yes   | yes    | :x:   | :x:  |
+| `waitForSequence`         | :x: | :x:  | :x:   | yes   | yes    | :x:   | :x:  |
 | `getTimestampCalibration` | yes | yes  | yes   | yes   | yes    | :x:   | :x:  |
+| `SubmitDesc::outSequence` | :x: | :x:  | :x:   | yes   | yes    | :x:   | :x:  |
 
 ### Queue type support
 

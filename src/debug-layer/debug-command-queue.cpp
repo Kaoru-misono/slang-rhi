@@ -72,6 +72,19 @@ Result DebugCommandQueue::submit(const SubmitDesc& desc)
             RHI_VALIDATION_ERROR_FORMAT("'desc.commandBuffers[%u]' must not be null.", i);
             return SLANG_E_INVALID_ARG;
         }
+        if (getDebugObj(desc.commandBuffers[i])->ctx != ctx)
+        {
+            RHI_VALIDATION_ERROR_FORMAT("'desc.commandBuffers[%u]' belongs to a different device.", i);
+            return SLANG_E_INVALID_ARG;
+        }
+        for (uint32_t j = 0; j < i; ++j)
+        {
+            if (desc.commandBuffers[j] == desc.commandBuffers[i])
+            {
+                RHI_VALIDATION_ERROR_FORMAT("'desc.commandBuffers[%u]' is submitted more than once.", i);
+                return SLANG_E_INVALID_ARG;
+            }
+        }
         innerCommandBuffers.push_back(getInnerObj(desc.commandBuffers[i]));
     }
     for (uint32_t i = 0; i < desc.waitFenceCount; ++i)
@@ -79,6 +92,11 @@ Result DebugCommandQueue::submit(const SubmitDesc& desc)
         if (!desc.waitFences[i])
         {
             RHI_VALIDATION_ERROR_FORMAT("'desc.waitFences[%u]' must not be null.", i);
+            return SLANG_E_INVALID_ARG;
+        }
+        if (getDebugObj(desc.waitFences[i])->ctx != ctx)
+        {
+            RHI_VALIDATION_ERROR_FORMAT("'desc.waitFences[%u]' belongs to a different device.", i);
             return SLANG_E_INVALID_ARG;
         }
         innerWaitFences.push_back(getInnerObj(desc.waitFences[i]));
@@ -90,9 +108,12 @@ Result DebugCommandQueue::submit(const SubmitDesc& desc)
             RHI_VALIDATION_ERROR_FORMAT("'desc.signalFences[%u]' must not be null.", i);
             return SLANG_E_INVALID_ARG;
         }
+        if (getDebugObj(desc.signalFences[i])->ctx != ctx)
+        {
+            RHI_VALIDATION_ERROR_FORMAT("'desc.signalFences[%u]' belongs to a different device.", i);
+            return SLANG_E_INVALID_ARG;
+        }
         innerSignalFences.push_back(getInnerObj(desc.signalFences[i]));
-        getDebugObj(desc.signalFences[i])->maxValueToSignal =
-            max(getDebugObj(desc.signalFences[i])->maxValueToSignal, desc.signalFenceValues[i]);
     }
 
     SubmitDesc innerDesc = desc;
@@ -100,7 +121,16 @@ Result DebugCommandQueue::submit(const SubmitDesc& desc)
     innerDesc.waitFences = innerWaitFences.data();
     innerDesc.signalFences = innerSignalFences.data();
 
-    return baseObject->submit(innerDesc);
+    Result result = baseObject->submit(innerDesc);
+    if (SLANG_SUCCEEDED(result))
+    {
+        for (uint32_t i = 0; i < desc.signalFenceCount; ++i)
+        {
+            getDebugObj(desc.signalFences[i])->maxValueToSignal =
+                max(getDebugObj(desc.signalFences[i])->maxValueToSignal, desc.signalFenceValues[i]);
+        }
+    }
+    return result;
 }
 
 Result DebugCommandQueue::waitOnHost()
@@ -108,6 +138,26 @@ Result DebugCommandQueue::waitOnHost()
     SLANG_RHI_DEBUG_API(ICommandQueue, waitOnHost);
 
     return baseObject->waitOnHost();
+}
+
+Result DebugCommandQueue::getCompletedSequence(uint64_t* outSequence)
+{
+    SLANG_RHI_DEBUG_API(ICommandQueue, getCompletedSequence);
+
+    if (!outSequence)
+    {
+        RHI_VALIDATION_ERROR("'outSequence' must not be null.");
+        return SLANG_E_INVALID_ARG;
+    }
+
+    return baseObject->getCompletedSequence(outSequence);
+}
+
+Result DebugCommandQueue::waitForSequence(uint64_t sequence, uint64_t timeoutNs)
+{
+    SLANG_RHI_DEBUG_API(ICommandQueue, waitForSequence);
+
+    return baseObject->waitForSequence(sequence, timeoutNs);
 }
 
 Result DebugCommandQueue::getNativeHandle(NativeHandle* outHandle)

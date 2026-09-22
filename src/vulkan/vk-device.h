@@ -217,7 +217,11 @@ public:
     DeviceImpl();
     ~DeviceImpl();
 
-    void deferDelete(Resource* resource);
+protected:
+    virtual ReclamationQueues getReclamationQueues() override;
+    virtual bool proveIdleAfterDeviceLoss() override;
+    virtual void retireInternalQueueResources() override;
+    virtual void discardInternalQueueResources() override;
 
 public:
     VkBool32 handleDebugMessage(
@@ -273,6 +277,9 @@ public:
     VulkanModule m_module;
     VulkanApi m_api;
 
+    // Registered during device initialization; aliased native queues share one lock.
+    std::map<VkQueue, std::mutex> m_nativeQueueMutexes;
+    std::mutex& registerNativeQueue(VkQueue queue) { return m_nativeQueueMutexes[queue]; }
     VulkanDeviceQueue m_deviceQueue;
     // m_queueFamilyIndex is the graphics queue family. The compute/transfer
     // families are selected separately (dedicated where available) to back the

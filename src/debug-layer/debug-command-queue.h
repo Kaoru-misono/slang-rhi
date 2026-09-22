@@ -21,6 +21,8 @@ public:
     ) override;
     virtual SLANG_NO_THROW Result SLANG_MCALL submit(const SubmitDesc& desc) override;
     virtual SLANG_NO_THROW Result SLANG_MCALL waitOnHost() override;
+    virtual SLANG_NO_THROW Result SLANG_MCALL getCompletedSequence(uint64_t* outSequence) override;
+    virtual SLANG_NO_THROW Result SLANG_MCALL waitForSequence(uint64_t sequence, uint64_t timeoutNs) override;
     virtual SLANG_NO_THROW Result SLANG_MCALL getNativeHandle(NativeHandle* outHandle) override;
     virtual SLANG_NO_THROW Result SLANG_MCALL getTimestampCalibration(TimestampCalibration* outCalibration) override;
 };

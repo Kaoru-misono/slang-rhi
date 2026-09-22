@@ -4,8 +4,6 @@
 #include "d3d12-shader-object.h"
 #include "../transient-buffer-heap.h"
 
-#include "core/ring-queue.h"
-
 namespace rhi::d3d12 {
 
 class CommandQueueImpl : public CommandQueue
@@ -15,26 +13,14 @@ public:
     ComPtr<ID3D12Device> m_d3dDevice;
     ComPtr<ID3D12CommandQueue> m_d3dQueue;
     ComPtr<ID3D12Fence> m_trackingFence;
-    HANDLE m_globalWaitHandle;
     uint32_t m_queueIndex = 0;
     D3D12_COMMAND_LIST_TYPE m_commandListType = D3D12_COMMAND_LIST_TYPE_DIRECT;
 
-    uint64_t m_lastSubmittedID = 0;
-    uint64_t m_lastFinishedID = 0;
-
+    /// Covers sequence assignment through publication; the native queue itself is free-threaded.
+    std::mutex m_submitMutex;
     std::mutex m_mutex;
     std::list<RefPtr<CommandBufferImpl>> m_commandBuffersPool;
     std::list<RefPtr<CommandBufferImpl>> m_commandBuffersInFlight;
-
-    // Deferred delete queue for GPU resources.
-    // Resources are held here until the GPU has finished using them.
-    struct DeferredDelete
-    {
-        uint64_t submissionID;
-        Resource* resource;
-    };
-    std::mutex m_deferredDeleteQueueMutex;
-    RingQueue<DeferredDelete> m_deferredDeleteQueue;
 
 #if SLANG_RHI_ENABLE_AFTERMATH
     GFSDK_Aftermath_ContextHandle m_aftermathContext;
@@ -50,14 +36,11 @@ public:
     Result getOrCreateCommandBuffer(CommandBufferImpl** outCommandBuffer);
     void retireCommandBuffer(CommandBufferImpl* commandBuffer);
     void retireCommandBuffers();
-    uint64_t updateLastFinishedID();
-
-    /// Queue a resource for deferred deletion. The resource will be deleted
-    /// once the GPU has finished all work submitted up to this point.
-    void deferDelete(Resource* resource);
-
-    /// Delete deferred resources that are no longer in use by the GPU.
-    void executeDeferredDeletes();
+    /// Marks the submitted recordings as consumed by `sequence` and retains them until it completes.
+    void consumeCommandBuffers(const SubmitDesc& desc, uint64_t sequence);
+    virtual void retireCompletedCommandBuffers(uint64_t completed) override;
+    virtual void abandonCommandBuffersAfterDeviceLoss() override;
+    virtual uint64_t updateLastFinishedID() override;
 
     // ICommandQueue implementation
     virtual SLANG_NO_THROW Result SLANG_MCALL createCommandEncoder(
@@ -66,6 +49,7 @@ public:
     ) override;
     virtual SLANG_NO_THROW Result SLANG_MCALL submit(const SubmitDesc& desc) override;
     virtual SLANG_NO_THROW Result SLANG_MCALL waitOnHost() override;
+    virtual SLANG_NO_THROW Result SLANG_MCALL waitForSequence(uint64_t sequence, uint64_t timeoutNs) override;
     virtual SLANG_NO_THROW Result SLANG_MCALL getNativeHandle(NativeHandle* outHandle) override;
     virtual SLANG_NO_THROW Result SLANG_MCALL getTimestampCalibration(TimestampCalibration* outCalibration) override;
 };
@@ -105,6 +89,7 @@ public:
     GPUDescriptorArena m_samplerArena;
     TransientBufferArena m_constantBufferArena;
     BindingCache m_bindingCache;
+    // Nonzero consumes this recording, including a submission that lost the device.
     uint64_t m_submissionID = 0;
 
 #if SLANG_RHI_ENABLE_AFTERMATH
