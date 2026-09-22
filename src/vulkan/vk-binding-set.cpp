@@ -241,7 +241,7 @@ Result BindingSetImpl::initNative()
             {
             case VK_DESCRIPTOR_TYPE_SAMPLER:
                 imageInfos.push_back({
-                    checked_cast<SamplerImpl*>(binding.sampler.get())->m_sampler,
+                    checked_cast<SamplerImpl*>(binding.resource.get())->m_sampler,
                     VK_NULL_HANDLE,
                     VK_IMAGE_LAYOUT_UNDEFINED,
                 });
@@ -251,7 +251,7 @@ Result BindingSetImpl::initNative()
             case VK_DESCRIPTOR_TYPE_STORAGE_IMAGE:
                 imageInfos.push_back({
                     VK_NULL_HANDLE,
-                    checked_cast<TextureViewImpl*>(binding.textureView.get())->getView().imageView,
+                    checked_cast<TextureViewImpl*>(binding.resource.get())->getView().imageView,
                     write.descriptorType == VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
                                                                              : VK_IMAGE_LAYOUT_GENERAL,
                 });
@@ -260,7 +260,7 @@ Result BindingSetImpl::initNative()
             case VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER:
             case VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER:
             {
-                auto* buffer = checked_cast<BufferImpl*>(binding.buffer.get());
+                auto* buffer = checked_cast<BufferImpl*>(binding.resource.get());
                 if (buffer->m_desc.format == Format::Undefined)
                 {
                     device->printError(
@@ -276,7 +276,7 @@ Result BindingSetImpl::initNative()
             }
             case VK_DESCRIPTOR_TYPE_STORAGE_BUFFER:
             {
-                auto* buffer = checked_cast<BufferImpl*>(binding.buffer.get());
+                auto* buffer = checked_cast<BufferImpl*>(binding.resource.get());
                 bufferInfos.push_back({
                     buffer->m_buffer.m_buffer,
                     binding.bufferRange.offset,
@@ -292,7 +292,7 @@ Result BindingSetImpl::initNative()
                 };
                 info.accelerationStructureCount = 1;
                 info.pAccelerationStructures =
-                    &checked_cast<AccelerationStructureImpl*>(binding.accelerationStructure.get())->m_vkHandle;
+                    &checked_cast<AccelerationStructureImpl*>(binding.resource.get())->m_vkHandle;
                 accelerationStructureInfos.push_back(info);
                 write.pNext = &accelerationStructureInfos.back();
                 break;

@@ -2012,17 +2012,15 @@ public:
     virtual SLANG_NO_THROW const BindingSetLayoutDesc& SLANG_MCALL getDesc() = 0;
 };
 
-/// One resolved binding. Exactly one resource pointer must be set and it must match the kind of
-/// the layout entry at `slot`.
+/// One resolved binding. The layout entry at `slot` fixes which interface `resource` must expose:
+/// ISampler, ITextureView, IBuffer or IAccelerationStructure.
 struct BindingSetEntry
 {
     uint32_t slot = 0;
     uint32_t arrayIndex = 0;
-    ISampler* sampler = nullptr;
-    ITextureView* textureView = nullptr;
-    IBuffer* buffer = nullptr;
+    ISlangUnknown* resource = nullptr;
+    /// Only meaningful for a buffer kind; must be kEntireBuffer for any other kind.
     BufferRange bufferRange = kEntireBuffer;
-    IAccelerationStructure* accelerationStructure = nullptr;
 };
 
 /// A StructuredBuffer entry takes its stride from the reflected element type, which the layout

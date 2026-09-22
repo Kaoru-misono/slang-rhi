@@ -22,15 +22,32 @@ namespace rhi::debug {
 
 namespace {
 
+bool exposesInterface(ISlangUnknown* resource, const Guid& guid)
+{
+    ComPtr<ISlangUnknown> queried;
+    return SLANG_SUCCEEDED(resource->queryInterface(guid, (void**)queried.writeRef()));
+}
+
 bool matchesBindingKind(BindingKind kind, const BindingSetEntry& entry)
 {
     if (isSamplerBindingKind(kind))
-        return entry.sampler != nullptr;
+        return exposesInterface(entry.resource, ISampler::getTypeGuid());
     if (isTextureBindingKind(kind))
-        return entry.textureView != nullptr;
+        return exposesInterface(entry.resource, ITextureView::getTypeGuid());
     if (isBufferBindingKind(kind))
-        return entry.buffer != nullptr;
-    return entry.accelerationStructure != nullptr;
+        return exposesInterface(entry.resource, IBuffer::getTypeGuid());
+    return exposesInterface(entry.resource, IAccelerationStructure::getTypeGuid());
+}
+
+const char* bindingKindResourceName(BindingKind kind)
+{
+    if (isSamplerBindingKind(kind))
+        return "sampler";
+    if (isTextureBindingKind(kind))
+        return "texture view";
+    if (isBufferBindingKind(kind))
+        return "buffer";
+    return "acceleration structure";
 }
 
 } // namespace
@@ -1115,12 +1132,10 @@ Result DebugDevice::createBindingSet(const BindingSetDesc& desc, IBindingSet** o
             );
             return SLANG_E_INVALID_ARG;
         }
-        uint32_t resourceCount = uint32_t(entry.sampler != nullptr) + uint32_t(entry.textureView != nullptr) +
-                                 uint32_t(entry.buffer != nullptr) + uint32_t(entry.accelerationStructure != nullptr);
-        if (resourceCount != 1)
+        if (!entry.resource)
         {
             RHI_VALIDATION_ERROR_FORMAT(
-                "Binding at slot %u, array index %u must set exactly one resource.",
+                "Binding at slot %u, array index %u must set a resource.",
                 entry.slot,
                 entry.arrayIndex
             );
@@ -1129,9 +1144,20 @@ Result DebugDevice::createBindingSet(const BindingSetDesc& desc, IBindingSet** o
         if (!matchesBindingKind(layoutEntry.kind, entry))
         {
             RHI_VALIDATION_ERROR_FORMAT(
-                "Binding at slot %u, array index %u has a resource that does not match the layout kind.",
+                "Binding at slot %u, array index %u expects a %s.",
                 entry.slot,
-                entry.arrayIndex
+                entry.arrayIndex,
+                bindingKindResourceName(layoutEntry.kind)
+            );
+            return SLANG_E_INVALID_ARG;
+        }
+        if (!isBufferBindingKind(layoutEntry.kind) && entry.bufferRange != kEntireBuffer)
+        {
+            RHI_VALIDATION_ERROR_FORMAT(
+                "Binding at slot %u, array index %u sets a buffer range on a %s binding.",
+                entry.slot,
+                entry.arrayIndex,
+                bindingKindResourceName(layoutEntry.kind)
             );
             return SLANG_E_INVALID_ARG;
         }

@@ -54,15 +54,13 @@ public:
     uint32_t m_bindingCount = 0;
 };
 
-/// One resolved binding of a set. Exactly one of the resource references is set, matching the kind
-/// of the layout entry it belongs to.
+/// One resolved binding of a set. The kind of the layout entry it belongs to says which resource
+/// class `resource` is, so consumers downcast by kind instead of choosing between typed fields.
 struct BindingSetBinding
 {
-    RefPtr<Sampler> sampler;
-    RefPtr<TextureView> textureView;
-    RefPtr<Buffer> buffer;
+    RefPtr<Resource> resource;
+    /// Only meaningful for a buffer kind.
     BufferRange bufferRange = kEntireBuffer;
-    RefPtr<AccelerationStructure> accelerationStructure;
 };
 
 class BindingSet : public IBindingSet, public DeviceChild

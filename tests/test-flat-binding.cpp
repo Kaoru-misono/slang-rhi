@@ -519,10 +519,10 @@ GPU_TEST_CASE("flat-binding-set-rejections", D3D12 | Vulkan)
     REQUIRE(output != nullptr);
 
     const std::array<BindingSetEntry, 4> entries{{
-        {.slot = 0, .textureView = view},
-        {.slot = 1, .sampler = sampler},
-        {.slot = 2, .buffer = items},
-        {.slot = 3, .buffer = output},
+        {.slot = 0, .resource = view},
+        {.slot = 1, .resource = sampler},
+        {.slot = 2, .resource = items},
+        {.slot = 3, .resource = output},
     }};
     BindingSetDesc desc{};
     desc.layout = sceneLayout;
@@ -539,8 +539,7 @@ GPU_TEST_CASE("flat-binding-set-rejections", D3D12 | Vulkan)
         auto invalidEntries = entries;
         auto invalid = desc;
         invalid.entries = invalidEntries.data();
-        invalidEntries[0].textureView = nullptr;
-        invalidEntries[0].buffer = items;
+        invalidEntries[0].resource = items;
         ComPtr<IBindingSet> rejectedSet;
         CHECK(SLANG_FAILED(device->createBindingSet(invalid, rejectedSet.writeRef())));
     }
@@ -585,16 +584,16 @@ GPU_TEST_CASE("flat-binding-set-rejections", D3D12 | Vulkan)
         auto invalidEntries = entries;
         auto invalid = desc;
         invalid.entries = invalidEntries.data();
-        invalidEntries[0].textureView = nullptr;
+        invalidEntries[0].resource = nullptr;
         ComPtr<IBindingSet> rejectedSet;
         CHECK(SLANG_FAILED(device->createBindingSet(invalid, rejectedSet.writeRef())));
     }
     {
-        INFO("two resources in entry");
+        INFO("buffer range on a non-buffer entry");
         auto invalidEntries = entries;
         auto invalid = desc;
         invalid.entries = invalidEntries.data();
-        invalidEntries[0].buffer = items;
+        invalidEntries[0].bufferRange = {0, 16};
         ComPtr<IBindingSet> rejectedSet;
         CHECK(SLANG_FAILED(device->createBindingSet(invalid, rejectedSet.writeRef())));
     }
@@ -831,10 +830,10 @@ auto createFlatSceneSet(
 {
     // Pipeline-layout validation must first record the structured-buffer strides checked at set creation.
     const BindingSetEntry entries[]{
-        {.slot = 0, .buffer = input},
-        {.slot = 1, .buffer = output},
-        {.slot = 2, .textureView = scene.textureView},
-        {.slot = 3, .sampler = scene.sampler},
+        {.slot = 0, .resource = input},
+        {.slot = 1, .resource = output},
+        {.slot = 2, .resource = scene.textureView},
+        {.slot = 3, .resource = scene.sampler},
     };
     const BindingSetDesc desc{
         .layout = scene.setLayout,
@@ -974,16 +973,16 @@ auto createFlatSamplerScene(IDevice* device, IBindingSetLayout* setLayout, uint3
     scene.textureView = scene.texture->getDefaultView();
     REQUIRE(scene.textureView != nullptr);
     scene.samplers.resize(samplerCount);
-    std::vector<BindingSetEntry> entries{{.slot = 0, .textureView = scene.textureView}};
+    std::vector<BindingSetEntry> entries{{.slot = 0, .resource = scene.textureView}};
     for (uint32_t i = 0; i < samplerCount; ++i)
     {
         SamplerDesc samplerDesc{};
         // Distinct descriptor values prevent backend sampler interning from masking heap exhaustion.
         samplerDesc.mipLODBias = static_cast<float>(i) * 0.25f;
         REQUIRE_CALL(device->createSampler(samplerDesc, scene.samplers[i].writeRef()));
-        entries.emplace_back(BindingSetEntry{.slot = 1, .arrayIndex = i, .sampler = scene.samplers[i]});
+        entries.emplace_back(BindingSetEntry{.slot = 1, .arrayIndex = i, .resource = scene.samplers[i]});
     }
-    entries.emplace_back(BindingSetEntry{.slot = 2, .buffer = scene.output});
+    entries.emplace_back(BindingSetEntry{.slot = 2, .resource = scene.output});
     const BindingSetDesc desc{
         .layout = setLayout,
         .entries = entries.data(),

@@ -120,7 +120,7 @@ Result BindingSetImpl::initNative()
             {
             case BindingKind::SamplerState:
             case BindingKind::SamplerComparisonState:
-                source = checked_cast<SamplerImpl*>(binding.sampler.get())->m_descriptor.cpuHandle;
+                source = checked_cast<SamplerImpl*>(binding.resource.get())->m_descriptor.cpuHandle;
                 break;
             case BindingKind::Texture1D:
             case BindingKind::Texture2D:
@@ -128,18 +128,18 @@ Result BindingSetImpl::initNative()
             case BindingKind::Texture3D:
             case BindingKind::TextureCube:
             case BindingKind::TextureCubeArray:
-                source = checked_cast<TextureViewImpl*>(binding.textureView.get())->getSRV();
+                source = checked_cast<TextureViewImpl*>(binding.resource.get())->getSRV();
                 break;
             case BindingKind::RWTexture1D:
             case BindingKind::RWTexture2D:
             case BindingKind::RWTexture2DArray:
             case BindingKind::RWTexture3D:
-                source = checked_cast<TextureViewImpl*>(binding.textureView.get())->getUAV();
+                source = checked_cast<TextureViewImpl*>(binding.resource.get())->getUAV();
                 break;
             case BindingKind::Buffer:
             case BindingKind::RWBuffer:
             {
-                auto* buffer = checked_cast<BufferImpl*>(binding.buffer.get());
+                auto* buffer = checked_cast<BufferImpl*>(binding.resource.get());
                 source = entry.kind == BindingKind::Buffer
                              ? buffer->getSRV(buffer->m_desc.format, 0, binding.bufferRange)
                              : buffer->getUAV(buffer->m_desc.format, 0, binding.bufferRange);
@@ -148,7 +148,7 @@ Result BindingSetImpl::initNative()
             case BindingKind::StructuredBuffer:
             case BindingKind::RWStructuredBuffer:
             {
-                auto* buffer = checked_cast<BufferImpl*>(binding.buffer.get());
+                auto* buffer = checked_cast<BufferImpl*>(binding.resource.get());
                 uint32_t stride = layout->m_reflection[slot].structuredBufferStride;
                 if (!stride)
                     stride = buffer->m_desc.elementSize;
@@ -170,14 +170,14 @@ Result BindingSetImpl::initNative()
             case BindingKind::ByteAddressBuffer:
             case BindingKind::RWByteAddressBuffer:
             {
-                auto* buffer = checked_cast<BufferImpl*>(binding.buffer.get());
+                auto* buffer = checked_cast<BufferImpl*>(binding.resource.get());
                 source = entry.kind == BindingKind::ByteAddressBuffer
                              ? buffer->getSRV(Format::Undefined, 0, binding.bufferRange)
                              : buffer->getUAV(Format::Undefined, 0, binding.bufferRange);
                 break;
             }
             case BindingKind::RaytracingAccelerationStructure:
-                source = checked_cast<AccelerationStructureImpl*>(binding.accelerationStructure.get())
+                source = checked_cast<AccelerationStructureImpl*>(binding.resource.get())
                              ->m_descriptor.cpuHandle;
                 break;
             }
