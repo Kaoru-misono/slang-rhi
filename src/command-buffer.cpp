@@ -26,6 +26,25 @@ Result CommandQueue::getCompletedSequence(uint64_t* outSequence)
     return SLANG_OK;
 }
 
+Result CommandQueue::waitForSequence(uint64_t sequence, uint64_t timeoutNs)
+{
+    if (sequence > m_lastSubmittedID.load())
+        return SLANG_E_INVALID_ARG;
+    Device* device = getDevice();
+    if (device->m_deviceLost)
+        return SLANG_FAIL;
+    SLANG_RETURN_ON_FAIL(waitForSequenceNative(sequence, timeoutNs));
+    advanceLastFinishedID(sequence);
+    retireCommandBuffers();
+    // Reclamation may itself discover a loss that invalidates the completion just observed.
+    return device->m_deviceLost ? SLANG_FAIL : SLANG_OK;
+}
+
+void CommandQueue::retireCommandBuffers()
+{
+    getDevice()->collectGarbage();
+}
+
 // ----------------------------------------------------------------------------
 // RenderPassEncoder
 // ----------------------------------------------------------------------------
