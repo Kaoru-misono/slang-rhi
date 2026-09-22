@@ -774,6 +774,7 @@ if(SLANG_RHI_BUILD_TESTS AND NOT SLANG_RHI_BUILD_SHARED AND NOT EMSCRIPTEN)
         tests/test-arena-allocator.cpp
         tests/test-device-features.cpp
         tests/test-flat-binding-abi.cpp
+        tests/test-flat-binding.cpp
         tests/test-constant-layout.cpp
         tests/test-flat-native-d3d12.cpp
         tests/test-flat-native-vulkan.cpp
