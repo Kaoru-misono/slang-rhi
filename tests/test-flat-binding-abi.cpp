@@ -78,9 +78,10 @@ auto checkConstantSchema(slang::TypeLayoutReflection* reflected) -> void
     expectRejected(schema, "constants", "alignment");
 
     // Every mismatch keeps the total size unchanged: sizeof alone cannot validate ABI.
-    std::vector<ConstantFieldDesc> fields(schema.fields.begin(), schema.fields.end());
+    std::vector<ConstantFieldDesc> fields(schema.fields, schema.fields + schema.fieldCount);
     schema = flat::paramsSchema();
-    schema.fields = fields;
+    schema.fields = fields.data();
+    schema.fieldCount = uint32_t(fields.size());
     auto original = fields;
     fields[0].offset = 4;
     expectRejected(schema, "constants.direction", "offset");
@@ -109,9 +110,9 @@ auto checkConstantSchema(slang::TypeLayoutReflection* reflected) -> void
     expectRejected(schema, "constants.matrix", "row/column");
     fields = original;
     auto nested = *fields[4].type;
-    std::vector<ConstantFieldDesc> nestedFields(nested.fields.begin(), nested.fields.end());
+    std::vector<ConstantFieldDesc> nestedFields(nested.fields, nested.fields + nested.fieldCount);
     nestedFields[0].name = "missingTag";
-    nested.fields = nestedFields;
+    nested.fields = nestedFields.data();
     fields[4].type = &nested;
     expectRejected(schema, "constants.nested.missingTag", "not found");
     fields = original;
@@ -124,7 +125,7 @@ auto checkConstantSchema(slang::TypeLayoutReflection* reflected) -> void
     fields[4].offset = SIZE_MAX;
     expectRejected(schema, "constants.nested", "beyond");
     fields = original;
-    schema.fields = std::span(fields).first(fields.size() - 1);
+    schema.fieldCount = uint32_t(fields.size() - 1);
     expectRejected(schema, "constants", "field count");
     REQUIRE_CALL(validateConstantLayout(reflected, flat::paramsSchema(), diagnostic));
     CHECK(diagnostic.empty());

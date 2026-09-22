@@ -504,6 +504,17 @@ const char* getSkipMessage(const doctest::TestCaseData* tc);
 void reportGpuTestExecuted(DeviceType deviceType);
 bool checkNoSilentGpuSkips();
 
+/// While one of these is alive, an error reported through the debug callback no longer fails the
+/// running test. Tests that exercise a rejection path hold one around the calls they expect to fail.
+class ExpectedErrorScope
+{
+public:
+    ExpectedErrorScope();
+    ~ExpectedErrorScope();
+    ExpectedErrorScope(const ExpectedErrorScope&) = delete;
+    ExpectedErrorScope& operator=(const ExpectedErrorScope&) = delete;
+};
+
 } // namespace rhi::testing
 
 #define GPU_TEST_CASE_IMPL(name, func, flags, debugLayerOptions)                                                       \

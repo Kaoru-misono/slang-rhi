@@ -62,6 +62,7 @@ inline const ConstantTypeDesc& paramsSchema()
         .size = sizeof(Nested),
         .alignment = alignof(Nested),
         .fields = nestedFields,
+        .fieldCount = 2,
     };
     static const ConstantFieldDesc fields[]{
         {"direction", offsetof(Params, direction), &float3Type},
@@ -75,6 +76,7 @@ inline const ConstantTypeDesc& paramsSchema()
         .size = sizeof(Params),
         .alignment = alignof(Params),
         .fields = fields,
+        .fieldCount = 5,
     };
     return params;
 }
