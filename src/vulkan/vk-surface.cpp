@@ -389,7 +389,10 @@ Result SurfaceImpl::createSwapchain()
 void SurfaceImpl::destroySwapchain()
 {
     auto& api = m_device->m_api;
-    api.vkQueueWaitIdle(m_device->m_queue->m_queue);
+    {
+        std::lock_guard<std::mutex> lock(*m_device->m_queue->m_nativeQueueMutex);
+        api.vkQueueWaitIdle(m_device->m_queue->m_queue);
+    }
     m_textures.clear();
     for (FrameData& frameData : m_frameData)
     {
@@ -577,7 +580,11 @@ Result SurfaceImpl::present()
     presentInfo.pImageIndices = &m_currentTextureIndex;
     presentInfo.waitSemaphoreCount = 1;
     presentInfo.pWaitSemaphores = &renderFinishedSemaphore;
-    VkResult result = api.vkQueuePresentKHR(m_device->m_queue->m_queue, &presentInfo);
+    VkResult result;
+    {
+        std::lock_guard<std::mutex> lock(*m_device->m_queue->m_nativeQueueMutex);
+        result = api.vkQueuePresentKHR(m_device->m_queue->m_queue, &presentInfo);
+    }
     // A window may resize between acquisition and presentation. Drop this frame and let
     // the application reconfigure the surface when it processes the resize event.
     if (result == VK_ERROR_OUT_OF_DATE_KHR)

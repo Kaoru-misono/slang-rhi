@@ -3,6 +3,7 @@
 #include "vk-base.h"
 
 #include <vector>
+#include <mutex>
 
 namespace rhi::vk {
 
@@ -21,7 +22,7 @@ struct VulkanDeviceQueue
     };
 
     /// Initialize - must be called before anything else can be done
-    Result init(const VulkanApi& api, VkQueue queue, int queueIndex);
+    Result init(const VulkanApi& api, VkQueue queue, int queueIndex, std::mutex& queueMutex);
 
     /// Flushes the current command list, and steps to next (internally this is equivalent to a stepA followed by stepB)
     void flush();
@@ -37,9 +38,14 @@ struct VulkanDeviceQueue
     /// Release retained resources associated with completed submissions without
     /// polling fence slots that do not retain resources.
     void retireCompletedResources();
+    void discardRetainedResources();
 
     /// Blocks until all work submitted to GPU has completed
-    void waitForIdle() { m_api->vkQueueWaitIdle(m_queue); }
+    void waitForIdle()
+    {
+        std::lock_guard<std::mutex> lock(*m_queueMutex);
+        m_api->vkQueueWaitIdle(m_queue);
+    }
 
     /// Get the graphics queue index (as set on init)
     int getQueueIndex() const { return m_queueIndex; }
@@ -90,6 +96,7 @@ protected:
     void _updateFenceAtIndex(int fenceIndex, bool blocking);
 
     VkQueue m_queue = VK_NULL_HANDLE;
+    std::mutex* m_queueMutex = nullptr;
 
     int m_numCommandBuffers = 0;
     int m_commandBufferIndex = 0;

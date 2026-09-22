@@ -162,7 +162,7 @@ DeviceImpl::~DeviceImpl()
     }
 
     // Check the device queue is valid else, we can't wait on it..
-    if (m_deviceQueue.isValid())
+    if (m_deviceQueue.isValid() && !m_deviceLost)
     {
         waitForGpu();
     }
@@ -177,24 +177,26 @@ DeviceImpl::~DeviceImpl()
         m_api.vkDestroySampler(m_device, m_defaultSampler, nullptr);
     }
 
-    // Auxiliary queue shutdown can release resources into the graphics queue's
-    // deferred-delete list, so the graphics queue must remain alive until last.
+    // Keep all tracking objects alive until every queue has released its owned resources.
     if (m_computeQueue)
     {
         m_computeQueue->shutdown();
-        m_computeQueue.setNull();
     }
     if (m_transferQueue)
     {
         m_transferQueue->shutdown();
-        m_transferQueue.setNull();
     }
     if (m_queue)
     {
         m_queue->shutdown();
-        m_queue.setNull();
     }
     m_deviceQueue.destroy();
+    collectGarbage();
+    SLANG_RHI_ASSERT(m_deferredDeletes.size() == 0);
+    m_computeQueue.setNull();
+    m_transferQueue.setNull();
+    m_queue.setNull();
+
     m_bindlessDescriptorSet.setNull();
 
     descriptorSetAllocator.close();
@@ -211,10 +213,36 @@ DeviceImpl::~DeviceImpl()
     }
 }
 
-void DeviceImpl::deferDelete(Resource* resource)
+Device::ReclamationQueues DeviceImpl::getReclamationQueues()
 {
-    SLANG_RHI_ASSERT(m_queue != nullptr);
-    m_queue->deferDelete(resource);
+    return {m_queue.get(), m_computeQueue.get(), m_transferQueue.get()};
+}
+
+bool DeviceImpl::proveIdleAfterDeviceLoss()
+{
+    // Waiting a native queue idle requires the external synchronization every submitter observes.
+    std::vector<std::unique_lock<std::mutex>> queueLocks;
+    for (auto& [queue, mutex] : m_nativeQueueMutexes)
+        queueLocks.emplace_back(mutex);
+    for (const auto& [queue, mutex] : m_nativeQueueMutexes)
+    {
+        VkResult result = m_api.vkQueueWaitIdle(queue);
+        if (result != VK_SUCCESS && result != VK_ERROR_DEVICE_LOST)
+            return false;
+    }
+    return true;
+}
+
+void DeviceImpl::retireInternalQueueResources()
+{
+    if (m_deviceQueue.isValid())
+        m_deviceQueue.retireCompletedResources();
+}
+
+void DeviceImpl::discardInternalQueueResources()
+{
+    if (m_deviceQueue.isValid())
+        m_deviceQueue.discardRetainedResources();
 }
 
 VkBool32 DeviceImpl::handleDebugMessage(
@@ -2012,7 +2040,7 @@ Result DeviceImpl::initialize(const DeviceDesc& desc, BackendImpl* backend)
     {
         VkQueue queue;
         m_api.vkGetDeviceQueue(m_device, m_queueFamilyIndex, 0, &queue);
-        SLANG_RETURN_ON_FAIL(m_deviceQueue.init(m_api, queue, m_queueFamilyIndex));
+        SLANG_RETURN_ON_FAIL(m_deviceQueue.init(m_api, queue, m_queueFamilyIndex, registerNativeQueue(queue)));
     }
 
     m_queue = new CommandQueueImpl(this, QueueType::Graphics);
@@ -2859,6 +2887,12 @@ Result DeviceImpl::waitForFences(
     uint64_t timeout
 )
 {
+    if (m_deviceLost)
+        return SLANG_FAIL;
+    if (fenceCount == 0)
+        return SLANG_OK;
+    if (!fences || !fenceValues)
+        return SLANG_E_INVALID_ARG;
     short_vector<VkSemaphore> semaphores;
     for (uint32_t i = 0; i < fenceCount; ++i)
     {
@@ -2881,6 +2915,8 @@ Result DeviceImpl::waitForFences(
         // shader-abort message it carries) is surfaced when a caller waits on timeline fences
         // after an aborting dispatch rather than via the command queue.
         reportVulkanError(result, "vkWaitSemaphores", SLANG_RHI_SOURCE_LOCATION(), this);
+        if (m_deviceLost)
+            collectGarbage();
         return SLANG_FAIL;
     }
     return SLANG_OK;

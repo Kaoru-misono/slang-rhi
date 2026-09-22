@@ -18,6 +18,7 @@ class Heap;
 
 class CommandBuffer;
 class CommandEncoder;
+class CommandQueue;
 class ComputePassEncoder;
 class RayTracingPassEncoder;
 
