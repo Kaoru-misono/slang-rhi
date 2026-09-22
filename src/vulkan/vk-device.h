@@ -49,7 +49,6 @@ public:
     );
 
     Result initialize(const DeviceDesc& desc, BackendImpl* backend);
-    virtual SLANG_NO_THROW Result SLANG_MCALL getQueue(QueueType type, ICommandQueue** outQueue) override;
     virtual SLANG_NO_THROW Result SLANG_MCALL createSurface(WindowHandle windowHandle, ISurface** outSurface) override;
     virtual SLANG_NO_THROW Result SLANG_MCALL createTexture(
         const TextureDesc& desc,
@@ -219,6 +218,7 @@ public:
 
 protected:
     virtual ReclamationQueues getReclamationQueues() override;
+    virtual void releaseQueueReferences() override;
     virtual bool proveIdleAfterDeviceLoss() override;
     virtual void retireInternalQueueResources() override;
     virtual void discardInternalQueueResources() override;

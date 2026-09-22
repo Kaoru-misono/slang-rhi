@@ -38,6 +38,11 @@ Fence::Fence(Device* device, const FenceDesc& desc)
     m_descHolder.holdString(m_desc.label);
 }
 
+void Fence::deleteThis()
+{
+    getDevice()->deferDelete(this);
+}
+
 
 // ----------------------------------------------------------------------------
 // Buffer
@@ -234,6 +239,12 @@ TextureView::TextureView(Device* device, const TextureViewDesc& desc)
 {
     m_descHolder.holdString(m_desc.label);
     m_sampler = checked_cast<Sampler*>(m_desc.sampler);
+}
+
+void TextureView::deleteThis()
+{
+    m_sampler.setNull();
+    getDevice()->deferDelete(this);
 }
 
 Result TextureView::getDescriptorHandle(DescriptorHandleAccess access, DescriptorHandle* outHandle)

@@ -177,27 +177,10 @@ DeviceImpl::~DeviceImpl()
         m_api.vkDestroySampler(m_device, m_defaultSampler, nullptr);
     }
 
-    // Keep all tracking objects alive until every queue has released its owned resources.
-    if (m_computeQueue)
-    {
-        m_computeQueue->shutdown();
-    }
-    if (m_transferQueue)
-    {
-        m_transferQueue->shutdown();
-    }
-    if (m_queue)
-    {
-        m_queue->shutdown();
-    }
+    // Release what the internal queue retains before the shared teardown drains the deferred
+    // deletes those releases enqueue.
     m_deviceQueue.destroy();
-    collectGarbage();
-    SLANG_RHI_ASSERT(m_deferredDeletes.size() == 0);
-    m_computeQueue.setNull();
-    m_transferQueue.setNull();
-    m_queue.setNull();
-
-    m_bindlessDescriptorSet.setNull();
+    shutdownQueues();
 
     // Destroy VMA allocator after all resources and queues are destroyed,
     // but before the VkDevice is destroyed.
@@ -220,6 +203,14 @@ DeviceImpl::~DeviceImpl()
 Device::ReclamationQueues DeviceImpl::getReclamationQueues()
 {
     return {m_queue.get(), m_computeQueue.get(), m_transferQueue.get()};
+}
+
+void DeviceImpl::releaseQueueReferences()
+{
+    m_computeQueue.setNull();
+    m_transferQueue.setNull();
+    m_queue.setNull();
+    m_bindlessDescriptorSet.setNull();
 }
 
 bool DeviceImpl::proveIdleAfterDeviceLoss()
@@ -2122,24 +2113,6 @@ Result DeviceImpl::initialize(const DeviceDesc& desc, BackendImpl* backend)
 void DeviceImpl::waitForGpu()
 {
     m_deviceQueue.flushAndWait();
-}
-
-Result DeviceImpl::getQueue(QueueType type, ICommandQueue** outQueue)
-{
-    switch (type)
-    {
-    case QueueType::Graphics:
-        returnComPtr(outQueue, m_queue);
-        return SLANG_OK;
-    case QueueType::Compute:
-        returnComPtr(outQueue, m_computeQueue);
-        return SLANG_OK;
-    case QueueType::Transfer:
-        returnComPtr(outQueue, m_transferQueue);
-        return SLANG_OK;
-    default:
-        return SLANG_E_INVALID_ARG;
-    }
 }
 
 Result DeviceImpl::readBuffer(IBuffer* buffer, Offset offset, Size size, void* outData)

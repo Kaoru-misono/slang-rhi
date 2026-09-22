@@ -208,8 +208,7 @@ TextureViewImpl::TextureViewImpl(Device* device, const TextureViewDesc& desc)
 void TextureViewImpl::deleteThis()
 {
     m_texture.breakStrongReference();
-    m_sampler.setNull();
-    getDevice<DeviceImpl>()->deferDelete(this);
+    TextureView::deleteThis();
 }
 
 TextureViewImpl::~TextureViewImpl()

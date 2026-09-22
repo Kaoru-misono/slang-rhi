@@ -47,12 +47,15 @@ public:
     // ICommandQueue implementation
     virtual SLANG_NO_THROW QueueType SLANG_MCALL getType() override { return m_type; }
     virtual SLANG_NO_THROW Result SLANG_MCALL getCompletedSequence(uint64_t* outSequence) override;
+    virtual SLANG_NO_THROW Result SLANG_MCALL waitForSequence(uint64_t sequence, uint64_t timeoutNs) override;
     virtual SLANG_NO_THROW Result SLANG_MCALL getTimestampCalibration(TimestampCalibration* outCalibration) override
     {
         SLANG_UNUSED(outCalibration);
         return SLANG_E_NOT_AVAILABLE;
     }
 
+    /// Waits for the device to idle on this queue and releases everything the queue owns.
+    virtual void shutdown() = 0;
     /// Polls the backend tracking primitive and returns the highest sequence known complete.
     virtual uint64_t updateLastFinishedID() = 0;
     /// Returns every command buffer submitted at or below `completed` to the reuse pool.
@@ -60,7 +63,14 @@ public:
     /// Releases the retained command buffers of a device whose completion can no longer be proven.
     virtual void abandonCommandBuffersAfterDeviceLoss() = 0;
 
+    /// Advances device-wide reclamation after this queue's completion has moved forward.
+    void retireCommandBuffers();
+
 protected:
+    /// Blocks on the backend tracking primitive until it reaches `sequence`. Returns SLANG_E_TIME_OUT
+    /// when `timeoutNs` elapses first, or SLANG_FAIL after marking the device lost.
+    virtual Result waitForSequenceNative(uint64_t sequence, uint64_t timeoutNs) = 0;
+
     void advanceLastFinishedID(uint64_t finished)
     {
         uint64_t previous = m_lastFinishedID.load();

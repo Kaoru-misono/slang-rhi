@@ -62,6 +62,10 @@ public:
 public:
     Fence(Device* device, const FenceDesc& desc);
 
+    /// Backends destroy their native fence in the destructor, so the object has to outlive every
+    /// submission that may still signal it.
+    virtual void deleteThis() override;
+
 protected:
     FenceDesc m_desc;
     StructHolder m_descHolder;
@@ -188,6 +192,10 @@ public:
 
 public:
     TextureView(Device* device, const TextureViewDesc& desc);
+
+    /// Drops the sampler reference and defers destruction until no submission can still read the
+    /// view's descriptors. Backends holding a reference to their texture release it first.
+    virtual void deleteThis() override;
 
     // ITextureView interface
     virtual SLANG_NO_THROW const TextureViewDesc& SLANG_MCALL getDesc() override { return m_desc; }
