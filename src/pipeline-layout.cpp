@@ -30,15 +30,25 @@ bool hasCategory(slang::VariableLayoutReflection* variable, Category category)
     return false;
 }
 
-bool isVaryingOnly(slang::VariableLayoutReflection* variable)
+/// Stage in/out, ray payloads and hit attributes are passed between shader stages rather than bound,
+/// so they are not parameters the layout has to describe.
+bool occupiesNoBinding(slang::VariableLayoutReflection* variable)
 {
     if (variable->getCategoryCount() == 0)
         return true;
     for (unsigned i = 0; i < variable->getCategoryCount(); ++i)
     {
-        auto category = variable->getCategoryByIndex(i);
-        if (category != Category::VaryingInput && category != Category::VaryingOutput)
+        switch (variable->getCategoryByIndex(i))
+        {
+        case Category::VaryingInput:
+        case Category::VaryingOutput:
+        case Category::RayPayload:
+        case Category::HitAttributes:
+        case Category::CallablePayload:
+            break;
+        default:
             return false;
+        }
     }
     return true;
 }
@@ -159,6 +169,41 @@ struct ReflectedSet
     slang::TypeLayoutReflection* elementTypeLayout;
 };
 
+/// Entry points of one program each reflect their own uniform block, so sharing a single Inline
+/// block between them needs the blocks compared field by field. Both sides have already passed the
+/// portable subset, which bounds the recursion and leaves only these shapes.
+bool sameConstantLayout(slang::TypeLayoutReflection* left, slang::TypeLayoutReflection* right)
+{
+    if (left->getKind() != right->getKind() || left->getSize() != right->getSize())
+        return false;
+    switch (left->getKind())
+    {
+    case Kind::Struct:
+        if (left->getFieldCount() != right->getFieldCount())
+            return false;
+        for (unsigned i = 0; i < left->getFieldCount(); ++i)
+        {
+            auto* leftField = left->getFieldByIndex(i);
+            auto* rightField = right->getFieldByIndex(i);
+            const char* leftName = leftField->getName();
+            const char* rightName = rightField->getName();
+            if (!leftName || !rightName || std::string_view(leftName) != rightName)
+                return false;
+            if (leftField->getOffset() != rightField->getOffset())
+                return false;
+            if (!sameConstantLayout(leftField->getTypeLayout(), rightField->getTypeLayout()))
+                return false;
+        }
+        return true;
+    case Kind::Array:
+        return left->getElementCount() == right->getElementCount() &&
+               sameConstantLayout(left->getElementTypeLayout(), right->getElementTypeLayout());
+    default:
+        return left->getScalarType() == right->getScalarType() &&
+               left->getElementCount() == right->getElementCount();
+    }
+}
+
 struct PipelineLayoutReflectionValidator
 {
     explicit PipelineLayoutReflectionValidator(PipelineLayout* layout)
@@ -171,6 +216,10 @@ struct PipelineLayoutReflectionValidator
     std::string constantsPath;
     slang::TypeLayoutReflection* constantsTypeLayout = nullptr;
     ConstantsProfile constantsProfile = ConstantsProfile::None;
+    bool constantsFromEntryPoint = false;
+    /// A multi-entry-point program (ray tracing) may declare the same uniform block on several entry
+    /// points; every one of them is validated against the same layout.
+    std::vector<ReflectedSet> entryPointConstants;
 
     Result fail(const std::string& path, const std::string& reason)
     {
@@ -210,6 +259,20 @@ struct PipelineLayoutReflectionValidator
         constantsPath = path;
         constantsTypeLayout = typeLayout;
         constantsProfile = profile;
+        return SLANG_OK;
+    }
+
+    Result collectEntryPointConstants(const std::string& path, slang::TypeLayoutReflection* typeLayout)
+    {
+        if (constantsProfile != ConstantsProfile::None && !constantsFromEntryPoint)
+            return fail(path, "a program may declare at most one execution constant block");
+        if (constantsProfile != ConstantsProfile::None)
+        {
+            entryPointConstants.emplace_back(ReflectedSet{path, typeLayout});
+            return SLANG_OK;
+        }
+        SLANG_RETURN_ON_FAIL(collectConstants(path, typeLayout, ConstantsProfile::Inline));
+        constantsFromEntryPoint = true;
         return SLANG_OK;
     }
 
@@ -253,20 +316,17 @@ struct PipelineLayoutReflectionValidator
                 {
                     SLANG_RETURN_ON_FAIL(collectSet(name, typeLayout->getElementTypeLayout(), 1));
                 }
-                else if (isVaryingOnly(param))
+                else if (occupiesNoBinding(param))
                 {
-                    // Varying and system-value inputs occupy no binding, so they are not parameters
-                    // the layout has to describe.
                 }
                 else if (param->getCategoryCount() == 1 && param->getCategoryByIndex(0) == Category::Uniform)
                 {
                     if (!hasUniformBlock)
                     {
                         auto* varLayout = entryPoint->getVarLayout();
-                        SLANG_RETURN_ON_FAIL(collectConstants(
+                        SLANG_RETURN_ON_FAIL(collectEntryPointConstants(
                             entryPointPath,
-                            varLayout ? varLayout->getTypeLayout() : nullptr,
-                            ConstantsProfile::Inline
+                            varLayout ? varLayout->getTypeLayout() : nullptr
                         ));
                         hasUniformBlock = true;
                     }
@@ -416,6 +476,13 @@ struct PipelineLayoutReflectionValidator
         }
         if (constantsTypeLayout->getSize() != constantsSize)
             return fail(constantsPath, "constantsSize does not match the reflected execution constant block");
+        for (const auto& entryPointBlock : entryPointConstants)
+        {
+            if (SLANG_FAILED(validateConstantLayout(entryPointBlock.elementTypeLayout, diagnostic)))
+                return fail(entryPointBlock.path, "entry point constants are not portable: " + diagnostic);
+            if (!sameConstantLayout(entryPointBlock.elementTypeLayout, constantsTypeLayout))
+                return fail(entryPointBlock.path, "entry point declares different execution constants");
+        }
         if (constantsProfile == ConstantsProfile::Inline &&
             constantsSize > layout->getDevice()->getInlineConstantsSizeLimit())
             return fail(constantsPath, "inline execution constant block exceeds the device size limit");

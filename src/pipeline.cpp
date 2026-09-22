@@ -114,6 +114,7 @@ RayTracingPipeline::RayTracingPipeline(Device* device, const RayTracingPipelineD
         m_descHolder.holdString(hitGroup.intersectionEntryPoint);
     }
     m_program = checked_cast<ShaderProgram*>(desc.program);
+    m_layout = checked_cast<PipelineLayout*>(desc.layout);
 }
 
 // ----------------------------------------------------------------------------

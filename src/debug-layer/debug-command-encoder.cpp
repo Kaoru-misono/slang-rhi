@@ -609,6 +609,33 @@ DebugRayTracingPassEncoder::DebugRayTracingPassEncoder(DebugContext* ctx, DebugC
     m_rootObject = new DebugRootShaderObject(ctx);
 }
 
+Result DebugRayTracingPassEncoder::bindPipeline(
+    IRayTracingPipeline* pipeline,
+    IShaderTable* shaderTable,
+    const FlatBindingDesc& bindings
+)
+{
+    SLANG_RHI_DEBUG_API(IRayTracingPassEncoder, bindPipeline);
+
+    m_commandEncoder->requireOpen();
+    m_commandEncoder->requireRayTracingPass();
+
+    if (!pipeline)
+    {
+        RHI_VALIDATION_ERROR("'pipeline' must not be null.");
+        return SLANG_E_INVALID_ARG;
+    }
+    if (!shaderTable)
+    {
+        RHI_VALIDATION_ERROR("'shaderTable' must not be null.");
+        return SLANG_E_INVALID_ARG;
+    }
+    SLANG_RETURN_ON_FAIL(validateFlatBindings(ctx, pipeline->getDesc().layout, bindings));
+    Result result = baseObject->bindPipeline(pipeline, shaderTable, bindings);
+    m_pipelineBound = SLANG_SUCCEEDED(result);
+    return result;
+}
+
 IShaderObject* DebugRayTracingPassEncoder::bindPipeline(IRayTracingPipeline* pipeline, IShaderTable* shaderTable)
 {
     SLANG_RHI_DEBUG_API(IRayTracingPassEncoder, bindPipeline);

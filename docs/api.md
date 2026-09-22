@@ -261,10 +261,11 @@
 
 ## `IRayTracingPassEncoder` interface
 
-| API            | D3D12 | Vulkan |
-|----------------|-------|--------|
-| `bindPipeline` | yes   | yes    |
-| `dispatchRays` | yes   | yes    |
+| API                   | D3D12 | Vulkan |
+|-----------------------|-------|--------|
+| `bindPipeline`        | yes   | yes    |
+| `bindPipeline` (flat) | yes   | yes    |
+| `dispatchRays`        | yes   | yes    |
 
 ## `ICommandBuffer` interface
 

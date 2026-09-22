@@ -476,24 +476,56 @@ RayTracingPassEncoder::RayTracingPassEncoder(CommandEncoder* commandEncoder)
 {
 }
 
-void RayTracingPassEncoder::writeRayTracingState()
+bool RayTracingPassEncoder::writeRayTracingState()
 {
+    if (!m_pipeline || (!m_fixedBindingData && !m_rootObject))
+        return false;
     commands::SetRayTracingState cmd;
     cmd.pipeline = m_pipeline;
     cmd.shaderTable = m_shaderTable;
-    m_commandEncoder->getPipelineSpecializationArgs(m_pipeline, m_rootObject, cmd.specializationArgs);
-    if (SLANG_FAILED(m_commandEncoder->getBindingData(m_rootObject, cmd.bindingData)))
+    if (m_fixedBindingData)
     {
-        m_commandEncoder->getDevice()
-            ->handleMessage(DebugMessageType::Error, DebugMessageSource::Layer, "Failed to get binding data");
-        return;
+        cmd.specializationArgs = nullptr;
+        cmd.bindingData = m_fixedBindingData;
+    }
+    else
+    {
+        m_commandEncoder->getPipelineSpecializationArgs(m_pipeline, m_rootObject, cmd.specializationArgs);
+        if (SLANG_FAILED(m_commandEncoder->getBindingData(m_rootObject, cmd.bindingData)))
+        {
+            m_commandEncoder->getDevice()
+                ->handleMessage(DebugMessageType::Error, DebugMessageSource::Layer, "Failed to get binding data");
+            return false;
+        }
     }
 
     m_commandList->write(std::move(cmd));
+    return true;
+}
+
+Result RayTracingPassEncoder::bindPipeline(
+    IRayTracingPipeline* pipeline,
+    IShaderTable* shaderTable,
+    const FlatBindingDesc& bindings
+)
+{
+    m_pipeline = nullptr;
+    m_shaderTable = nullptr;
+    m_rootObject = nullptr;
+    m_fixedBindingData = nullptr;
+    if (!m_commandList || !shaderTable)
+        return SLANG_E_INVALID_ARG;
+    SLANG_RETURN_ON_FAIL(m_commandEncoder->bindFlatPipeline(
+        checked_cast<RayTracingPipeline*>(pipeline), bindings, m_fixedBindingData
+    ));
+    m_pipeline = pipeline;
+    m_shaderTable = shaderTable;
+    return SLANG_OK;
 }
 
 IShaderObject* RayTracingPassEncoder::bindPipeline(IRayTracingPipeline* pipeline, IShaderTable* shaderTable)
 {
+    m_fixedBindingData = nullptr;
     if (m_commandList)
     {
         m_pipeline = pipeline;
@@ -512,6 +544,7 @@ void RayTracingPassEncoder::bindPipeline(
     IShaderObject* rootObject
 )
 {
+    m_fixedBindingData = nullptr;
     if (m_commandList)
     {
         m_pipeline = checked_cast<RayTracingPipeline*>(pipeline);
@@ -524,7 +557,8 @@ void RayTracingPassEncoder::dispatchRays(uint32_t rayGenShaderIndex, uint32_t wi
 {
     if (m_commandList)
     {
-        writeRayTracingState();
+        if (!writeRayTracingState())
+            return;
         commands::DispatchRays cmd;
         cmd.rayGenShaderIndex = rayGenShaderIndex;
         cmd.width = width;
@@ -578,6 +612,10 @@ void RayTracingPassEncoder::writeTimestamp(IQueryPool* queryPool, uint32_t query
 
 void RayTracingPassEncoder::end()
 {
+    m_pipeline = nullptr;
+    m_shaderTable = nullptr;
+    m_rootObject = nullptr;
+    m_fixedBindingData = nullptr;
     if (m_commandList)
     {
         commands::EndRayTracingPass cmd;

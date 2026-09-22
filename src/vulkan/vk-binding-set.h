@@ -34,11 +34,19 @@ public:
     void free(VkDescriptorSet descriptorSet, VkDescriptorPool pool);
 
 private:
+    /// A set may only be allocated from a pool that reserved every descriptor type its layout binds,
+    /// so each pool carries the sizes it was created with.
+    struct Pool
+    {
+        VkDescriptorPool pool = VK_NULL_HANDLE;
+        std::vector<VkDescriptorPoolSize> sizes;
+    };
+
     Result createPool(std::span<const VkDescriptorPoolSize> poolSizes, VkDescriptorPool* outPool);
 
     DeviceImpl* m_device = nullptr;
     std::mutex m_mutex;
-    std::vector<VkDescriptorPool> m_pools;
+    std::vector<Pool> m_pools;
 };
 
 class BindingSetLayoutImpl : public BindingSetLayout

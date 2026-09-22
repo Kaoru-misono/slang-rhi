@@ -1050,7 +1050,9 @@ Result DeviceImpl::createRayTracingPipeline2(const RayTracingPipelineDesc& desc,
 
     createInfo.pDynamicState = nullptr;
 
-    createInfo.layout = program->m_rootShaderObjectLayout->m_pipelineLayout;
+    auto* pipelineLayout = checked_cast<PipelineLayoutImpl*>(desc.layout);
+    createInfo.layout = pipelineLayout ? pipelineLayout->m_pipelineLayout
+                                       : program->m_rootShaderObjectLayout->m_pipelineLayout;
     createInfo.basePipelineHandle = VK_NULL_HANDLE;
     createInfo.basePipelineIndex = 0;
 
