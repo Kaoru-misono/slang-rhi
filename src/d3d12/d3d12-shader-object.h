@@ -97,7 +97,8 @@ public:
     };
     struct TextureState
     {
-        TextureViewImpl* textureView;
+        TextureImpl* texture;
+        SubresourceRange range;
         ResourceState state;
     };
 
@@ -132,10 +133,11 @@ public:
     uint32_t rootParameterCount;
 };
 
-/// Cache for sampler descriptor allocations to avoid exhausting the 2048-descriptor
-/// GPU sampler heap. Sampler bindings don't change between draw calls (only uniform
-/// data changes via setData), so we can safely reuse the same sampler descriptor
-/// range across draws that share the same shader object and layout.
+/// Cache of the sampler descriptor tables a command buffer has already filled, keyed by the owner
+/// of the samplers: a shader object with its layout, or a flat binding set. Neither owner's sampler
+/// bindings change between binds (a shader object only changes uniform data through setData, and a
+/// binding set is immutable), so reusing the table keeps repeated binds from exhausting the small
+/// shader-visible sampler heap.
 struct BindingCache
 {
     static constexpr uint32_t kMaxSamplerEntries = 16;
@@ -147,8 +149,16 @@ struct BindingCache
         GPUDescriptorRange samplers;
     };
 
+    struct FlatSamplerEntry
+    {
+        const BindingSet* set;
+        GPUDescriptorRange samplers;
+    };
+
     SamplerEntry samplerEntries[kMaxSamplerEntries] = {};
     uint32_t samplerEntryCount = 0;
+    FlatSamplerEntry flatSamplerEntries[kMaxSamplerEntries] = {};
+    uint32_t flatSamplerEntryCount = 0;
 
     GPUDescriptorRange lookupSamplers(uint32_t objectUid, ShaderObjectLayoutImpl* layout)
     {
@@ -168,7 +178,29 @@ struct BindingCache
         }
     }
 
-    void reset() { samplerEntryCount = 0; }
+    GPUDescriptorRange lookupFlatSamplers(const BindingSet* set) const
+    {
+        for (uint32_t i = 0; i < flatSamplerEntryCount; ++i)
+        {
+            if (flatSamplerEntries[i].set == set)
+                return flatSamplerEntries[i].samplers;
+        }
+        return {};
+    }
+
+    void storeFlatSamplers(const BindingSet* set, GPUDescriptorRange samplers)
+    {
+        if (flatSamplerEntryCount < kMaxSamplerEntries)
+        {
+            flatSamplerEntries[flatSamplerEntryCount++] = {set, samplers};
+        }
+    }
+
+    void reset()
+    {
+        samplerEntryCount = 0;
+        flatSamplerEntryCount = 0;
+    }
 };
 
 } // namespace rhi::d3d12
