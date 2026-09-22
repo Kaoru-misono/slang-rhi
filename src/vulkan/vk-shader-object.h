@@ -95,9 +95,12 @@ public:
         BufferImpl* buffer;
         ResourceState state;
     };
+    /// The range is stored alongside the texture because a flat bind declares its texture accesses
+    /// directly, with no texture view to read one from.
     struct TextureState
     {
-        TextureViewImpl* textureView;
+        TextureImpl* texture;
+        SubresourceRange subresourceRange;
         ResourceState state;
     };
     /// Entry point data for copying to shader binding table (ray tracing)
