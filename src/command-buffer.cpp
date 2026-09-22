@@ -278,7 +278,8 @@ Result ComputePassEncoder::bindPipelineWithData(
     m_pipeline = nullptr;
     m_rootObject = nullptr;
     m_fixedBindingData = nullptr;
-    if (!m_commandList || !pipeline || !data || !size || size > 128 || size % 4 || (bufferCount && !buffers))
+    if (!m_commandList || !pipeline || !data || !size || size > kMaxInlineConstantsSize || size % 4 ||
+        (bufferCount && !buffers))
         return SLANG_E_INVALID_ARG;
     auto* program = checked_cast<ShaderProgram*>(pipeline->getProgram());
     if (program->getDevice() != m_commandEncoder->getDevice() || program->isSpecializable())

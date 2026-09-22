@@ -9,6 +9,8 @@ namespace {
 using Kind = slang::TypeReflection::Kind;
 using Scalar = slang::TypeReflection::ScalarType;
 
+constexpr unsigned kMaxSchemaNestingDepth = 64;
+
 SlangResult fail(std::string& diagnostic, const std::string& path, const char* reason)
 {
     diagnostic = path + ": " + reason;
@@ -29,7 +31,7 @@ SlangResult validate(
 )
 {
     // Reject malformed/cyclic caller schemas before recursing indefinitely.
-    if (!layout || depth > 64)
+    if (!layout || depth > kMaxSchemaNestingDepth)
         return fail(diagnostic, path, "missing reflection or excessive schema nesting");
     if (layout->getKind() != expected.kind)
         return fail(diagnostic, path, "type kind mismatch");

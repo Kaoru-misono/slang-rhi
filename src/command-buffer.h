@@ -23,6 +23,10 @@ namespace rhi {
 struct BindingData
 {};
 
+/// Upper bound on the inline constant block a pipeline can be bound with, matching the smallest
+/// push-constant budget the supported backends guarantee.
+constexpr size_t kMaxInlineConstantsSize = 128;
+
 class CommandQueue : public ICommandQueue, public DeviceChild
 {
 public:
