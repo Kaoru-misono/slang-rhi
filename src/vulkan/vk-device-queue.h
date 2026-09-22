@@ -7,6 +7,9 @@
 
 namespace rhi::vk {
 
+// vk-base.h includes this header before its own forward declarations.
+class DeviceImpl;
+
 struct VulkanDeviceQueue
 {
     enum
@@ -22,7 +25,7 @@ struct VulkanDeviceQueue
     };
 
     /// Initialize - must be called before anything else can be done
-    Result init(const VulkanApi& api, VkQueue queue, int queueIndex, std::mutex& queueMutex);
+    Result init(DeviceImpl* device, const VulkanApi& api, VkQueue queue, int queueIndex, std::mutex& queueMutex);
 
     /// Flushes the current command list, and steps to next (internally this is equivalent to a stepA followed by stepB)
     void flush();
@@ -41,11 +44,7 @@ struct VulkanDeviceQueue
     void discardRetainedResources();
 
     /// Blocks until all work submitted to GPU has completed
-    void waitForIdle()
-    {
-        std::lock_guard<std::mutex> lock(*m_queueMutex);
-        m_api->vkQueueWaitIdle(m_queue);
-    }
+    void waitForIdle();
 
     /// Get the graphics queue index (as set on init)
     int getQueueIndex() const { return m_queueIndex; }
@@ -95,6 +94,8 @@ protected:
 
     void _updateFenceAtIndex(int fenceIndex, bool blocking);
 
+    /// Owning device; a raw pointer because the queue is a value member of it.
+    DeviceImpl* m_device = nullptr;
     VkQueue m_queue = VK_NULL_HANDLE;
     std::mutex* m_queueMutex = nullptr;
 

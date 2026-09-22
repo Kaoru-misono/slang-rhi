@@ -389,10 +389,14 @@ Result SurfaceImpl::createSwapchain()
 void SurfaceImpl::destroySwapchain()
 {
     auto& api = m_device->m_api;
+    VkResult waitResult;
     {
         std::lock_guard<std::mutex> lock(*m_device->m_queue->m_nativeQueueMutex);
-        api.vkQueueWaitIdle(m_device->m_queue->m_queue);
+        waitResult = api.vkQueueWaitIdle(m_device->m_queue->m_queue);
     }
+    // Teardown proceeds regardless, but VK_ERROR_DEVICE_LOST must still mark the device lost.
+    if (waitResult != VK_SUCCESS)
+        reportVulkanError(waitResult, "vkQueueWaitIdle", SLANG_RHI_SOURCE_LOCATION(), m_device);
     m_textures.clear();
     for (FrameData& frameData : m_frameData)
     {
