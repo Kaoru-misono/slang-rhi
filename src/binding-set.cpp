@@ -164,6 +164,22 @@ ResourceState getBindingKindResourceState(BindingKind kind)
 // BindingSet
 // ----------------------------------------------------------------------------
 
+namespace {
+
+/// The layout entry kind decides which interface a binding resource must expose, so the entry
+/// carries one generic pointer and the kind resolves it.
+template<typename Interface, typename Impl>
+bool resolveBindingResource(ISlangUnknown* resource, RefPtr<Impl>& outResource)
+{
+    ComPtr<Interface> queried;
+    if (SLANG_FAILED(resource->queryInterface(Interface::getTypeGuid(), (void**)queried.writeRef())))
+        return false;
+    outResource = checked_cast<Impl*>(queried.get());
+    return true;
+}
+
+} // namespace
+
 IBindingSet* BindingSet::getInterface(const Guid& guid)
 {
     if (guid == ISlangUnknown::getTypeGuid() || guid == IBindingSet::getTypeGuid())
@@ -203,39 +219,38 @@ Result BindingSet::init(const BindingSetDesc& desc)
         const auto& layoutEntry = m_layout->m_desc.entries[entry.slot];
         if (entry.arrayIndex >= layoutEntry.count)
             return failEntry("array index is out of bounds");
-        if (int(entry.sampler != nullptr) + int(entry.textureView != nullptr) + int(entry.buffer != nullptr) +
-                int(entry.accelerationStructure != nullptr) !=
-            1)
-            return failEntry("exactly one resource must be specified");
+        if (!entry.resource)
+            return failEntry("resource must not be null");
         auto& binding = m_bindings[m_layout->getBindingOffset(entry.slot) + entry.arrayIndex];
-        if (binding.sampler || binding.textureView || binding.buffer || binding.accelerationStructure)
+        if (binding.resource)
             return failEntry("duplicate binding");
 
-        auto* sampler = checked_cast<Sampler*>(entry.sampler);
-        auto* textureView = checked_cast<TextureView*>(entry.textureView);
-        auto* buffer = checked_cast<Buffer*>(entry.buffer);
-        auto* accelerationStructure = checked_cast<AccelerationStructure*>(entry.accelerationStructure);
-        if ((sampler && sampler->getDevice() != getDevice()) ||
-            (textureView && textureView->getDevice() != getDevice()) ||
-            (buffer && buffer->getDevice() != getDevice()) ||
-            (accelerationStructure && accelerationStructure->getDevice() != getDevice()))
-            return failEntry("resource belongs to another device");
-
         BindingKind kind = layoutEntry.kind;
+        if (!isBufferBindingKind(kind) && entry.bufferRange != kEntireBuffer)
+            return failEntry("buffer range is only valid for a buffer binding");
+
+        RefPtr<Resource> resource;
         ResourceState state = getBindingKindResourceState(kind);
         BufferRange bufferRange = kEntireBuffer;
         if (isSamplerBindingKind(kind))
         {
-            if (!sampler)
+            RefPtr<Sampler> sampler;
+            if (!resolveBindingResource<ISampler>(entry.resource, sampler))
                 return failEntry("expected a sampler");
+            if (sampler->getDevice() != getDevice())
+                return failEntry("resource belongs to another device");
             if ((sampler->getDesc().reductionOp == TextureReductionOp::Comparison) !=
                 (kind == BindingKind::SamplerComparisonState))
                 return failEntry("sampler comparison mode does not match the binding kind");
+            resource = sampler;
         }
         else if (isTextureBindingKind(kind))
         {
-            if (!textureView)
+            RefPtr<TextureView> textureView;
+            if (!resolveBindingResource<ITextureView>(entry.resource, textureView))
                 return failEntry("expected a texture view");
+            if (textureView->getDevice() != getDevice())
+                return failEntry("resource belongs to another device");
             TextureType expectedType;
             switch (kind)
             {
@@ -271,11 +286,15 @@ Result BindingSet::init(const BindingSetDesc& desc)
                                                                        : TextureUsage::UnorderedAccess;
             if (!is_set(textureDesc.usage, usage))
                 return failEntry("texture usage does not support the binding kind");
+            resource = textureView;
         }
         else if (isBufferBindingKind(kind))
         {
-            if (!buffer)
+            RefPtr<Buffer> buffer;
+            if (!resolveBindingResource<IBuffer>(entry.resource, buffer))
                 return failEntry("expected a buffer");
+            if (buffer->getDevice() != getDevice())
+                return failEntry("resource belongs to another device");
             const auto& bufferDesc = buffer->getDesc();
             const auto& requested = entry.bufferRange;
             bufferRange = buffer->resolveBufferRange(requested);
@@ -293,18 +312,20 @@ Result BindingSet::init(const BindingSetDesc& desc)
             if ((kind == BindingKind::StructuredBuffer || kind == BindingKind::RWStructuredBuffer) && stride &&
                 bufferRange.size % stride != 0)
                 return failEntry("buffer range size is not a multiple of the structured buffer stride");
+            resource = buffer;
         }
         else if (kind == BindingKind::RaytracingAccelerationStructure)
         {
-            if (!accelerationStructure)
+            RefPtr<AccelerationStructure> accelerationStructure;
+            if (!resolveBindingResource<IAccelerationStructure>(entry.resource, accelerationStructure))
                 return failEntry("expected an acceleration structure");
+            if (accelerationStructure->getDevice() != getDevice())
+                return failEntry("resource belongs to another device");
+            resource = accelerationStructure;
         }
 
-        binding.sampler = sampler;
-        binding.textureView = textureView;
-        binding.buffer = buffer;
+        binding.resource = resource;
         binding.bufferRange = bufferRange;
-        binding.accelerationStructure = accelerationStructure;
     }
 
     for (uint32_t slot = 0; slot < m_layout->m_desc.entryCount; ++slot)
@@ -312,7 +333,7 @@ Result BindingSet::init(const BindingSetDesc& desc)
         for (uint32_t arrayIndex = 0; arrayIndex < m_layout->m_desc.entries[slot].count; ++arrayIndex)
         {
             const auto& binding = m_bindings[m_layout->getBindingOffset(slot) + arrayIndex];
-            if (!binding.sampler && !binding.textureView && !binding.buffer && !binding.accelerationStructure)
+            if (!binding.resource)
                 return fail(slot, arrayIndex, "binding is missing");
         }
     }
@@ -328,12 +349,15 @@ Result BindingSet::init(const BindingSetDesc& desc)
             const auto& binding = m_bindings[m_layout->getBindingOffset(slot) + arrayIndex];
             ResourceAccess access;
             access.state = state;
-            if (binding.buffer)
-                access.buffer = binding.buffer;
+            if (isBufferBindingKind(layoutEntry.kind))
+            {
+                access.buffer = checked_cast<Buffer*>(binding.resource.get());
+            }
             else
             {
-                access.texture = binding.textureView->getTexture();
-                access.subresourceRange = binding.textureView->getDesc().subresourceRange;
+                auto* textureView = checked_cast<TextureView*>(binding.resource.get());
+                access.texture = textureView->getTexture();
+                access.subresourceRange = textureView->getDesc().subresourceRange;
             }
             m_accesses.emplace_back(access);
         }
