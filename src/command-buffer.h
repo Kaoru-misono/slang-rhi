@@ -213,12 +213,13 @@ public:
     ComPtr<IRayTracingPipeline> m_pipeline;
     ComPtr<IShaderTable> m_shaderTable;
     RefPtr<RootShaderObject> m_rootObject;
+    BindingData* m_fixedBindingData = nullptr;
     /// Command list, nullptr if pass encoder is not active.
     CommandList* m_commandList;
 
     RayTracingPassEncoder(CommandEncoder* commandEncoder);
 
-    void writeRayTracingState();
+    bool writeRayTracingState();
 
     // IRayTracingPassEncoder implementation
     virtual SLANG_NO_THROW IShaderObject* SLANG_MCALL bindPipeline(
@@ -229,6 +230,11 @@ public:
         IRayTracingPipeline* pipeline,
         IShaderTable* shaderTable,
         IShaderObject* rootObject
+    ) override;
+    virtual SLANG_NO_THROW Result SLANG_MCALL bindPipeline(
+        IRayTracingPipeline* pipeline,
+        IShaderTable* shaderTable,
+        const FlatBindingDesc& bindings
     ) override;
     virtual SLANG_NO_THROW void SLANG_MCALL dispatchRays(
         uint32_t rayGenShaderIndex,

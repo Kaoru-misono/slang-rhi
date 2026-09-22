@@ -49,6 +49,24 @@ static VkDescriptorType translateBindingKind(BindingKind kind)
     return VK_DESCRIPTOR_TYPE_SAMPLER;
 }
 
+static bool poolCovers(std::span<const VkDescriptorPoolSize> pool, std::span<const VkDescriptorPoolSize> request)
+{
+    for (const auto& needed : request)
+    {
+        auto found = std::find_if(
+            pool.begin(),
+            pool.end(),
+            [&](const VkDescriptorPoolSize& size)
+            {
+                return size.type == needed.type;
+            }
+        );
+        if (found == pool.end() || found->descriptorCount < needed.descriptorCount)
+            return false;
+    }
+    return true;
+}
+
 void BindingSetDescriptorPool::initialize(DeviceImpl* device)
 {
     m_device = device;
@@ -57,32 +75,32 @@ void BindingSetDescriptorPool::initialize(DeviceImpl* device)
 void BindingSetDescriptorPool::release()
 {
     std::lock_guard<std::mutex> lock(m_mutex);
-    for (VkDescriptorPool pool : m_pools)
-        m_device->m_api.vkDestroyDescriptorPool(m_device->m_api.m_device, pool, nullptr);
+    for (const Pool& pool : m_pools)
+        m_device->m_api.vkDestroyDescriptorPool(m_device->m_api.m_device, pool.pool, nullptr);
     m_pools.clear();
 }
 
 Result BindingSetDescriptorPool::createPool(std::span<const VkDescriptorPoolSize> poolSizes, VkDescriptorPool* outPool)
 {
-    std::vector<VkDescriptorPoolSize> sizes(poolSizes.begin(), poolSizes.end());
-    for (auto& size : sizes)
+    Pool pool;
+    pool.sizes.assign(poolSizes.begin(), poolSizes.end());
+    for (auto& size : pool.sizes)
         size.descriptorCount = std::max(1u, size.descriptorCount * 256u);
-    if (sizes.empty())
-        sizes.push_back({VK_DESCRIPTOR_TYPE_SAMPLER, 1});
+    if (pool.sizes.empty())
+        pool.sizes.emplace_back(VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_SAMPLER, 1});
     VkDescriptorPoolCreateInfo createInfo = {VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
     createInfo.flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
     createInfo.maxSets = 256;
-    createInfo.poolSizeCount = uint32_t(sizes.size());
-    createInfo.pPoolSizes = sizes.data();
-    VkDescriptorPool pool = VK_NULL_HANDLE;
+    createInfo.poolSizeCount = uint32_t(pool.sizes.size());
+    createInfo.pPoolSizes = pool.sizes.data();
     auto& api = m_device->m_api;
-    if (api.vkCreateDescriptorPool(api.m_device, &createInfo, nullptr, &pool) != VK_SUCCESS)
+    if (api.vkCreateDescriptorPool(api.m_device, &createInfo, nullptr, &pool.pool) != VK_SUCCESS)
     {
         m_device->printError("Failed to create a Vulkan descriptor pool.");
         return SLANG_FAIL;
     }
-    m_pools.push_back(pool);
-    *outPool = pool;
+    *outPool = pool.pool;
+    m_pools.emplace_back(std::move(pool));
     return SLANG_OK;
 }
 
@@ -101,11 +119,13 @@ Result BindingSetDescriptorPool::allocate(
     VkDescriptorSet descriptorSet = VK_NULL_HANDLE;
     for (auto it = m_pools.rbegin(); it != m_pools.rend(); ++it)
     {
-        allocateInfo.descriptorPool = *it;
+        if (!poolCovers(it->sizes, poolSizes))
+            continue;
+        allocateInfo.descriptorPool = it->pool;
         if (api.vkAllocateDescriptorSets(api.m_device, &allocateInfo, &descriptorSet) == VK_SUCCESS)
         {
             *outDescriptorSet = descriptorSet;
-            *outPool = *it;
+            *outPool = it->pool;
             return SLANG_OK;
         }
     }

@@ -261,10 +261,11 @@
 
 ## `IRayTracingPassEncoder` interface
 
-| API            | CPU | CUDA | D3D11 | D3D12 | Vulkan | Metal | WGPU |
-|----------------|-----|------|-------|-------|--------|-------|------|
-| `bindPipeline` | :x: | yes  | :x:   | yes   | yes    | :x:   | :x:  |
-| `dispatchRays` | :x: | yes  | :x:   | yes   | yes    | :x:   | :x:  |
+| API                   | CPU | CUDA | D3D11 | D3D12 | Vulkan | Metal | WGPU |
+|-----------------------|-----|------|-------|-------|--------|-------|------|
+| `bindPipeline`        | :x: | yes  | :x:   | yes   | yes    | :x:   | :x:  |
+| `bindPipeline` (flat) | :x: | :x:  | :x:   | yes   | yes    | :x:   | :x:  |
+| `dispatchRays`        | :x: | yes  | :x:   | yes   | yes    | :x:   | :x:  |
 
 ## `ICommandBuffer` interface
 

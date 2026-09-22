@@ -40,6 +40,9 @@ class RayTracingPipelineImpl : public RayTracingPipeline
 {
 public:
     RefPtr<RootShaderObjectLayoutImpl> m_rootObjectLayout;
+    /// Global root signature of the state object: the flat pipeline layout's when the pipeline was
+    /// created with one, the root shader object layout's otherwise.
+    ComPtr<ID3D12RootSignature> m_rootSignature;
     ComPtr<ID3D12StateObject> m_stateObject;
     std::map<std::string, void*> m_shaderIdentifierByName;
 

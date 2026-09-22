@@ -121,6 +121,11 @@ public:
         IShaderTable* shaderTable,
         IShaderObject* rootObject
     ) override;
+    virtual SLANG_NO_THROW Result SLANG_MCALL bindPipeline(
+        IRayTracingPipeline* pipeline,
+        IShaderTable* shaderTable,
+        const FlatBindingDesc& bindings
+    ) override;
 
     virtual SLANG_NO_THROW void SLANG_MCALL dispatchRays(
         uint32_t rayGenShaderIndex,

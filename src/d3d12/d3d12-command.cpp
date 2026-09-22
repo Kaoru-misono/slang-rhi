@@ -1174,7 +1174,7 @@ void CommandRecorder::cmdSetRayTracingState(const commands::SetRayTracingState& 
     if (updatePipeline)
     {
         m_rayTracingPipeline = checked_cast<RayTracingPipelineImpl*>(cmd.pipeline);
-        m_cmdList->SetComputeRootSignature(m_rayTracingPipeline->m_rootObjectLayout->m_rootSignature);
+        m_cmdList->SetComputeRootSignature(m_rayTracingPipeline->m_rootSignature);
         m_cmdList4->SetPipelineState1(m_rayTracingPipeline->m_stateObject);
     }
 

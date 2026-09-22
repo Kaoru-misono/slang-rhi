@@ -698,8 +698,11 @@ Result DeviceImpl::createRayTracingPipeline2(const RayTracingPipelineDesc& desc,
     shaderConfigSubObject.pDesc = &shaderConfig;
     subObjects.push_back(shaderConfigSubObject);
 
+    auto* pipelineLayout = checked_cast<PipelineLayoutImpl*>(desc.layout);
+    ID3D12RootSignature* rootSignature = pipelineLayout ? pipelineLayout->m_rootSignature.get()
+                                                        : program->m_rootObjectLayout->m_rootSignature.get();
     D3D12_GLOBAL_ROOT_SIGNATURE globalSignatureDesc = {};
-    globalSignatureDesc.pGlobalRootSignature = program->m_rootObjectLayout->m_rootSignature.get();
+    globalSignatureDesc.pGlobalRootSignature = rootSignature;
     D3D12_STATE_SUBOBJECT globalSignatureSubobject = {};
     globalSignatureSubobject.Type = D3D12_STATE_SUBOBJECT_TYPE_GLOBAL_ROOT_SIGNATURE;
     globalSignatureSubobject.pDesc = &globalSignatureDesc;
@@ -830,6 +833,7 @@ Result DeviceImpl::createRayTracingPipeline2(const RayTracingPipelineDesc& desc,
     RefPtr<RayTracingPipelineImpl> pipeline = new RayTracingPipelineImpl(this, desc);
     pipeline->m_program = program;
     pipeline->m_rootObjectLayout = program->m_rootObjectLayout;
+    pipeline->m_rootSignature = rootSignature;
     pipeline->m_stateObject = stateObject;
     pipeline->m_shaderIdentifierByName = std::move(shaderIdentifierByName);
     returnComPtr(outPipeline, pipeline);

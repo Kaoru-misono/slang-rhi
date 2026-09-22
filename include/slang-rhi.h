@@ -2337,6 +2337,9 @@ struct RayTracingPipelineDesc
     const void* next = nullptr;
 
     IShaderProgram* program = nullptr;
+    /// Optional. When set, the pipeline is created with this layout and is bound with a
+    /// FlatBindingDesc instead of a shader object.
+    IPipelineLayout* layout = nullptr;
     uint32_t hitGroupCount = 0;
     const HitGroupDesc* hitGroups = nullptr;
     uint32_t maxRecursion = 0;
@@ -2906,6 +2909,14 @@ public:
         IRayTracingPipeline* pipeline,
         IShaderTable* shaderTable,
         IShaderObject* rootObject
+    ) = 0;
+
+    /// Binds a pipeline created with an IPipelineLayout, without a shader object. The constant bytes
+    /// are copied immediately; `sets` must match the pipeline layout set for set.
+    virtual SLANG_NO_THROW Result SLANG_MCALL bindPipeline(
+        IRayTracingPipeline* pipeline,
+        IShaderTable* shaderTable,
+        const FlatBindingDesc& bindings
     ) = 0;
 
     virtual SLANG_NO_THROW void SLANG_MCALL dispatchRays(
