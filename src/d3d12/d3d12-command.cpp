@@ -2477,8 +2477,8 @@ Result CommandBufferImpl::init()
 
     m_constantBufferArena.initialize(&m_queue->m_constantBufferHeap);
 
-    SLANG_RETURN_ON_FAIL(m_cbvSrvUavArena.init(device->m_gpuCbvSrvUavHeap, 128));
-    SLANG_RETURN_ON_FAIL(m_samplerArena.init(device->m_gpuSamplerHeap, 4));
+    SLANG_RETURN_ON_FAIL(m_cbvSrvUavArena.init(device, device->m_gpuCbvSrvUavHeap, 128));
+    SLANG_RETURN_ON_FAIL(m_samplerArena.init(device, device->m_gpuSamplerHeap, 4));
 
     return SLANG_OK;
 }

@@ -27,11 +27,11 @@ BindlessDescriptorSet::~BindlessDescriptorSet()
 
 Result BindlessDescriptorSet::initialize()
 {
-    m_srvUavAllocation = m_device->m_gpuCbvSrvUavHeap->allocate(
-        m_desc.bufferCount + m_desc.textureCount + m_desc.accelerationStructureCount
-    );
+    uint32_t srvUavCount = m_desc.bufferCount + m_desc.textureCount + m_desc.accelerationStructureCount;
+    m_srvUavAllocation = m_device->m_gpuCbvSrvUavHeap->allocate(srvUavCount);
     if (!m_srvUavAllocation)
     {
+        reportGPUDescriptorHeapExhaustion(m_device, m_device->m_gpuCbvSrvUavHeap, srvUavCount);
         return SLANG_FAIL;
     }
     m_srvUavHeapOffset = m_srvUavAllocation.getHeapOffset();
@@ -39,6 +39,7 @@ Result BindlessDescriptorSet::initialize()
     m_samplerAllocation = m_device->m_gpuSamplerHeap->allocate(m_desc.samplerCount);
     if (!m_samplerAllocation)
     {
+        reportGPUDescriptorHeapExhaustion(m_device, m_device->m_gpuSamplerHeap, m_desc.samplerCount);
         return SLANG_FAIL;
     }
     m_samplerHeapOffset = m_samplerAllocation.getHeapOffset();
