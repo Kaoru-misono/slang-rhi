@@ -1,6 +1,6 @@
 #include "d3d12-descriptor-heap.h"
 
-#include <cstdio>
+#include "../device.h"
 
 namespace rhi::d3d12 {
 
@@ -211,6 +211,17 @@ GPUDescriptorRangeAllocation GPUDescriptorHeap::allocate(uint32_t count)
     return {};
 }
 
+void reportGPUDescriptorHeapExhaustion(Device* device, const GPUDescriptorHeap* heap, uint32_t requestedCount)
+{
+    if (!device)
+        return;
+    device->printError(
+        "GPU descriptor heap allocation failed (requested %u descriptors, heap size %u).",
+        requestedCount,
+        heap->getSize()
+    );
+}
+
 void GPUDescriptorHeap::free(const GPUDescriptorRangeAllocation& allocation)
 {
     if (!allocation.isValid())
@@ -229,9 +240,10 @@ void GPUDescriptorHeap::free(const GPUDescriptorRangeAllocation& allocation)
 
 // GPUDescriptorArena
 
-Result GPUDescriptorArena::init(GPUDescriptorHeap* heap, uint32_t chunkSize)
+Result GPUDescriptorArena::init(Device* device, GPUDescriptorHeap* heap, uint32_t chunkSize)
 {
     SLANG_RHI_ASSERT(chunkSize > 0);
+    m_device = device;
     m_heap = heap;
     m_chunkSize = chunkSize;
     m_currentChunkSpace = 0;
@@ -263,7 +275,7 @@ GPUDescriptorRange GPUDescriptorArena::allocate(uint32_t count)
         auto chunk = m_heap->allocate(chunkSize);
         if (!chunk.isValid())
         {
-            // Allocation failed — return invalid range.
+            reportGPUDescriptorHeapExhaustion(m_device, m_heap, chunkSize);
             return {};
         }
         m_chunks.push_back(chunk);

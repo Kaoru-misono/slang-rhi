@@ -2828,10 +2828,18 @@ struct ExecuteCallbackDesc
     Size userDataSize = 0;
 };
 
+/// Selects one of the queues a device exposes.
+///
+/// A device always reports all three. On hardware without dedicated families, Compute and Transfer
+/// may be backed by the same queue family as Graphics, which makes an ownership transfer between
+/// them a no-op rather than an error.
 enum class QueueType
 {
+    /// Accepts render, compute, ray tracing and copy work; also the queue surfaces present from.
     Graphics,
+    /// Async compute: compute, ray tracing and copy work that can overlap graphics work.
     Compute,
+    /// Copy-only work, typically on a DMA engine that runs independently of the other two.
     Transfer,
 };
 
@@ -3025,9 +3033,18 @@ public:
         aliasResources(before ? 1 : 0, before ? &before : nullptr, 1, &after);
     }
 
+    /// Gives up this queue family's ownership of `buffer` so `dstQueue` can take it.
+    ///
+    /// Record this on the encoder of the queue that currently owns the resource, passing the state
+    /// the resource is in, and pair it with `acquireBufferFromQueue` on `dstQueue`'s encoder. The
+    /// release must be submitted, and its completion waited on, before the acquire executes.
+    /// Both queues must agree on the state; contents are undefined otherwise.
+    /// D3D12 has no queue ownership concept and treats the pair as ordinary state transitions.
     virtual SLANG_NO_THROW void SLANG_MCALL
     releaseBufferForQueue(IBuffer* buffer, ResourceState currentState, QueueType dstQueue) = 0;
 
+    /// Gives up this queue family's ownership of a texture subresource range so `dstQueue` can take
+    /// it. See `releaseBufferForQueue` for the pairing rules.
     virtual SLANG_NO_THROW void SLANG_MCALL releaseTextureForQueue(
         ITexture* texture,
         SubresourceRange subresourceRange,
@@ -3035,9 +3052,15 @@ public:
         QueueType dstQueue
     ) = 0;
 
+    /// Takes ownership of `buffer` from `srcQueue`, which must have released it first.
+    ///
+    /// Record this on the receiving queue's encoder with the state the resource is to be used in;
+    /// it also performs the transition into that state.
     virtual SLANG_NO_THROW void SLANG_MCALL
     acquireBufferFromQueue(IBuffer* buffer, ResourceState desiredState, QueueType srcQueue) = 0;
 
+    /// Takes ownership of a texture subresource range from `srcQueue`, which must have released it
+    /// first. See `acquireBufferFromQueue` for the pairing rules.
     virtual SLANG_NO_THROW void SLANG_MCALL acquireTextureFromQueue(
         ITexture* texture,
         SubresourceRange subresourceRange,
