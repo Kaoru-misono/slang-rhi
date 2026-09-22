@@ -20,20 +20,31 @@ bool portableScalar(Scalar scalar)
     return scalar == Scalar::Int32 || scalar == Scalar::UInt32 || scalar == Scalar::Float32;
 }
 
-/// Anything the target layouts give a 16-byte alignment to; the C struct only agrees when the
-/// shader author already placed it on a row boundary.
-bool startsOnRow(slang::TypeLayoutReflection* layout)
+struct StartPlacement
+{
+    size_t alignment;
+    const char* rule;
+};
+
+/// The strictest start a target may demand. std140/std430 align a three-component vector like a
+/// four-component one and a two-component vector to eight bytes, where HLSL constant buffers pack
+/// both tighter, so only a field placed for the stricter target lands on the same byte everywhere.
+StartPlacement startPlacement(slang::TypeLayoutReflection* layout)
 {
     switch (layout->getKind())
     {
     case Kind::Vector:
-        return layout->getElementCount() == 4;
+        if (layout->getElementCount() == 2)
+            return {8, "a two-component vector starts on an 8-byte boundary"};
+        if (layout->getElementCount() == 3)
+            return {kRowSize, "a three-component vector starts on a 16-byte boundary"};
+        return {kRowSize, "four-component vectors, arrays, matrices and nested structs start on a 16-byte boundary"};
     case Kind::Matrix:
     case Kind::Array:
     case Kind::Struct:
-        return true;
+        return {kRowSize, "four-component vectors, arrays, matrices and nested structs start on a 16-byte boundary"};
     default:
-        return false;
+        return {4, "a scalar starts on a 4-byte boundary"};
     }
 }
 
@@ -145,12 +156,9 @@ struct Validator
             SLANG_RETURN_ON_FAIL(validateType(fieldLayout, fieldPath, depth + 1, fieldSize));
             if (field->getOffset() != offset)
                 return fail(diagnostic, fieldPath, "reflected offset does not match the packed C layout");
-            if (startsOnRow(fieldLayout) && offset % kRowSize != 0)
-                return fail(
-                    diagnostic,
-                    fieldPath,
-                    "four-component vectors, arrays, matrices and nested structs start on a 16-byte boundary"
-                );
+            const StartPlacement placement = startPlacement(fieldLayout);
+            if (offset % placement.alignment != 0)
+                return fail(diagnostic, fieldPath, placement.rule);
             if (isVector(fieldLayout, 3) && !scalarFollows(layout, i))
                 return fail(
                     diagnostic,

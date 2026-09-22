@@ -4,8 +4,8 @@
 
 struct Nested
 {
-    uint tag;
     float3 weights;
+    uint tag;
 };
 
 struct Params

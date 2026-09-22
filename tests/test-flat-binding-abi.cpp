@@ -142,7 +142,7 @@ auto runBaseline(IDevice* device, bool inlineConstants) -> void
         2.f,
         {{1.f, 2.f, 3.f, 4.f}, {-2.f, 1.f, 0.f, 3.f}},
         {{1.f, 2.f, 3.f, 4.f}, {5.f, 6.f, 7.f, 8.f}, {9.f, 10.f, 11.f, 12.f}, {13.f, 14.f, 15.f, 16.f}},
-        {17u, {5.f, 7.f, 11.f}}
+        {{5.f, 7.f, 11.f}, 17u}
     };
     const auto expectedCompute = makeArray<float>(97.f, 111.f, 127.f, 138.f, 49.f, 55.f, 63.f, 66.f);
     const auto expectedPixel = makeArray<float>(146.f, 166.f, 190.f, 204.f);
