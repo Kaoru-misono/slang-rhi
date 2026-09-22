@@ -1,6 +1,6 @@
 #include "d3d12-descriptor-heap.h"
 
-#include <cstdio>
+#include "../device.h"
 
 namespace rhi::d3d12 {
 
@@ -213,18 +213,39 @@ GPUDescriptorRangeAllocation GPUDescriptorHeap::allocate(uint32_t count)
         return allocation;
     }
 
-    auto report = m_allocator.storageReport();
-    fprintf(
-        stderr,
-        "slang-rhi: GPU descriptor heap allocation failed (requested %u descriptors, "
-        "heap size %u, free space %u, high water mark %u). "
-        "Consider increasing D3D12DeviceExtendedDesc::cbvSrvUavHeapSize or samplerHeapSize.\n",
-        count,
-        m_size,
-        report.totalFreeSpace,
-        m_highWaterMark
-    );
     return {};
+}
+
+uint32_t GPUDescriptorHeap::getHighWaterMark() const
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    return m_highWaterMark;
+}
+
+uint32_t GPUDescriptorHeap::getSize() const
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    return m_size;
+}
+
+OffsetAllocator::StorageReport GPUDescriptorHeap::storageReport() const
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    return m_allocator.storageReport();
+}
+
+void reportGPUDescriptorHeapExhaustion(Device* device, const GPUDescriptorHeap* heap, uint32_t requestedCount)
+{
+    if (!device)
+        return;
+    device->printError(
+        "GPU descriptor heap allocation failed (requested %u descriptors, heap size %u, free space %u, "
+        "high water mark %u). Consider increasing D3D12DeviceExtendedDesc::cbvSrvUavHeapSize or samplerHeapSize.\n",
+        requestedCount,
+        heap->getSize(),
+        heap->storageReport().totalFreeSpace,
+        heap->getHighWaterMark()
+    );
 }
 
 void GPUDescriptorHeap::free(const GPUDescriptorRangeAllocation& allocation)
@@ -245,9 +266,10 @@ void GPUDescriptorHeap::free(const GPUDescriptorRangeAllocation& allocation)
 
 // GPUDescriptorArena
 
-Result GPUDescriptorArena::init(GPUDescriptorHeap* heap, uint32_t chunkSize)
+Result GPUDescriptorArena::init(Device* device, GPUDescriptorHeap* heap, uint32_t chunkSize)
 {
     SLANG_RHI_ASSERT(chunkSize > 0);
+    m_device = device;
     m_heap = heap;
     m_chunkSize = chunkSize;
     m_currentChunkSpace = 0;
@@ -279,7 +301,7 @@ GPUDescriptorRange GPUDescriptorArena::allocate(uint32_t count)
         auto chunk = m_heap->allocate(chunkSize);
         if (!chunk.isValid())
         {
-            // Allocation failed — return invalid range.
+            reportGPUDescriptorHeapExhaustion(m_device, m_heap, chunkSize);
             return {};
         }
         m_chunks.push_back(chunk);

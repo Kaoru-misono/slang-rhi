@@ -493,7 +493,6 @@ Result DeviceImpl::createBuffer(const BufferDesc& desc_, const void* initData, I
             }
             else
             {
-                // Direct allocation (non-VMA): map, copy, unmap
                 SLANG_VK_RETURN_ON_FAIL_REPORT(
                     m_api.vkMapMemory(m_device, buffer->m_buffer.m_memory, 0, bufferSize, 0, &mappedData),
                     this
@@ -539,7 +538,6 @@ Result DeviceImpl::mapBuffer(IBuffer* buffer, CpuAccessMode mode, void** outData
         return SLANG_OK;
     }
 
-    // Direct allocation: map the entire memory
     SLANG_VK_RETURN_ON_FAIL_REPORT(
         m_api.vkMapMemory(m_api.m_device, bufferImpl->m_buffer.m_memory, 0, VK_WHOLE_SIZE, 0, outData),
         this

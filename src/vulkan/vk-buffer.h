@@ -42,7 +42,6 @@ public:
     {
         if (m_allocator)
         {
-            // VMA-managed: destroys both VkBuffer and frees memory
             m_allocator->destroyBuffer(m_buffer, m_allocation);
         }
         else if (m_api)
@@ -61,7 +60,6 @@ public:
     VkDeviceMemory m_memory = VK_NULL_HANDLE; // For direct alloc: owned; for VMA: from VmaAllocationInfo
     const VulkanApi* m_api = nullptr;
 
-    // VMA tracking
     VulkanMemoryAllocator* m_allocator = nullptr;
     VmaAllocation m_allocation = VK_NULL_HANDLE;
     VmaAllocationInfo m_allocInfo = {};

@@ -2375,13 +2375,15 @@ Result CommandEncoderImpl::getComputeBindingData(
         return SLANG_E_INVALID_ARG;
 
     TransientBufferArena::Allocation allocation;
-    SLANG_RETURN_ON_FAIL(m_commandBuffer->m_constantBufferArena.allocate(256, &allocation));
+    SLANG_RETURN_ON_FAIL(
+        m_commandBuffer->m_constantBufferArena.allocate(D3D12_CONSTANT_BUFFER_DATA_PLACEMENT_ALIGNMENT, &allocation)
+    );
     auto descriptors = m_commandBuffer->m_cbvSrvUavArena.allocate(1);
     if (!descriptors.isValid()) return SLANG_E_OUT_OF_MEMORY;
     std::memcpy(allocation.mappedData, data, size);
     D3D12_CONSTANT_BUFFER_VIEW_DESC view = {};
     view.BufferLocation = checked_cast<BufferImpl*>(allocation.buffer)->getDeviceAddress() + allocation.offset;
-    view.SizeInBytes = 256;
+    view.SizeInBytes = D3D12_CONSTANT_BUFFER_DATA_PLACEMENT_ALIGNMENT;
     getDevice<DeviceImpl>()->m_device->CreateConstantBufferView(&view, descriptors.getCpuHandle(0));
 
     auto& arena = m_commandBuffer->m_allocator;
@@ -2515,8 +2517,8 @@ Result CommandBufferImpl::init()
 
     m_constantBufferArena.initialize(&m_queue->m_constantBufferHeap);
 
-    SLANG_RETURN_ON_FAIL(m_cbvSrvUavArena.init(device->m_gpuCbvSrvUavHeap, 128));
-    SLANG_RETURN_ON_FAIL(m_samplerArena.init(device->m_gpuSamplerHeap, 4));
+    SLANG_RETURN_ON_FAIL(m_cbvSrvUavArena.init(device, device->m_gpuCbvSrvUavHeap, 128));
+    SLANG_RETURN_ON_FAIL(m_samplerArena.init(device, device->m_gpuSamplerHeap, 4));
 
     return SLANG_OK;
 }

@@ -229,26 +229,32 @@ public:
     void free(const GPUDescriptorRangeAllocation& allocation);
 
     /// Return the high water mark (peak usage) of the heap.
-    uint32_t getHighWaterMark() const { return m_highWaterMark; }
+    uint32_t getHighWaterMark() const;
     /// Return the total size of the heap.
-    uint32_t getSize() const { return m_size; }
+    uint32_t getSize() const;
+    /// Return the free-space report of the underlying allocator.
+    OffsetAllocator::StorageReport storageReport() const;
 
 private:
     ID3D12Device* m_device;
     uint32_t m_size;
     uint32_t m_descriptorSize;
     uint32_t m_highWaterMark = 0;
-    std::mutex m_mutex;
+    mutable std::mutex m_mutex;
     DescriptorHeap m_heap;
     OffsetAllocator m_allocator;
 };
+
+/// Reports an exhausted shader-visible descriptor heap through the device's debug callback.
+/// The heap itself only knows `ID3D12Device`, so its owners report on its behalf.
+void reportGPUDescriptorHeapExhaustion(Device* device, const GPUDescriptorHeap* heap, uint32_t requestedCount);
 
 /// Manages an arena of GPU descriptors.
 /// Allocates chunks from a GPU descriptor heap and then sub-allocates from those chunks.
 class GPUDescriptorArena : public RefObject
 {
 public:
-    Result init(GPUDescriptorHeap* heap, uint32_t chunkSize);
+    Result init(Device* device, GPUDescriptorHeap* heap, uint32_t chunkSize);
 
     ~GPUDescriptorArena();
 
@@ -257,6 +263,7 @@ public:
     GPUDescriptorRange allocate(uint32_t count);
 
 private:
+    Device* m_device = nullptr;
     GPUDescriptorHeap* m_heap;
     uint32_t m_chunkSize;
     std::vector<GPUDescriptorRangeAllocation> m_chunks;
