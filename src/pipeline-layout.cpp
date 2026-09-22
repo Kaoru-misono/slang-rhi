@@ -397,30 +397,32 @@ struct PipelineLayoutReflectionValidator
 
     Result validateConstants()
     {
-        const auto* constants = layout->m_desc.constants;
-        if (!constants && constantsProfile != ConstantsProfile::None)
+        const size_t constantsSize = layout->m_desc.constantsSize;
+        if (!constantsSize && constantsProfile != ConstantsProfile::None)
             return fail(constantsPath, "execution constant block is missing from the layout");
-        if (constants && constantsProfile == ConstantsProfile::None)
+        if (constantsSize && constantsProfile == ConstantsProfile::None)
             return fail(
                 "constants",
                 "layout declares execution constants but the program has no execution constant block"
             );
-        if (!constants)
+        if (!constantsSize)
             return SLANG_OK;
         std::string diagnostic;
-        Result result = validateConstantLayout(constantsTypeLayout, *constants, diagnostic);
+        Result result = validateConstantLayout(constantsTypeLayout, diagnostic);
         if (SLANG_FAILED(result))
         {
             layout->getDevice()->printError("%s", diagnostic.c_str());
             return result;
         }
+        if (constantsTypeLayout->getSize() != constantsSize)
+            return fail(constantsPath, "constantsSize does not match the reflected execution constant block");
         if (constantsProfile == ConstantsProfile::Inline &&
-            constants->size > layout->getDevice()->getInlineConstantsSizeLimit())
+            constantsSize > layout->getDevice()->getInlineConstantsSizeLimit())
             return fail(constantsPath, "inline execution constant block exceeds the device size limit");
-        if (constants->size > std::numeric_limits<uint32_t>::max())
+        if (constantsSize > std::numeric_limits<uint32_t>::max())
             return fail(constantsPath, "execution constant block size does not fit in uint32_t");
         layout->m_constantsProfile = constantsProfile;
-        layout->m_constantsSize = uint32_t(constants->size);
+        layout->m_constantsSize = uint32_t(constantsSize);
         return SLANG_OK;
     }
 };
@@ -505,9 +507,6 @@ Result PipelineLayout::init()
     SLANG_RETURN_ON_FAIL(validator.validateSets());
     SLANG_RETURN_ON_FAIL(validator.validateConstants());
     m_bindless = getDevice()->hasFeature(Feature::Bindless);
-    // The constant descriptors are a caller-owned tree StructHolder cannot copy, and validation
-    // is the only thing that reads them, so getDesc() reports none rather than a dangling one.
-    m_desc.constants = nullptr;
     return SLANG_OK;
 }
 

@@ -2043,31 +2043,6 @@ public:
     virtual SLANG_NO_THROW IBindingSetLayout* SLANG_MCALL getLayout() = 0;
 };
 
-struct ConstantTypeDesc;
-
-struct ConstantFieldDesc
-{
-    const char* name = nullptr;
-    size_t offset = 0;
-    const ConstantTypeDesc* type = nullptr;
-};
-
-/// Describes CPU storage for an execution constant block, independently of the reflection it is
-/// checked against. Referenced descriptors need only live for the duration of validation.
-struct ConstantTypeDesc
-{
-    slang::TypeReflection::Kind kind = slang::TypeReflection::Kind::None;
-    size_t size = 0;
-    size_t alignment = 1;
-    slang::TypeReflection::ScalarType scalar = slang::TypeReflection::ScalarType::None;
-    size_t elementCount = 0;
-    size_t elementStride = 0;
-    const ConstantTypeDesc* elementType = nullptr;
-    SlangMatrixLayoutMode matrixLayout = SLANG_MATRIX_LAYOUT_MODE_UNKNOWN;
-    const ConstantFieldDesc* fields = nullptr;
-    uint32_t fieldCount = 0;
-};
-
 /// Binds one reflected ParameterBlock, addressed by its dotted path in the program
 /// (for example "scene" or "scene.materials").
 struct PipelineLayoutSetDesc
@@ -2084,9 +2059,9 @@ struct PipelineLayoutDesc
     /// binds them in. Creation fails when the paths do not match the reflection exactly.
     const PipelineLayoutSetDesc* sets = nullptr;
     uint32_t setCount = 0;
-    /// Null requires the program to contain no ordinary data at all. Read during creation only:
-    /// the descriptor tree is not retained, and getDesc() reports `constants` as null.
-    const ConstantTypeDesc* constants = nullptr;
+    /// Byte size of the execution constant block the caller will supply, which must equal the size
+    /// the program reflects. Zero requires the program to contain no ordinary data at all.
+    size_t constantsSize = 0;
     const char* label = nullptr;
 };
 

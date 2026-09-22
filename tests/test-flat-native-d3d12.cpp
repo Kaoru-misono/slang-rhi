@@ -1,5 +1,6 @@
 #include "testing.h"
 #include "flat-binding-test-data.h"
+#include "constant-layout.h"
 
 #if SLANG_RHI_ENABLE_D3D12
 #include <d3d12.h>
@@ -26,9 +27,9 @@ auto createSession(IDevice* device) -> ComPtr<slang::ISession>
     target.format = SLANG_DXIL;
     target.profile = global->findProfile("sm_6_0");
     target.forceGLSLScalarBufferLayout = true;
-    slang::CompilerOptionEntry rowMajor{};
-    rowMajor.name = slang::CompilerOptionName::MatrixLayoutRow;
-    rowMajor.value.intValue0 = 1;
+    slang::CompilerOptionEntry columnMajor{};
+    columnMajor.name = slang::CompilerOptionName::MatrixLayoutColumn;
+    columnMajor.value.intValue0 = 1;
     slang::PreprocessorMacroDesc macros[]{{"NATIVE_LAYOUT", "1"}, {"INLINE_CONSTANTS", "0"}};
     auto paths = getSlangSearchPaths();
     slang::SessionDesc desc{};
@@ -36,10 +37,10 @@ auto createSession(IDevice* device) -> ComPtr<slang::ISession>
     desc.targetCount = 1;
     desc.searchPaths = paths.data();
     desc.searchPathCount = paths.size();
-    desc.defaultMatrixLayoutMode = SLANG_MATRIX_LAYOUT_ROW_MAJOR;
+    desc.defaultMatrixLayoutMode = SLANG_MATRIX_LAYOUT_COLUMN_MAJOR;
     desc.preprocessorMacros = macros;
     desc.preprocessorMacroCount = std::size(macros);
-    desc.compilerOptionEntries = &rowMajor;
+    desc.compilerOptionEntries = &columnMajor;
     desc.compilerOptionEntryCount = 1;
     ComPtr<slang::ISession> session;
     REQUIRE_CALL(global->createSession(desc, session.writeRef()));
@@ -85,9 +86,7 @@ auto linkProgram(slang::ISession* session, const std::vector<const char*>& names
     CHECK(parameters->getBindingSpace(slang::ParameterCategory::ConstantBuffer) == 1);
     CHECK(parameters->getTypeLayout()->getElementTypeLayout()->getSize() == sizeof(Params));
     std::string diagnostic;
-    REQUIRE_CALL(
-        validateConstantLayout(parameters->getTypeLayout()->getElementTypeLayout(), flat::paramsSchema(), diagnostic)
-    );
+    REQUIRE_CALL(validateConstantLayout(parameters->getTypeLayout()->getElementTypeLayout(), diagnostic));
     return linked;
 }
 
@@ -314,9 +313,9 @@ GPU_TEST_CASE("flat-native-root-cbv-snapshots", D3D12)
         device,
         output,
         makeArray<
-            float>(37.f, 81.f, 127.f, 168.f, 19.f, 31.f, 45.f, 54.f, 38.f, 83.f, 130.f, 170.f, 20.f, 33.f, 48.f, 56.f)
+            float>(97.f, 111.f, 127.f, 138.f, 49.f, 55.f, 63.f, 66.f, 98.f, 113.f, 130.f, 140.f, 50.f, 57.f, 66.f, 68.f)
     );
-    const std::array<std::array<float, 4>, 2> expected{{{56.f, 112.f, 172.f, 222.f}, {58.f, 116.f, 178.f, 226.f}}};
+    const std::array<std::array<float, 4>, 2> expected{{{146.f, 166.f, 190.f, 204.f}, {148.f, 170.f, 196.f, 208.f}}};
     for (size_t i = 0; i < targets.size(); ++i)
     {
         ComPtr<ISlangBlob> pixels;

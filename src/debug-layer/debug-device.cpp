@@ -1203,6 +1203,13 @@ Result DebugDevice::createPipelineLayout(const PipelineLayoutDesc& desc, IPipeli
         RHI_VALIDATION_ERROR("'sets' must not be null when 'setCount' is nonzero.");
         return SLANG_E_INVALID_ARG;
     }
+    // The portable constant subset pads every block to a whole 16-byte row, so no reflected block
+    // can ever have such a size.
+    if (desc.constantsSize % 16 != 0)
+    {
+        RHI_VALIDATION_ERROR("'constantsSize' must be a multiple of 16 bytes.");
+        return SLANG_E_INVALID_ARG;
+    }
     for (uint32_t i = 0; i < desc.setCount; ++i)
     {
         const auto& set = desc.sets[i];

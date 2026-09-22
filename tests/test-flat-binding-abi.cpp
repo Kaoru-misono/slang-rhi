@@ -1,5 +1,6 @@
 #include "testing.h"
 #include "flat-binding-test-data.h"
+#include "constant-layout.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -29,7 +30,7 @@ auto createSession(IDevice* device, bool inlineConstants) -> ComPtr<slang::ISess
     options[0].name = slang::CompilerOptionName::EmitSpirvDirectly;
     options[0].value.kind = slang::CompilerOptionValueKind::Int;
     options[0].value.intValue0 = 1;
-    options[1].name = slang::CompilerOptionName::MatrixLayoutRow;
+    options[1].name = slang::CompilerOptionName::MatrixLayoutColumn;
     options[1].value.kind = slang::CompilerOptionValueKind::Int;
     options[1].value.intValue0 = 1;
     slang::PreprocessorMacroDesc macro{"INLINE_CONSTANTS", inlineConstants ? "1" : "0"};
@@ -37,7 +38,7 @@ auto createSession(IDevice* device, bool inlineConstants) -> ComPtr<slang::ISess
     slang::SessionDesc desc{};
     desc.targets = &target;
     desc.targetCount = 1;
-    desc.defaultMatrixLayoutMode = SLANG_MATRIX_LAYOUT_ROW_MAJOR;
+    desc.defaultMatrixLayoutMode = SLANG_MATRIX_LAYOUT_COLUMN_MAJOR;
     desc.searchPaths = searchPaths.data();
     desc.searchPathCount = searchPaths.size();
     desc.preprocessorMacros = &macro;
@@ -54,81 +55,6 @@ auto field(slang::TypeLayoutReflection* type, const char* name) -> slang::Variab
     const auto index = type->findFieldIndexByName(name);
     REQUIRE(index >= 0);
     return type->getFieldByIndex(static_cast<unsigned int>(index));
-}
-
-auto checkConstantSchema(slang::TypeLayoutReflection* reflected) -> void
-{
-    std::string diagnostic;
-    REQUIRE_CALL(validateConstantLayout(reflected, flat::paramsSchema(), diagnostic));
-    CHECK(diagnostic.empty());
-
-    auto expectRejected = [&](const ConstantTypeDesc& schema, const char* path, const char* reason)
-    {
-        CHECK(SLANG_FAILED(validateConstantLayout(reflected, schema, diagnostic)));
-        CHECK(diagnostic.find(path) != std::string::npos);
-        CHECK(diagnostic.find(reason) != std::string::npos);
-    };
-    auto schema = flat::paramsSchema();
-    schema.size += 16;
-    expectRejected(schema, "constants", "size");
-    schema = flat::paramsSchema();
-    schema.alignment = 4;
-    expectRejected(schema, "constants", "alignment");
-    schema.alignment = 256;
-    expectRejected(schema, "constants", "alignment");
-
-    // Every mismatch keeps the total size unchanged: sizeof alone cannot validate ABI.
-    std::vector<ConstantFieldDesc> fields(schema.fields, schema.fields + schema.fieldCount);
-    schema = flat::paramsSchema();
-    schema.fields = fields.data();
-    schema.fieldCount = uint32_t(fields.size());
-    auto original = fields;
-    fields[0].offset = 4;
-    expectRejected(schema, "constants.direction", "offset");
-    fields = original;
-    auto changed = *fields[1].type;
-    changed.scalar = slang::TypeReflection::ScalarType::UInt32;
-    fields[1].type = &changed;
-    expectRejected(schema, "constants.scale", "32-bit");
-    fields = original;
-    changed = *fields[0].type;
-    changed.alignment = 16;
-    fields[0].type = &changed;
-    expectRejected(schema, "constants.direction", "alignment");
-    fields = original;
-    changed = *fields[2].type;
-    changed.elementStride = 32;
-    fields[2].type = &changed;
-    expectRejected(schema, "constants.samples", "stride");
-    changed = *original[2].type;
-    changed.elementCount = 1;
-    expectRejected(schema, "constants.samples", "count");
-    fields = original;
-    changed = *fields[3].type;
-    changed.matrixLayout = SLANG_MATRIX_LAYOUT_COLUMN_MAJOR;
-    fields[3].type = &changed;
-    expectRejected(schema, "constants.matrix", "row/column");
-    fields = original;
-    auto nested = *fields[4].type;
-    std::vector<ConstantFieldDesc> nestedFields(nested.fields, nested.fields + nested.fieldCount);
-    nestedFields[0].name = "missingTag";
-    nested.fields = nestedFields.data();
-    fields[4].type = &nested;
-    expectRejected(schema, "constants.nested.missingTag", "not found");
-    fields = original;
-    fields[1].name = "direction";
-    expectRejected(schema, "constants.direction", "duplicate");
-    fields = original;
-    fields[1].offset = 8;
-    expectRejected(schema, "constants.scale", "overlapping");
-    fields = original;
-    fields[4].offset = SIZE_MAX;
-    expectRejected(schema, "constants.nested", "beyond");
-    fields = original;
-    schema.fieldCount = uint32_t(fields.size() - 1);
-    expectRejected(schema, "constants", "field count");
-    REQUIRE_CALL(validateConstantLayout(reflected, flat::paramsSchema(), diagnostic));
-    CHECK(diagnostic.empty());
 }
 
 auto checkReflection(slang::ProgramLayout* program, DeviceType target, bool inlineConstants, bool graphics) -> void
@@ -165,7 +91,9 @@ auto checkReflection(slang::ProgramLayout* program, DeviceType target, bool inli
     CHECK(block->getElementVarLayout()->getOffset() == 0);
     auto* params = block->getElementVarLayout()->getTypeLayout();
     REQUIRE(params != nullptr);
-    checkConstantSchema(params);
+    std::string diagnostic;
+    REQUIRE_CALL(validateConstantLayout(params, diagnostic));
+    CHECK(diagnostic.empty());
     CHECK(params->getSize() == sizeof(Params));
     CHECK(params->getAlignment(SLANG_PARAMETER_CATEGORY_UNIFORM) <= alignof(Params));
     CHECK(field(params, "direction")->getOffset() == offsetof(Params, direction));
@@ -182,7 +110,7 @@ auto checkReflection(slang::ProgramLayout* program, DeviceType target, bool inli
     CHECK(matrix->getSize() == sizeof(Params::matrix));
     CHECK(matrix->getRowCount() == 4);
     CHECK(matrix->getColumnCount() == 4);
-    CHECK(matrix->getMatrixLayoutMode() == SLANG_MATRIX_LAYOUT_ROW_MAJOR);
+    CHECK(matrix->getMatrixLayoutMode() == SLANG_MATRIX_LAYOUT_COLUMN_MAJOR);
     auto* nested = field(params, "nested")->getTypeLayout();
     CHECK(nested->getSize() == sizeof(Nested));
     CHECK(field(nested, "tag")->getOffset() == offsetof(Nested, tag));
@@ -216,8 +144,8 @@ auto runBaseline(IDevice* device, bool inlineConstants) -> void
         {{1.f, 2.f, 3.f, 4.f}, {5.f, 6.f, 7.f, 8.f}, {9.f, 10.f, 11.f, 12.f}, {13.f, 14.f, 15.f, 16.f}},
         {17u, {5.f, 7.f, 11.f}}
     };
-    const auto expectedCompute = makeArray<float>(37.f, 81.f, 127.f, 168.f, 19.f, 31.f, 45.f, 54.f);
-    const auto expectedPixel = makeArray<float>(56.f, 112.f, 172.f, 222.f);
+    const auto expectedCompute = makeArray<float>(97.f, 111.f, 127.f, 138.f, 49.f, 55.f, 63.f, 66.f);
+    const auto expectedPixel = makeArray<float>(146.f, 166.f, 190.f, 204.f);
 
     BufferDesc outputDesc{};
     outputDesc.size = sizeof(float) * expectedCompute.size();
