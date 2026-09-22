@@ -57,8 +57,8 @@ void main(uint3 id : SV_DispatchThreadID)
 constexpr const char* kPortableDeclarations = R"(
 struct Nested
 {
-    uint tag;
     float3 weights;
+    uint tag;
 };
 
 struct Constants
@@ -120,6 +120,8 @@ TEST_CASE("constant-layout-rejections")
         reject("struct Constants { float values[4]; };", "constants.values: portable arrays");
         reject("struct Constants { float2 pairs[2]; };", "constants.pairs: portable arrays");
         reject("struct Constants { float4 rows[2][2]; };", "constants.rows: portable arrays");
+        reject("struct Constants { float a; float3 b; };", "constants.b: a three-component vector starts");
+        reject("struct Constants { float a; float2 b; float c; };", "constants.b: a two-component vector starts");
         reject("struct Constants { float2 a; float2 b; float2 c; };", "constants: struct size");
         reject("struct Constants { float4 value; Texture2D texture; };", "not an execution constant");
         reject("typedef float4 Constants;", "constants: an execution constant block must be a struct");

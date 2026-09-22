@@ -8,8 +8,8 @@ namespace rhi::testing::flat {
 
 struct alignas(16) Nested
 {
-    uint32_t tag;
     float weights[3];
+    uint32_t tag;
 };
 
 struct alignas(16) Params
@@ -26,6 +26,7 @@ static_assert(sizeof(Params) == 128 && alignof(Params) == 16);
 static_assert(offsetof(Params, direction) == 0 && offsetof(Params, scale) == 12);
 static_assert(offsetof(Params, samples) == 16 && offsetof(Params, matrix) == 48);
 static_assert(offsetof(Params, nested) == 112);
-static_assert(sizeof(Nested) == 16 && alignof(Nested) == 16 && offsetof(Nested, weights) == 4);
+static_assert(sizeof(Nested) == 16 && alignof(Nested) == 16 && offsetof(Nested, weights) == 0);
+static_assert(offsetof(Nested, tag) == 12);
 
 } // namespace rhi::testing::flat

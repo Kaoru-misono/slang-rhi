@@ -282,7 +282,7 @@ void runNativeVulkanConstants(IDevice* device, bool inlineConstants)
         2,
         {{1, 2, 3, 4}, {-2, 1, 0, 3}},
         {{1, 2, 3, 4}, {5, 6, 7, 8}, {9, 10, 11, 12}, {13, 14, 15, 16}},
-        {17, {5, 7, 11}}
+        {{5, 7, 11}, 17}
     };
     auto second = first;
     second.scale = 3;
