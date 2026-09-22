@@ -1466,7 +1466,11 @@ Result DeviceImpl::initVulkanDevice(
 
     // Select queue families for graphics and compute.
     int graphicsFamilyIndex = m_api.findQueue(VK_QUEUE_GRAPHICS_BIT | VK_QUEUE_COMPUTE_BIT);
-    SLANG_RHI_ASSERT(graphicsFamilyIndex >= 0);
+    if (graphicsFamilyIndex < 0 || uint32_t(graphicsFamilyIndex) >= numFamilies)
+    {
+        printError("No queue family supporting both graphics and compute\n");
+        return SLANG_FAIL;
+    }
     m_queueFamilyIndex = graphicsFamilyIndex;
 
     // Find a dedicated compute queue family (compute but NOT graphics).
@@ -1574,7 +1578,7 @@ Result DeviceImpl::initVulkanDevice(
         float queuePriorities[] = {0.0f, 0.0f, 0.0f};
 
         // Count queues needed per family
-        uint32_t familyQueueCounts[64] = {};
+        std::vector<uint32_t> familyQueueCounts(numFamilies, 0);
         familyQueueCounts[m_queueFamilyIndex]++;
         familyQueueCounts[m_computeQueueFamilyIndex]++;
         familyQueueCounts[m_transferQueueFamilyIndex]++;
@@ -2035,11 +2039,11 @@ Result DeviceImpl::initialize(const DeviceDesc& desc, BackendImpl* backend)
     {
         VkQueue queue;
         m_api.vkGetDeviceQueue(m_device, m_queueFamilyIndex, 0, &queue);
-        SLANG_RETURN_ON_FAIL(m_deviceQueue.init(m_api, queue, m_queueFamilyIndex, registerNativeQueue(queue)));
+        SLANG_RETURN_ON_FAIL(m_deviceQueue.init(this, m_api, queue, m_queueFamilyIndex, registerNativeQueue(queue)));
     }
 
     // Initialize the memory sub-allocator (VMA wrapper).
-    m_memoryAllocator.init(&m_api);
+    SLANG_RETURN_ON_FAIL(m_memoryAllocator.init(this));
 
     m_queue = new CommandQueueImpl(this, QueueType::Graphics);
     m_queue->init(m_deviceQueue.getQueue(), m_queueFamilyIndex);

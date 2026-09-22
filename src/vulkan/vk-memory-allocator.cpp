@@ -13,6 +13,7 @@
 // vk-memory-allocator.h matches vma-config.h, so the declarations are ABI-compatible.
 #include "vk-memory-allocator.h"
 #include "vk-device.h"
+#include "vk-utils.h"
 
 namespace rhi::vk {
 
@@ -21,25 +22,26 @@ VulkanMemoryAllocator::~VulkanMemoryAllocator()
     destroy();
 }
 
-Result VulkanMemoryAllocator::init(const VulkanApi* api)
+Result VulkanMemoryAllocator::init(DeviceImpl* device)
 {
-    m_api = api;
+    m_device = device;
+    m_api = &device->m_api;
 
     // Provide vkGetInstanceProcAddr and vkGetDeviceProcAddr so VMA can load
     // all other Vulkan functions dynamically (since we use VK_NO_PROTOTYPES).
     VmaVulkanFunctions vulkanFunctions = {};
-    vulkanFunctions.vkGetInstanceProcAddr = api->vkGetInstanceProcAddr;
-    vulkanFunctions.vkGetDeviceProcAddr = api->vkGetDeviceProcAddr;
+    vulkanFunctions.vkGetInstanceProcAddr = m_api->vkGetInstanceProcAddr;
+    vulkanFunctions.vkGetDeviceProcAddr = m_api->vkGetDeviceProcAddr;
 
     VmaAllocatorCreateInfo createInfo = {};
     createInfo.vulkanApiVersion = VK_API_VERSION_1_2;
-    createInfo.physicalDevice = api->m_physicalDevice;
-    createInfo.device = api->m_device;
-    createInfo.instance = api->m_instance;
+    createInfo.physicalDevice = m_api->m_physicalDevice;
+    createInfo.device = m_api->m_device;
+    createInfo.instance = m_api->m_instance;
     createInfo.pVulkanFunctions = &vulkanFunctions;
 
     // Enable buffer device address if supported
-    if (api->m_extendedFeatures.vulkan12Features.bufferDeviceAddress)
+    if (m_api->m_extendedFeatures.vulkan12Features.bufferDeviceAddress)
     {
         createInfo.flags |= VMA_ALLOCATOR_CREATE_BUFFER_DEVICE_ADDRESS_BIT;
     }
@@ -47,6 +49,7 @@ Result VulkanMemoryAllocator::init(const VulkanApi* api)
     VkResult result = vmaCreateAllocator(&createInfo, &m_allocator);
     if (result != VK_SUCCESS)
     {
+        reportVulkanError(result, "vmaCreateAllocator", SLANG_RHI_SOURCE_LOCATION(), m_device);
         return SLANG_FAIL;
     }
 
@@ -61,6 +64,7 @@ void VulkanMemoryAllocator::destroy()
         m_allocator = VK_NULL_HANDLE;
     }
     m_api = nullptr;
+    m_device = nullptr;
 }
 
 Result VulkanMemoryAllocator::createBuffer(
@@ -99,6 +103,7 @@ Result VulkanMemoryAllocator::createBuffer(
 
     if (result != VK_SUCCESS)
     {
+        reportVulkanError(result, "vmaCreateBufferWithAlignment", SLANG_RHI_SOURCE_LOCATION(), m_device);
         return SLANG_FAIL;
     }
     return SLANG_OK;
@@ -132,6 +137,7 @@ Result VulkanMemoryAllocator::createBufferDedicated(
 
     if (result != VK_SUCCESS)
     {
+        reportVulkanError(result, "vmaCreateBuffer", SLANG_RHI_SOURCE_LOCATION(), m_device);
         return SLANG_FAIL;
     }
     return SLANG_OK;
@@ -157,6 +163,7 @@ Result VulkanMemoryAllocator::allocateMemoryForImage(
 
     if (result != VK_SUCCESS)
     {
+        reportVulkanError(result, "vmaAllocateMemoryForImage", SLANG_RHI_SOURCE_LOCATION(), m_device);
         return SLANG_FAIL;
     }
 
@@ -164,6 +171,7 @@ Result VulkanMemoryAllocator::allocateMemoryForImage(
     result = vmaBindImageMemory(m_allocator, *outAllocation, image);
     if (result != VK_SUCCESS)
     {
+        reportVulkanError(result, "vmaBindImageMemory", SLANG_RHI_SOURCE_LOCATION(), m_device);
         vmaFreeMemory(m_allocator, *outAllocation);
         *outAllocation = VK_NULL_HANDLE;
         return SLANG_FAIL;

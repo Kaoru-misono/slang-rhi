@@ -400,7 +400,16 @@ Result DeviceImpl::createTexture(const TextureDesc& desc_, const SubresourceData
         m_api.vkGetImageMemoryRequirements(m_device, texture->m_image, &memRequirements);
 
         int memoryTypeIndex = m_api.findMemoryTypeIndex(memRequirements.memoryTypeBits, reqMemoryProperties);
-        SLANG_RHI_ASSERT(memoryTypeIndex >= 0);
+        if (memoryTypeIndex < 0)
+        {
+            printError(
+                "No compatible memory type for texture '%s' (memoryTypeBits 0x%08x, required properties 0x%08x)\n",
+                desc.label ? desc.label : "<unnamed>",
+                memRequirements.memoryTypeBits,
+                reqMemoryProperties
+            );
+            return SLANG_FAIL;
+        }
 
         VkMemoryAllocateInfo allocInfo = {VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
         allocInfo.allocationSize = memRequirements.size;

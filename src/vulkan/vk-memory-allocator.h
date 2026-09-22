@@ -18,14 +18,11 @@ public:
     VulkanMemoryAllocator() = default;
     ~VulkanMemoryAllocator();
 
-    /// Initialize VMA with the Vulkan API handles.
-    Result init(const VulkanApi* api);
+    /// Initialize VMA from the owning device's Vulkan API handles.
+    Result init(DeviceImpl* device);
 
     /// Destroy the VMA allocator. Must be called before VkDevice destruction.
     void destroy();
-
-    /// Get the underlying VMA allocator handle.
-    VmaAllocator getAllocator() const { return m_allocator; }
 
     /// Create a VkBuffer with sub-allocated memory.
     /// @param bufferCreateInfo The VkBufferCreateInfo for the buffer
@@ -67,6 +64,8 @@ public:
     void freeMemory(VmaAllocation allocation);
 
 private:
+    /// Owning device; a raw pointer because the allocator is a value member of it.
+    DeviceImpl* m_device = nullptr;
     const VulkanApi* m_api = nullptr;
     VmaAllocator m_allocator = VK_NULL_HANDLE;
 };
