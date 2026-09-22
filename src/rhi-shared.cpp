@@ -38,6 +38,11 @@ Fence::Fence(Device* device, const FenceDesc& desc)
     m_descHolder.holdString(m_desc.label);
 }
 
+void Fence::deleteThis()
+{
+    getDevice()->deferDelete(this);
+}
+
 
 // ----------------------------------------------------------------------------
 // Buffer
@@ -305,8 +310,15 @@ void TextureView::deleteThis()
     auto* texture = static_cast<Texture*>(getTexture());
     // The texture owns its default wrapper's allocation, without contributing a
     // reference. At zero consumers it stays constructed until texture destruction.
-    if (texture->m_defaultView.load() != this)
+    if (texture->m_defaultView.load() == this)
+        return;
+    if (!ownsDescriptorHandles())
+    {
         delete this;
+        return;
+    }
+    m_sampler.setNull();
+    getDevice()->deferDelete(this);
 }
 
 Result TextureView::getDescriptorHandle(DescriptorHandleAccess access, DescriptorHandle* outHandle)

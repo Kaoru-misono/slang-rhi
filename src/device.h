@@ -191,6 +191,7 @@ public:
     virtual SLANG_NO_THROW bool SLANG_MCALL hasCapability(const char* capability) override;
     virtual SLANG_NO_THROW Result SLANG_MCALL getFormatSupport(Format format, FormatSupport* outFormatSupport) override;
     virtual SLANG_NO_THROW Result SLANG_MCALL getSlangSession(slang::ISession** outSlangSession) override;
+    virtual SLANG_NO_THROW Result SLANG_MCALL getQueue(QueueType type, ICommandQueue** outQueue) override;
     virtual SLANG_NO_THROW Result SLANG_MCALL queryInterface(const SlangUUID& uuid, void** outObject) override;
     IDevice* getInterface(const Guid& guid);
 
@@ -482,8 +483,20 @@ public:
     virtual Result createRayTracingPipeline2(const RayTracingPipelineDesc& desc, IRayTracingPipeline** outPipeline);
 
 protected:
-    /// Queues whose completion gates reclamation, in DeferredDeleteQueue::Completion order.
+    /// Queues whose completion gates reclamation, indexed by QueueType.
     virtual ReclamationQueues getReclamationQueues() { return {}; }
+
+    /// Waits for every reclamation queue and releases its command buffers. Backends call this from
+    /// their destructor before releasing the caches and staging heaps those command buffers use.
+    void waitAndReleaseCommandBuffers();
+
+    /// Shuts every reclamation queue down, drains what their completion releases and then drops the
+    /// device's references to them. Backends call this from their destructor.
+    void shutdownQueues();
+
+    /// Releases the backend's own references to the reclamation queues and to the bindless
+    /// descriptor set, once shutdownQueues has established that nothing can still reach them.
+    virtual void releaseQueueReferences() {}
 
     /// Proves the native device can no longer touch retained work after a device loss. Returns
     /// false when no such proof is available and reclamation has to be retried later.

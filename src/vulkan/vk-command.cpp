@@ -2328,11 +2328,6 @@ void CommandQueueImpl::retireCommandBuffer(CommandBufferImpl* commandBuffer)
     }
 }
 
-void CommandQueueImpl::retireCommandBuffers()
-{
-    getDevice<DeviceImpl>()->collectGarbage();
-}
-
 void CommandQueueImpl::retireCompletedCommandBuffers(uint64_t completed)
 {
     std::list<InternalRefPtr<CommandBufferImpl>> ready;
@@ -2515,13 +2510,8 @@ Result CommandQueueImpl::waitOnHost()
     return SLANG_OK;
 }
 
-Result CommandQueueImpl::waitForSequence(uint64_t sequence, uint64_t timeoutNs)
+Result CommandQueueImpl::waitForSequenceNative(uint64_t sequence, uint64_t timeoutNs)
 {
-    if (sequence > m_lastSubmittedID.load())
-        return SLANG_E_INVALID_ARG;
-    DeviceImpl* device = getDevice<DeviceImpl>();
-    if (device->m_deviceLost)
-        return SLANG_FAIL;
     VkSemaphoreWaitInfo waitInfo = {VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO};
     waitInfo.semaphoreCount = 1;
     waitInfo.pSemaphores = &m_trackingSemaphore;
@@ -2531,14 +2521,13 @@ Result CommandQueueImpl::waitForSequence(uint64_t sequence, uint64_t timeoutNs)
         return SLANG_E_TIME_OUT;
     if (result != VK_SUCCESS)
     {
+        DeviceImpl* device = getDevice<DeviceImpl>();
         device->m_deviceLost = true;
         reportVulkanError(result, "vkWaitSemaphores", SLANG_RHI_SOURCE_LOCATION(), device);
         device->collectGarbage();
         return SLANG_FAIL;
     }
-    advanceLastFinishedID(sequence);
-    retireCommandBuffers();
-    return device->m_deviceLost ? SLANG_FAIL : SLANG_OK;
+    return SLANG_OK;
 }
 
 Result CommandQueueImpl::getNativeHandle(NativeHandle* outHandle)

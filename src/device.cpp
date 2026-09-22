@@ -1055,6 +1055,47 @@ Result Device::flushHeaps()
     return SLANG_OK;
 }
 
+Result Device::getQueue(QueueType type, ICommandQueue** outQueue)
+{
+    ReclamationQueues queues = getReclamationQueues();
+    size_t index = size_t(type);
+    if (index >= queues.size() || !queues[index])
+        return SLANG_E_INVALID_ARG;
+    returnComPtrCopy(outQueue, queues[index]);
+    return SLANG_OK;
+}
+
+void Device::waitAndReleaseCommandBuffers()
+{
+    ReclamationQueues queues = getReclamationQueues();
+    CommandQueue* graphicsQueue = queues[size_t(QueueType::Graphics)];
+    for (CommandQueue* queue : queues)
+    {
+        if (queue && queue != graphicsQueue)
+            queue->waitAndReleaseCommandBuffers();
+    }
+    if (graphicsQueue)
+        graphicsQueue->waitAndReleaseCommandBuffers();
+}
+
+void Device::shutdownQueues()
+{
+    ReclamationQueues queues = getReclamationQueues();
+    CommandQueue* graphicsQueue = queues[size_t(QueueType::Graphics)];
+    // Keep all tracking objects alive until every queue has released its owned resources, and shut
+    // the graphics queue down last because the others can still hand work back to it.
+    for (CommandQueue* queue : queues)
+    {
+        if (queue && queue != graphicsQueue)
+            queue->shutdown();
+    }
+    if (graphicsQueue)
+        graphicsQueue->shutdown();
+    collectGarbage();
+    SLANG_RHI_ASSERT(m_deferredDeletes.size() == 0);
+    releaseQueueReferences();
+}
+
 void Device::deferDelete(DeviceChild* object)
 {
     DeferredDeleteQueue::Completion submitted{};
@@ -1064,7 +1105,6 @@ void Device::deferDelete(DeviceChild* object)
         if (queues[i])
             submitted[i] = queues[i]->m_lastSubmittedID.load();
     }
-    object->breakStrongReferenceToDevice();
     m_deferredDeletes.add(object, submitted);
 }
 

@@ -92,6 +92,8 @@ public:
     TextureViewImpl(TextureImpl* texture, const TextureViewDesc& desc);
     ~TextureViewImpl();
 
+    virtual bool ownsDescriptorHandles() const override;
+
     // IResource implementation
     virtual SLANG_NO_THROW Result SLANG_MCALL getNativeHandle(NativeHandle* outHandle) override;
 

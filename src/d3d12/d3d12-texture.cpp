@@ -366,12 +366,6 @@ TextureViewImpl::TextureViewImpl(TextureImpl* texture, const TextureViewDesc& de
 {
 }
 
-void TextureViewImpl::deleteThis()
-{
-    m_texture.breakStrongReference();
-    m_sampler.setNull();
-    getDevice<DeviceImpl>()->deferDelete(this);
-}
 
 TextureViewImpl::~TextureViewImpl()
 {
@@ -384,6 +378,16 @@ TextureViewImpl::~TextureViewImpl()
             device->m_bindlessDescriptorSet->freeHandle(handle);
         }
     }
+}
+
+bool TextureViewImpl::ownsDescriptorHandles() const
+{
+    for (const auto& handle : m_descriptorHandle)
+    {
+        if (handle)
+            return true;
+    }
+    return false;
 }
 
 Result TextureViewImpl::getNativeHandle(NativeHandle* outHandle)

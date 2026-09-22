@@ -62,6 +62,10 @@ public:
 public:
     Fence(Device* device, const FenceDesc& desc);
 
+    /// Backends destroy their native fence in the destructor, so the object has to outlive every
+    /// submission that may still signal it.
+    virtual void deleteThis() override;
+
 protected:
     FenceDesc m_desc;
     StructHolder m_descHolder;
@@ -206,6 +210,9 @@ public:
     uint32_t releaseReference() override final;
     uint32_t addInternalReference() override final;
     uint32_t releaseInternalReference() override final;
+    /// Destroys an ordinary view at once, unless it owns bindless descriptor handles: such a view
+    /// drops its sampler reference and is destroyed once no submission can still read the handles.
+    /// A texture's cached default view stays until the texture is destroyed.
     void deleteThis() override final;
 
     // ITextureView interface
@@ -224,6 +231,8 @@ public:
 protected:
     // External view references retain the device through the texture.
     RefObject* getLifetimeOwner() const noexcept override final { return nullptr; }
+
+    virtual bool ownsDescriptorHandles() const { return false; }
 
 public:
     TextureViewDesc m_desc;
