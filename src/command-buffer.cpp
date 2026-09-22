@@ -8,6 +8,25 @@
 namespace rhi {
 
 // ----------------------------------------------------------------------------
+// CommandQueue
+// ----------------------------------------------------------------------------
+
+Result CommandQueue::getCompletedSequence(uint64_t* outSequence)
+{
+    if (!outSequence)
+        return SLANG_E_INVALID_ARG;
+    Device* device = getDevice();
+    if (device->m_deviceLost)
+        return SLANG_FAIL;
+    uint64_t completed = updateLastFinishedID();
+    // Polling may itself discover the loss; a stale value must never pass as a completion proof.
+    if (device->m_deviceLost)
+        return SLANG_FAIL;
+    *outSequence = completed;
+    return SLANG_OK;
+}
+
+// ----------------------------------------------------------------------------
 // RenderPassEncoder
 // ----------------------------------------------------------------------------
 

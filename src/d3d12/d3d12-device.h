@@ -202,8 +202,10 @@ public:
 
     ~DeviceImpl();
 
-    void deferDelete(Resource* resource);
+protected:
+    virtual ReclamationQueues getReclamationQueues() override;
 
+public:
     virtual SLANG_NO_THROW Result SLANG_MCALL getAccelerationStructureSizes(
         const AccelerationStructureBuildDesc& desc,
         AccelerationStructureSizes* outSizes

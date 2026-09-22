@@ -3,6 +3,8 @@
 #include "rhi-shared.h"
 #include "shader.h"
 #include "heap.h"
+#include "command-buffer.h"
+#include "core/deferred.h"
 #include "debug-layer/debug-device.h"
 
 #include <algorithm>
@@ -1131,6 +1133,63 @@ Result Device::flushHeaps()
         SLANG_RETURN_ON_FAIL(heap->flush());
     }
     return SLANG_OK;
+}
+
+void Device::deferDelete(DeviceChild* object)
+{
+    // Keep the device alive until the fully detached object is visible to the collector.
+    RefPtr<Device> keepAlive = m_isShuttingDown ? nullptr : this;
+    DeferredDeleteQueue::Completion submitted{};
+    ReclamationQueues queues = getReclamationQueues();
+    for (size_t i = 0; i < submitted.size(); ++i)
+    {
+        if (queues[i])
+            submitted[i] = queues[i]->m_lastSubmittedID.load();
+    }
+    object->breakStrongReferenceToDevice();
+    m_deferredDeletes.add(object, submitted);
+}
+
+void Device::collectGarbage()
+{
+    RefPtr<Device> keepAlive = m_isShuttingDown ? nullptr : this;
+    if (m_collectingGarbage.test_and_set())
+        return;
+    SLANG_RHI_DEFERRED({ m_collectingGarbage.clear(); });
+    ReclamationQueues queues = getReclamationQueues();
+    DeferredDeleteQueue::Completion completed{};
+    for (size_t i = 0; i < completed.size(); ++i)
+    {
+        if (queues[i])
+            completed[i] = queues[i]->updateLastFinishedID();
+    }
+    if (m_deviceLost)
+    {
+        // A lost-device idle result is a destruction proof, never successful execution.
+        if (!proveIdleAfterDeviceLoss())
+            return;
+        for (CommandQueue* queue : queues)
+        {
+            if (queue)
+                queue->abandonCommandBuffersAfterDeviceLoss();
+        }
+        discardInternalQueueResources();
+        m_deferredDeletes.discardAfterDeviceLoss();
+        return;
+    }
+    for (size_t i = 0; i < completed.size(); ++i)
+    {
+        if (queues[i])
+            queues[i]->retireCompletedCommandBuffers(completed[i]);
+    }
+    retireInternalQueueResources();
+    m_deferredDeletes.collect(completed);
+    flushHeaps();
+}
+
+bool Device::proveIdleAfterDeviceLoss()
+{
+    return true;
 }
 
 Result Device::getShaderObjectLayout(

@@ -2202,11 +2202,16 @@ CommandQueueImpl::CommandQueueImpl(Device* device, QueueType type)
 {
 }
 
-CommandQueueImpl::~CommandQueueImpl() {}
+CommandQueueImpl::~CommandQueueImpl()
+{
+    if (m_trackingSemaphore)
+        m_api.vkDestroySemaphore(m_api.m_device, m_trackingSemaphore, nullptr);
+}
 
 void CommandQueueImpl::init(VkQueue queue, uint32_t queueFamilyIndex)
 {
     m_queue = queue;
+    m_nativeQueueMutex = &getDevice<DeviceImpl>()->registerNativeQueue(queue);
     m_queueFamilyIndex = queueFamilyIndex;
 
     DeviceImpl* device = getDevice<DeviceImpl>();
@@ -2241,10 +2246,6 @@ void CommandQueueImpl::shutdown()
     m_commandBuffersPool.clear();
     // Release the shared constant-buffer pages while deferred deletion is still available.
     m_constantBufferHeap.release();
-    // Execute remaining deferred deletes.
-    executeDeferredDeletes();
-    SLANG_RHI_ASSERT(m_deferredDeleteQueue.empty());
-    m_api.vkDestroySemaphore(m_api.m_device, m_trackingSemaphore, nullptr);
 }
 
 Result CommandQueueImpl::createCommandBuffer(CommandBufferImpl** outCommandBuffer)
@@ -2257,17 +2258,24 @@ Result CommandQueueImpl::createCommandBuffer(CommandBufferImpl** outCommandBuffe
 
 Result CommandQueueImpl::getOrCreateCommandBuffer(CommandBufferImpl** outCommandBuffer)
 {
+    if (getDevice()->m_deviceLost)
+        return SLANG_FAIL;
     std::lock_guard<std::mutex> lock(m_mutex);
     RefPtr<CommandBufferImpl> commandBuffer;
-    if (m_commandBuffersPool.empty())
+    auto reusable = m_commandBuffersPool.begin();
+    while (reusable != m_commandBuffersPool.end() && (*reusable)->getReferenceCount() != 1)
+        ++reusable;
+    if (reusable == m_commandBuffersPool.end())
     {
         SLANG_RETURN_ON_FAIL(createCommandBuffer(commandBuffer.writeRef()));
     }
     else
     {
-        commandBuffer = m_commandBuffersPool.front();
-        m_commandBuffersPool.pop_front();
+        // Only the pool owns this object; no old handle can observe its new recording.
+        commandBuffer = std::move(*reusable);
+        m_commandBuffersPool.erase(reusable);
         commandBuffer->setInternalReferenceCount(0);
+        commandBuffer->m_submissionID = 0;
     }
     returnRefPtr(outCommandBuffer, commandBuffer);
     return SLANG_OK;
@@ -2285,58 +2293,50 @@ void CommandQueueImpl::retireCommandBuffer(CommandBufferImpl* commandBuffer)
 
 void CommandQueueImpl::retireCommandBuffers()
 {
-    std::list<RefPtr<CommandBufferImpl>> commandBuffers = std::move(m_commandBuffersInFlight);
-    m_commandBuffersInFlight.clear();
-
-    uint64_t lastFinishedID = updateLastFinishedID();
-    for (const auto& commandBuffer : commandBuffers)
-    {
-        if (commandBuffer->m_submissionID <= lastFinishedID)
-        {
-            retireCommandBuffer(commandBuffer);
-        }
-        else
-        {
-            m_commandBuffersInFlight.push_back(commandBuffer);
-        }
-    }
-
-    // The internal device queue shares this VkQueue. Polling it here releases
-    // initialization staging allocations even if no further internal work occurs.
-    getDevice<DeviceImpl>()->m_deviceQueue.retireCompletedResources();
-
-    // Delete deferred resources that are no longer in use by the GPU.
-    executeDeferredDeletes();
-
-    // Flush all device heaps
-    getDevice<DeviceImpl>()->flushHeaps();
+    getDevice<DeviceImpl>()->collectGarbage();
 }
 
-void CommandQueueImpl::deferDelete(Resource* resource)
+void CommandQueueImpl::retireCompletedCommandBuffers(uint64_t completed)
 {
-    std::lock_guard<std::mutex> lock(m_deferredDeleteQueueMutex);
-    // Use current submission ID - resource will be released after this submission completes.
-    // This is conservative but simple: the resource may have been used in an earlier submission,
-    // but using the current ID ensures we don't release too early.
-    m_deferredDeleteQueue.push({m_lastSubmittedID, resource});
+    std::list<RefPtr<CommandBufferImpl>> ready;
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        for (auto it = m_commandBuffersInFlight.begin(); it != m_commandBuffersInFlight.end();)
+        {
+            auto current = it++;
+            if ((*current)->m_submissionID <= completed)
+                ready.splice(ready.end(), m_commandBuffersInFlight, current);
+        }
+    }
+    for (const auto& commandBuffer : ready)
+    {
+        retireCommandBuffer(commandBuffer);
+    }
 }
 
-void CommandQueueImpl::executeDeferredDeletes()
+void CommandQueueImpl::abandonCommandBuffersAfterDeviceLoss()
 {
-    uint64_t lastFinishedID = m_lastFinishedID;
-    std::lock_guard<std::mutex> lock(m_deferredDeleteQueueMutex);
-    while (!m_deferredDeleteQueue.empty() && m_deferredDeleteQueue.front().submissionID <= lastFinishedID)
+    std::list<RefPtr<CommandBufferImpl>> abandoned;
     {
-        // GPU is done with this resource - delete it.
-        delete m_deferredDeleteQueue.front().resource;
-        m_deferredDeleteQueue.pop();
+        std::lock_guard<std::mutex> lock(m_mutex);
+        abandoned.splice(abandoned.end(), m_commandBuffersInFlight);
+        abandoned.splice(abandoned.end(), m_commandBuffersPool);
     }
+    for (const auto& commandBuffer : abandoned)
+        commandBuffer->reset();
 }
 
 uint64_t CommandQueueImpl::updateLastFinishedID()
 {
-    m_api.vkGetSemaphoreCounterValue(m_api.m_device, m_trackingSemaphore, &m_lastFinishedID);
-    return m_lastFinishedID;
+    uint64_t completed = 0;
+    VkResult result = m_trackingSemaphore
+        ? m_api.vkGetSemaphoreCounterValue(m_api.m_device, m_trackingSemaphore, &completed)
+        : VK_NOT_READY;
+    if (result == VK_ERROR_DEVICE_LOST)
+        getDevice()->m_deviceLost = true;
+    if (result == VK_SUCCESS && !getDevice()->m_deviceLost)
+        advanceLastFinishedID(completed);
+    return m_lastFinishedID.load();
 }
 
 Result CommandQueueImpl::createCommandEncoder(const CommandEncoderDesc& desc, ICommandEncoder** outEncoder)
@@ -2347,118 +2347,163 @@ Result CommandQueueImpl::createCommandEncoder(const CommandEncoderDesc& desc, IC
     return SLANG_OK;
 }
 
-Result CommandQueueImpl::submit(const SubmitDesc& desc)
+void CommandQueueImpl::consumeCommandBuffers(const SubmitDesc& desc, uint64_t sequence)
 {
-    // Increment last submitted ID which is used to track command buffer completion.
-    ++m_lastSubmittedID;
-
-    // Collect & process command buffers.
-    short_vector<VkCommandBuffer> vkCommandBuffers;
-    for (uint32_t i = 0; i < desc.commandBufferCount; i++)
+    for (uint32_t i = 0; i < desc.commandBufferCount; ++i)
     {
-        CommandBufferImpl* commandBuffer = checked_cast<CommandBufferImpl*>(desc.commandBuffers[i]);
-        commandBuffer->m_submissionID = m_lastSubmittedID;
+        auto* commandBuffer = checked_cast<CommandBufferImpl*>(desc.commandBuffers[i]);
+        commandBuffer->m_submissionID = sequence;
         for (const auto& queryWrite : commandBuffer->m_commandList.getQueryWrites())
         {
             checked_cast<QueryPool*>(queryWrite.queryPool)
-                ->markQueryRangeSubmitted(queryWrite.index, queryWrite.count, m_lastSubmittedID);
+                ->markQueryRangeSubmitted(queryWrite.index, queryWrite.count, sequence);
         }
-        m_commandBuffersInFlight.push_back(commandBuffer);
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_commandBuffersInFlight.emplace_back(commandBuffer);
+    }
+}
+
+Result CommandQueueImpl::submit(const SubmitDesc& desc)
+{
+    DeviceImpl* device = getDevice<DeviceImpl>();
+    if (device->m_deviceLost)
+        return SLANG_FAIL;
+
+    std::unique_lock<std::mutex> queueLock(*m_nativeQueueMutex);
+    short_vector<VkCommandBuffer> vkCommandBuffers;
+    for (uint32_t i = 0; i < desc.commandBufferCount; ++i)
+    {
+        auto* commandBuffer = checked_cast<CommandBufferImpl*>(desc.commandBuffers[i]);
+        if (commandBuffer->m_submissionID != 0)
+            return SLANG_E_INVALID_ARG;
         vkCommandBuffers.push_back(commandBuffer->m_commandBuffer);
     }
 
-    // Setup wait semaphores.
     short_vector<VkSemaphore> waitSemaphores;
     short_vector<uint64_t> waitValues;
     short_vector<VkPipelineStageFlags> waitStages;
-    auto addWaitSemaphore = [&waitSemaphores, &waitValues, &waitStages](
-                                VkSemaphore semaphore,
-                                uint64_t value,
-                                VkPipelineStageFlags stage = VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT
-                            )
+    auto addWait = [&](VkSemaphore semaphore, uint64_t value, VkPipelineStageFlags stage)
     {
         waitSemaphores.push_back(semaphore);
         waitValues.push_back(value);
         waitStages.push_back(stage);
     };
-
     if (m_surfaceSync.imageAvailableSemaphore != VK_NULL_HANDLE)
-    {
-        addWaitSemaphore(m_surfaceSync.imageAvailableSemaphore, 0, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT);
-        m_surfaceSync.imageAvailableSemaphore = VK_NULL_HANDLE;
-    }
-
+        addWait(m_surfaceSync.imageAvailableSemaphore, 0, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT);
     for (uint32_t i = 0; i < desc.waitFenceCount; ++i)
     {
+        // ALL_COMMANDS_BIT establishes the full memory dependency cross-queue synchronization needs;
+        // BOTTOM_OF_PIPE_BIT would leave writes from the signaling queue invisible here.
         FenceImpl* fence = checked_cast<FenceImpl*>(desc.waitFences[i]);
-        // Use ALL_COMMANDS_BIT to establish a full memory dependency for cross-queue synchronization.
-        // BOTTOM_OF_PIPE_BIT would create an empty access scope, making writes from the signaling
-        // queue invisible to subsequent operations on this queue.
-        addWaitSemaphore(fence->m_semaphore, desc.waitFenceValues[i], VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
+        addWait(fence->m_semaphore, desc.waitFenceValues[i], VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
     }
 
-    // Setup signal semaphores.
     short_vector<VkSemaphore> signalSemaphores;
     short_vector<uint64_t> signalValues;
-    auto addSignalSemaphore = [&signalSemaphores, &signalValues](VkSemaphore semaphore, uint64_t value)
+    auto addSignal = [&](VkSemaphore semaphore, uint64_t value)
     {
         signalSemaphores.push_back(semaphore);
         signalValues.push_back(value);
     };
-
+    uint64_t sequence = m_lastSubmittedID.load() + 1;
     if (m_surfaceSync.renderFinishedSemaphore != VK_NULL_HANDLE)
-    {
-        addSignalSemaphore(m_surfaceSync.renderFinishedSemaphore, 0);
-        m_surfaceSync.renderFinishedSemaphore = VK_NULL_HANDLE;
-    }
-
-    addSignalSemaphore(m_trackingSemaphore, m_lastSubmittedID);
+        addSignal(m_surfaceSync.renderFinishedSemaphore, 0);
+    addSignal(m_trackingSemaphore, sequence);
     for (uint32_t i = 0; i < desc.signalFenceCount; ++i)
-    {
-        FenceImpl* fence = checked_cast<FenceImpl*>(desc.signalFences[i]);
-        addSignalSemaphore(fence->m_semaphore, desc.signalFenceValues[i]);
-    }
-
-    // Setup submit info.
-    VkSubmitInfo submitInfo = {VK_STRUCTURE_TYPE_SUBMIT_INFO};
-    submitInfo.commandBufferCount = vkCommandBuffers.size();
-    submitInfo.pCommandBuffers = vkCommandBuffers.data();
+        addSignal(checked_cast<FenceImpl*>(desc.signalFences[i])->m_semaphore, desc.signalFenceValues[i]);
 
     VkTimelineSemaphoreSubmitInfo timelineSubmitInfo = {VK_STRUCTURE_TYPE_TIMELINE_SEMAPHORE_SUBMIT_INFO};
+    timelineSubmitInfo.waitSemaphoreValueCount = (uint32_t)waitValues.size();
+    timelineSubmitInfo.pWaitSemaphoreValues = waitValues.data();
+    timelineSubmitInfo.signalSemaphoreValueCount = (uint32_t)signalValues.size();
+    timelineSubmitInfo.pSignalSemaphoreValues = signalValues.data();
+    VkSubmitInfo submitInfo = {VK_STRUCTURE_TYPE_SUBMIT_INFO};
     submitInfo.pNext = &timelineSubmitInfo;
+    submitInfo.commandBufferCount = vkCommandBuffers.size();
+    submitInfo.pCommandBuffers = vkCommandBuffers.data();
+    submitInfo.waitSemaphoreCount = (uint32_t)waitSemaphores.size();
+    submitInfo.pWaitSemaphores = waitSemaphores.data();
+    submitInfo.pWaitDstStageMask = waitStages.data();
+    submitInfo.signalSemaphoreCount = (uint32_t)signalSemaphores.size();
+    submitInfo.pSignalSemaphores = signalSemaphores.data();
 
-    if (waitSemaphores.size() > 0)
+    VkResult result = m_api.vkQueueSubmit(m_queue, 1, &submitInfo, m_surfaceSync.fence);
+    if (result == VK_ERROR_OUT_OF_HOST_MEMORY || result == VK_ERROR_OUT_OF_DEVICE_MEMORY)
     {
-        submitInfo.waitSemaphoreCount = (uint32_t)waitSemaphores.size();
-        submitInfo.pWaitSemaphores = waitSemaphores.data();
-        submitInfo.pWaitDstStageMask = waitStages.data();
-        timelineSubmitInfo.waitSemaphoreValueCount = (uint32_t)waitValues.size();
-        timelineSubmitInfo.pWaitSemaphoreValues = waitValues.data();
+        // The specification guarantees such a failure enqueued nothing, so the recordings and the
+        // surface semaphores stay untouched and the caller may retry on a still-usable device.
+        queueLock.unlock();
+        reportVulkanError(result, "vkQueueSubmit", SLANG_RHI_SOURCE_LOCATION(), device);
+        return SLANG_FAIL;
     }
-
-    if (signalSemaphores.size() > 0)
+    m_surfaceSync = {};
+    consumeCommandBuffers(desc, sequence);
+    if (result != VK_SUCCESS)
     {
-        submitInfo.signalSemaphoreCount = (uint32_t)signalSemaphores.size();
-        submitInfo.pSignalSemaphores = signalSemaphores.data();
-        timelineSubmitInfo.signalSemaphoreValueCount = (uint32_t)signalValues.size();
-        timelineSubmitInfo.pSignalSemaphoreValues = signalValues.data();
+        device->m_deviceLost = true;
+        queueLock.unlock();
+        reportVulkanError(result, "vkQueueSubmit", SLANG_RHI_SOURCE_LOCATION(), device);
+        return SLANG_FAIL;
     }
-
-    SLANG_VK_RETURN_ON_FAIL_REPORT(m_api.vkQueueSubmit(m_queue, 1, &submitInfo, m_surfaceSync.fence), m_device);
-    m_surfaceSync.fence = VK_NULL_HANDLE;
-
+    m_lastSubmittedID = sequence;
+    if (desc.outSequence)
+        *desc.outSequence = sequence;
+    queueLock.unlock();
     retireCommandBuffers();
-
     return SLANG_OK;
 }
 
 Result CommandQueueImpl::waitOnHost()
 {
     DeviceImpl* device = getDevice<DeviceImpl>();
-    auto& api = device->m_api;
-    SLANG_VK_RETURN_ON_FAIL_REPORT(api.vkQueueWaitIdle(m_queue), device);
+    if (device->m_deviceLost)
+    {
+        device->collectGarbage();
+        return SLANG_FAIL;
+    }
+    uint64_t submittedBeforeWait;
+    VkResult result;
+    {
+        std::lock_guard<std::mutex> queueLock(*m_nativeQueueMutex);
+        submittedBeforeWait = m_lastSubmittedID.load();
+        result = m_api.vkQueueWaitIdle(m_queue);
+    }
+    if (result != VK_SUCCESS)
+    {
+        device->m_deviceLost = true;
+        reportVulkanError(result, "vkQueueWaitIdle", SLANG_RHI_SOURCE_LOCATION(), device);
+        device->collectGarbage();
+        return SLANG_FAIL;
+    }
+    advanceLastFinishedID(submittedBeforeWait);
     retireCommandBuffers();
     return SLANG_OK;
+}
+
+Result CommandQueueImpl::waitForSequence(uint64_t sequence, uint64_t timeoutNs)
+{
+    if (sequence > m_lastSubmittedID.load())
+        return SLANG_E_INVALID_ARG;
+    DeviceImpl* device = getDevice<DeviceImpl>();
+    if (device->m_deviceLost)
+        return SLANG_FAIL;
+    VkSemaphoreWaitInfo waitInfo = {VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO};
+    waitInfo.semaphoreCount = 1;
+    waitInfo.pSemaphores = &m_trackingSemaphore;
+    waitInfo.pValues = &sequence;
+    VkResult result = m_api.vkWaitSemaphores(m_api.m_device, &waitInfo, timeoutNs);
+    if (result == VK_TIMEOUT)
+        return SLANG_E_TIME_OUT;
+    if (result != VK_SUCCESS)
+    {
+        device->m_deviceLost = true;
+        reportVulkanError(result, "vkWaitSemaphores", SLANG_RHI_SOURCE_LOCATION(), device);
+        device->collectGarbage();
+        return SLANG_FAIL;
+    }
+    advanceLastFinishedID(sequence);
+    retireCommandBuffers();
+    return device->m_deviceLost ? SLANG_FAIL : SLANG_OK;
 }
 
 Result CommandQueueImpl::getNativeHandle(NativeHandle* outHandle)
@@ -2682,7 +2727,10 @@ Result CommandBufferImpl::reset()
 {
     DeviceImpl* device = getDevice<DeviceImpl>();
     m_commandList.reset();
-    SLANG_VK_RETURN_ON_FAIL_REPORT(device->m_api.vkResetCommandPool(device->m_device, m_commandPool, 0), device);
+    if (!device->m_deviceLost)
+    {
+        SLANG_VK_RETURN_ON_FAIL_REPORT(device->m_api.vkResetCommandPool(device->m_device, m_commandPool, 0), device);
+    }
     m_constantBufferArena.reset();
     m_descriptorSetAllocator.reset();
     m_bindingCache.reset();

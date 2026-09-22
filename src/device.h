@@ -11,6 +11,7 @@
 
 #include "rhi.h"
 #include "rhi-shared-fwd.h"
+#include "deferred-delete.h"
 
 #include <atomic>
 #include <map>
@@ -389,6 +390,22 @@ public:
     // Flush all global heaps managed by this device
     Result flushHeaps();
 
+    using ReclamationQueues = std::array<CommandQueue*, DeferredDeleteQueue::kQueueCount>;
+
+    /// Retains `object` until every queue has passed the sequence it had submitted when the object
+    /// was detached, then destroys it.
+    void deferDelete(DeviceChild* object);
+
+    /// Advances reclamation: polls queue completion, retires the command buffers and deferred
+    /// objects that completion covers, and flushes heaps. A lost device turns this into a
+    /// terminal discard instead.
+    void collectGarbage();
+
+    DeferredDeleteQueue m_deferredDeletes;
+    std::atomic_flag m_collectingGarbage = ATOMIC_FLAG_INIT;
+    bool m_isShuttingDown = false;
+    std::atomic<bool> m_deviceLost{false};
+
     Result getEntryPointCodeFromShaderCache(
         ShaderProgram* program,
         slang::IComponentType* componentType,
@@ -476,6 +493,18 @@ public:
     virtual Result createRayTracingPipeline2(const RayTracingPipelineDesc& desc, IRayTracingPipeline** outPipeline);
 
 protected:
+    /// Queues whose completion gates reclamation, in DeferredDeleteQueue::Completion order.
+    virtual ReclamationQueues getReclamationQueues() { return {}; }
+
+    /// Proves the native device can no longer touch retained work after a device loss. Returns
+    /// false when no such proof is available and reclamation has to be retried later.
+    virtual bool proveIdleAfterDeviceLoss();
+
+    /// Backends that submit through an internal queue outside `getReclamationQueues` reclaim
+    /// its retained work here.
+    virtual void retireInternalQueueResources() {}
+    virtual void discardInternalQueueResources() {}
+
     Result initialize(const DeviceDesc& desc);
 
     void addFeature(Feature feature);

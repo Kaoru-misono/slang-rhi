@@ -2,6 +2,7 @@
 #include "d3d12-backend.h"
 #include "d3d12-buffer.h"
 #include "d3d12-fence.h"
+#include "core/deferred.h"
 #include "d3d12-utils.h"
 #include "d3d12-pipeline.h"
 #include "d3d12-query.h"
@@ -2040,25 +2041,54 @@ Result DeviceImpl::waitForFences(
     uint64_t timeout
 )
 {
+    if (m_deviceLost)
+        return SLANG_FAIL;
+    if (fenceCount == 0)
+        return SLANG_OK;
+    if (fenceCount > MAXIMUM_WAIT_OBJECTS || !fences || !fenceValues)
+        return SLANG_E_INVALID_ARG;
     short_vector<HANDLE> waitHandles;
+    SLANG_RHI_DEFERRED({ for (HANDLE handle : waitHandles) ::CloseHandle(handle); });
     for (uint32_t i = 0; i < fenceCount; ++i)
     {
-        auto fenceImpl = checked_cast<FenceImpl*>(fences[i]);
-        waitHandles.push_back(fenceImpl->getWaitEvent());
-        SLANG_D3D_RETURN_ON_FAIL_REPORT(
-            fenceImpl->m_fence->SetEventOnCompletion(fenceValues[i], fenceImpl->getWaitEvent()),
-            this
-        );
+        auto* fence = checked_cast<FenceImpl*>(fences[i]);
+        HANDLE handle = CreateEventEx(nullptr, nullptr, 0, EVENT_ALL_ACCESS);
+        if (!handle)
+            return SLANG_FAIL;
+        waitHandles.emplace_back(handle);
+        HRESULT result = fence->m_fence->SetEventOnCompletion(fenceValues[i], handle);
+        if (FAILED(result))
+        {
+            if (FAILED(m_device->GetDeviceRemovedReason()))
+                m_deviceLost = true;
+            return SLANG_FAIL;
+        }
     }
-    auto result = WaitForMultipleObjects(
-        fenceCount,
-        waitHandles.data(),
-        waitForAll ? TRUE : FALSE,
-        timeout == kTimeoutInfinite ? INFINITE : (DWORD)(timeout / 1000000)
-    );
+    uint64_t milliseconds = timeout / 1000000 + (timeout % 1000000 != 0);
+    DWORD waitMilliseconds = timeout == kTimeoutInfinite ? INFINITE
+        : DWORD(std::min<uint64_t>(milliseconds, INFINITE - 1));
+    DWORD result = WaitForMultipleObjects(fenceCount, waitHandles.data(), waitForAll, waitMilliseconds);
+    if (FAILED(m_device->GetDeviceRemovedReason()))
+    {
+        m_deviceLost = true;
+        collectGarbage();
+        return SLANG_FAIL;
+    }
     if (result == WAIT_TIMEOUT)
         return SLANG_E_TIME_OUT;
-    return result == WAIT_FAILED ? SLANG_FAIL : SLANG_OK;
+    if (result == WAIT_FAILED)
+        return SLANG_FAIL;
+    bool finished = waitForAll;
+    for (uint32_t i = 0; i < fenceCount; ++i)
+    {
+        uint64_t value = 0;
+        SLANG_RETURN_ON_FAIL(fences[i]->getCurrentValue(&value));
+        if (waitForAll)
+            finished &= value >= fenceValues[i];
+        else
+            finished |= value >= fenceValues[i];
+    }
+    return finished ? SLANG_OK : SLANG_FAIL;
 }
 
 Result DeviceImpl::getAccelerationStructureSizes(
@@ -2306,6 +2336,7 @@ void* DeviceImpl::loadProc(SharedLibraryHandle module, const char* name)
 
 DeviceImpl::~DeviceImpl()
 {
+    m_isShuttingDown = true;
 #if SLANG_RHI_ENABLE_NVAPI
     if (m_raytracingValidationHandle)
     {
@@ -2320,23 +2351,25 @@ DeviceImpl::~DeviceImpl()
     m_uploadHeap.release();
     m_readbackHeap.release();
 
-    // Auxiliary queue shutdown can release resources into the graphics queue's
-    // deferred-delete list, so the graphics queue must remain alive until last.
+    // Keep all tracking objects alive until every queue has released its owned resources.
     if (m_computeQueue)
     {
         m_computeQueue->shutdown();
-        m_computeQueue.setNull();
     }
     if (m_transferQueue)
     {
         m_transferQueue->shutdown();
-        m_transferQueue.setNull();
     }
     if (m_queue)
     {
         m_queue->shutdown();
-        m_queue.setNull();
     }
+
+    collectGarbage();
+    SLANG_RHI_ASSERT(m_deferredDeletes.size() == 0);
+    m_computeQueue.setNull();
+    m_transferQueue.setNull();
+    m_queue.setNull();
 
     m_bindlessDescriptorSet.setNull();
 
@@ -2360,11 +2393,9 @@ DeviceImpl::~DeviceImpl()
     }
 }
 
-void DeviceImpl::deferDelete(Resource* resource)
+Device::ReclamationQueues DeviceImpl::getReclamationQueues()
 {
-    SLANG_RHI_ASSERT(m_queue != nullptr);
-    m_queue->deferDelete(resource);
-    resource->breakStrongReferenceToDevice();
+    return {m_queue.get(), m_computeQueue.get(), m_transferQueue.get()};
 }
 
 } // namespace rhi::d3d12

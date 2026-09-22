@@ -93,6 +93,7 @@ class TextureViewImpl : public TextureView
 public:
     TextureViewImpl(Device* device, const TextureViewDesc& desc);
     ~TextureViewImpl();
+    virtual void deleteThis() override;
 
     // RefObject implementation
     virtual void makeExternal() override { m_texture.establishStrongReference(); }

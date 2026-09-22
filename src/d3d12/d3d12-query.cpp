@@ -125,18 +125,7 @@ Result QueryPoolImpl::getResult(uint32_t queryIndex, uint32_t count, uint64_t* o
     }
 
     CommandQueueImpl* queue = getDevice<DeviceImpl>()->m_queue.get();
-    uint64_t submissionID = queryInfo.submissionID;
-    if (queue->updateLastFinishedID() < submissionID)
-    {
-        ResetEvent(queue->m_globalWaitHandle);
-        SLANG_D3D_RETURN_ON_FAIL_REPORT(
-            queue->m_trackingFence->SetEventOnCompletion(submissionID, queue->m_globalWaitHandle),
-            getDevice<DeviceImpl>()
-        );
-        WaitForSingleObject(queue->m_globalWaitHandle, INFINITE);
-        queue->updateLastFinishedID();
-        queue->retireCommandBuffers();
-    }
+    SLANG_RETURN_ON_FAIL(queue->waitForSequence(queryInfo.submissionID, kTimeoutInfinite));
 
     memcpy(outData, m_mappedReadBackData + sizeof(uint64_t) * queryIndex, sizeof(uint64_t) * count);
     markQueryRangeResolved(queryIndex, count, queryInfo.submissionID);
@@ -262,20 +251,8 @@ Result PlainBufferProxyQueryPoolImpl::getResult(uint32_t queryIndex, uint32_t co
         return SLANG_OK;
     }
 
-    DeviceImpl* device = getDevice<DeviceImpl>();
-    CommandQueueImpl* queue = device->m_queue.get();
-    uint64_t submissionID = queryInfo.submissionID;
-    if (queue->updateLastFinishedID() < submissionID)
-    {
-        ResetEvent(queue->m_globalWaitHandle);
-        SLANG_D3D_RETURN_ON_FAIL_REPORT(
-            queue->m_trackingFence->SetEventOnCompletion(submissionID, queue->m_globalWaitHandle),
-            device
-        );
-        WaitForSingleObject(queue->m_globalWaitHandle, INFINITE);
-        queue->updateLastFinishedID();
-        queue->retireCommandBuffers();
-    }
+    CommandQueueImpl* queue = getDevice<DeviceImpl>()->m_queue.get();
+    SLANG_RETURN_ON_FAIL(queue->waitForSequence(queryInfo.submissionID, kTimeoutInfinite));
 
     memcpy(outData, m_mappedReadBackData + uint64_t(m_stride) * queryIndex, uint64_t(m_stride) * count);
     markQueryRangeResolved(queryIndex, count, queryInfo.submissionID);
