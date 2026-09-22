@@ -1,4 +1,6 @@
 #include "vk-device-queue.h"
+#include "vk-device.h"
+#include "vk-utils.h"
 
 namespace rhi::vk {
 
@@ -32,9 +34,17 @@ void VulkanDeviceQueue::destroy()
     }
 }
 
-Result VulkanDeviceQueue::init(const VulkanApi& api, VkQueue queue, int queueIndex, std::mutex& queueMutex)
+Result VulkanDeviceQueue::init(
+    DeviceImpl* device,
+    const VulkanApi& api,
+    VkQueue queue,
+    int queueIndex,
+    std::mutex& queueMutex
+)
 {
     SLANG_RHI_ASSERT(m_api == nullptr);
+
+    m_device = device;
 
     for (int i = 0; i < int(EventType::CountOf); ++i)
     {
@@ -122,10 +132,14 @@ void VulkanDeviceQueue::flushStepA()
 
     FenceInfo& fence = m_fences[m_commandBufferIndex];
 
+    VkResult submitResult;
     {
         std::lock_guard<std::mutex> lock(*m_queueMutex);
-        m_api->vkQueueSubmit(m_queue, 1, &submitInfo, fence.fence);
+        submitResult = m_api->vkQueueSubmit(m_queue, 1, &submitInfo, fence.fence);
     }
+    // Callers cannot act on this submission, but VK_ERROR_DEVICE_LOST must still mark the device lost.
+    if (submitResult != VK_SUCCESS)
+        reportVulkanError(submitResult, "vkQueueSubmit", SLANG_RHI_SOURCE_LOCATION(), m_device);
 
     // mark signaled fence value
     fence.value = m_nextFenceValue;
@@ -226,6 +240,17 @@ void VulkanDeviceQueue::flushStepB()
     beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
 
     m_api->vkBeginCommandBuffer(m_commandBuffer, &beginInfo);
+}
+
+void VulkanDeviceQueue::waitForIdle()
+{
+    VkResult result;
+    {
+        std::lock_guard<std::mutex> lock(*m_queueMutex);
+        result = m_api->vkQueueWaitIdle(m_queue);
+    }
+    if (result != VK_SUCCESS)
+        reportVulkanError(result, "vkQueueWaitIdle", SLANG_RHI_SOURCE_LOCATION(), m_device);
 }
 
 void VulkanDeviceQueue::flush()
