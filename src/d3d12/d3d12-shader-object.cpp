@@ -69,7 +69,9 @@ inline void writeTextureState(BindingDataBuilder* builder, TextureViewImpl* text
         );
         bindingData->textureStates = newTextureStates;
     }
-    bindingData->textureStates[bindingData->textureStateCount++] = {textureView, state};
+    bindingData->textureStates[bindingData->textureStateCount++] = {
+        textureView->m_texture, textureView->m_desc.subresourceRange, state
+    };
 }
 
 Result BindingDataBuilder::bindAsRoot(

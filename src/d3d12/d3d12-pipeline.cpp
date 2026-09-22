@@ -1,4 +1,5 @@
 #include "d3d12-pipeline.h"
+#include "d3d12-binding-set.h"
 #include "d3d12-device.h"
 #include "d3d12-pipeline-state-stream.h"
 #include "d3d12-shader-program.h"
@@ -231,6 +232,9 @@ Result DeviceImpl::createRenderPipeline2(const RenderPipelineDesc& desc, IRender
     TimePoint startTime = Timer::now();
 
     ShaderProgramImpl* program = checked_cast<ShaderProgramImpl*>(desc.program);
+    auto* pipelineLayout = checked_cast<PipelineLayoutImpl*>(desc.layout);
+    ID3D12RootSignature* rootSignature = pipelineLayout ? pipelineLayout->m_rootSignature.get()
+                                                        : program->m_rootObjectLayout->m_rootSignature.get();
     SLANG_RHI_ASSERT(!program->m_shaders.empty());
     InputLayoutImpl* inputLayout = checked_cast<InputLayoutImpl*>(desc.inputLayout);
 
@@ -242,7 +246,7 @@ Result DeviceImpl::createRenderPipeline2(const RenderPipelineDesc& desc, IRender
     // A helper to fill common fields between graphics and mesh pipeline descs
     const auto fillCommonGraphicsState = [&](auto& psoDesc)
     {
-        psoDesc.pRootSignature = program->m_rootObjectLayout->m_rootSignature;
+        psoDesc.pRootSignature = rootSignature;
 
         psoDesc.PrimitiveTopologyType = translatePrimitiveTopologyType(desc.primitiveTopology);
 
@@ -475,6 +479,7 @@ Result DeviceImpl::createRenderPipeline2(const RenderPipelineDesc& desc, IRender
     pipeline->m_program = program;
     pipeline->m_inputLayout = inputLayout;
     pipeline->m_rootObjectLayout = program->m_rootObjectLayout;
+    pipeline->m_rootSignature = rootSignature;
     pipeline->m_pipelineState = pipelineState;
     pipeline->m_primitiveTopology = translatePrimitiveTopology(desc.primitiveTopology);
     returnComPtr(outPipeline, pipeline);
@@ -498,13 +503,16 @@ Result DeviceImpl::createComputePipeline2(const ComputePipelineDesc& desc, IComp
     TimePoint startTime = Timer::now();
 
     ShaderProgramImpl* program = checked_cast<ShaderProgramImpl*>(desc.program);
+    auto* pipelineLayout = checked_cast<PipelineLayoutImpl*>(desc.layout);
+    ID3D12RootSignature* rootSignature = pipelineLayout ? pipelineLayout->m_rootSignature.get()
+                                                        : program->m_rootObjectLayout->m_rootSignature.get();
     SLANG_RHI_ASSERT(!program->m_shaders.empty());
 
     // Describe and create the compute pipeline state object
     D3D12_COMPUTE_PIPELINE_STATE_DESC computeDesc = {};
     computeDesc.pRootSignature = desc.d3d12RootSignatureOverride
                                      ? static_cast<ID3D12RootSignature*>(desc.d3d12RootSignatureOverride)
-                                     : program->m_rootObjectLayout->m_rootSignature;
+                                     : rootSignature;
     computeDesc.CS = {program->m_shaders[0].code.data(), SIZE_T(program->m_shaders[0].code.size())};
 
     ComPtr<ID3D12PipelineState> pipelineState;
@@ -573,6 +581,7 @@ Result DeviceImpl::createComputePipeline2(const ComputePipelineDesc& desc, IComp
     RefPtr<ComputePipelineImpl> pipeline = new ComputePipelineImpl(this, desc);
     pipeline->m_program = program;
     pipeline->m_rootObjectLayout = program->m_rootObjectLayout;
+    pipeline->m_rootSignature = rootSignature;
     pipeline->m_pipelineState = pipelineState;
     returnComPtr(outPipeline, pipeline);
     return SLANG_OK;

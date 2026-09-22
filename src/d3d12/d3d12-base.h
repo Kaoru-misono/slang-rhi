@@ -40,6 +40,9 @@ class ShaderProgramImpl;
 class ShaderTableImpl;
 class SurfaceImpl;
 class InputLayoutImpl;
+class BindingSetLayoutImpl;
+class BindingSetImpl;
+class PipelineLayoutImpl;
 struct BindingDataImpl;
 struct BindingCache;
 

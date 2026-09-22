@@ -130,6 +130,13 @@ public:
 
     virtual SLANG_NO_THROW Result SLANG_MCALL createSampler(const SamplerDesc& desc, ISampler** outSampler) override;
 
+    virtual Result createBindingSetLayoutImpl(
+        const BindingSetLayoutDesc& desc,
+        RefPtr<BindingSetLayout>& outLayout
+    ) override;
+    virtual Result createBindingSetImpl(BindingSetLayout* layout, RefPtr<BindingSet>& outBindingSet) override;
+    virtual Result createPipelineLayoutImpl(const PipelineLayoutDesc& desc, RefPtr<PipelineLayout>& outLayout) override;
+
     virtual SLANG_NO_THROW Result SLANG_MCALL createTextureView(
         ITexture* texture,
         const TextureViewDesc& desc,
