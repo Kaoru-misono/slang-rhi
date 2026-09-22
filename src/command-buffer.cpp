@@ -4,6 +4,8 @@
 #include "device.h"
 #include "format-conversion.h"
 #include "pipeline-resolver.h"
+#include "binding-set.h"
+#include "pipeline-layout.h"
 
 namespace rhi {
 
@@ -61,19 +63,44 @@ RenderPassEncoder::RenderPassEncoder(CommandEncoder* commandEncoder)
 {
 }
 
-void RenderPassEncoder::writeRenderState()
+bool RenderPassEncoder::writeRenderState()
 {
+    if (!m_pipeline || (!m_fixedBindingData && !m_rootObject))
+        return false;
     commands::SetRenderState cmd;
     cmd.state = m_renderState;
     cmd.pipeline = m_pipeline;
-    m_commandEncoder->getPipelineSpecializationArgs(m_pipeline, m_rootObject, cmd.specializationArgs);
-    if (SLANG_FAILED(m_commandEncoder->getBindingData(m_rootObject, cmd.bindingData)))
+    if (m_fixedBindingData)
     {
-        m_commandEncoder->getDevice()
-            ->handleMessage(DebugMessageType::Error, DebugMessageSource::Layer, "Failed to get binding data");
-        return;
+        cmd.specializationArgs = nullptr;
+        cmd.bindingData = m_fixedBindingData;
+    }
+    else
+    {
+        m_commandEncoder->getPipelineSpecializationArgs(m_pipeline, m_rootObject, cmd.specializationArgs);
+        if (SLANG_FAILED(m_commandEncoder->getBindingData(m_rootObject, cmd.bindingData)))
+        {
+            m_commandEncoder->getDevice()
+                ->handleMessage(DebugMessageType::Error, DebugMessageSource::Layer, "Failed to get binding data");
+            return false;
+        }
     }
     m_commandList->write(std::move(cmd));
+    return true;
+}
+
+Result RenderPassEncoder::bindPipeline(IRenderPipeline* pipeline, const FlatBindingDesc& bindings)
+{
+    m_pipeline = nullptr;
+    m_rootObject = nullptr;
+    m_fixedBindingData = nullptr;
+    if (!m_commandList)
+        return SLANG_E_INVALID_ARG;
+    SLANG_RETURN_ON_FAIL(m_commandEncoder->bindFlatPipeline(
+        checked_cast<RenderPipeline*>(pipeline), bindings, m_fixedBindingData
+    ));
+    m_pipeline = pipeline;
+    return SLANG_OK;
 }
 
 IShaderObject* RenderPassEncoder::bindPipeline(IRenderPipeline* pipeline)
@@ -116,7 +143,8 @@ void RenderPassEncoder::draw(const DrawArguments& args)
 {
     if (m_commandList)
     {
-        writeRenderState();
+        if (!writeRenderState())
+            return;
         commands::Draw cmd;
         cmd.args = args;
         m_commandList->write(std::move(cmd));
@@ -127,7 +155,8 @@ void RenderPassEncoder::drawIndexed(const DrawArguments& args)
 {
     if (m_commandList)
     {
-        writeRenderState();
+        if (!writeRenderState())
+            return;
         commands::DrawIndexed cmd;
         cmd.args = args;
         m_commandList->write(std::move(cmd));
@@ -138,7 +167,8 @@ void RenderPassEncoder::drawIndirect(uint32_t maxDrawCount, BufferOffsetPair arg
 {
     if (m_commandList)
     {
-        writeRenderState();
+        if (!writeRenderState())
+            return;
         commands::DrawIndirect cmd;
         cmd.maxDrawCount = maxDrawCount;
         cmd.argBuffer = argBuffer;
@@ -155,7 +185,8 @@ void RenderPassEncoder::drawIndexedIndirect(
 {
     if (m_commandList)
     {
-        writeRenderState();
+        if (!writeRenderState())
+            return;
         commands::DrawIndexedIndirect cmd;
         cmd.maxDrawCount = maxDrawCount;
         cmd.argBuffer = argBuffer;
@@ -168,7 +199,8 @@ void RenderPassEncoder::drawMeshTasks(uint32_t x, uint32_t y, uint32_t z)
 {
     if (m_commandList)
     {
-        writeRenderState();
+        if (!writeRenderState())
+            return;
         commands::DrawMeshTasks cmd;
         cmd.x = x;
         cmd.y = y;
@@ -309,6 +341,20 @@ Result ComputePassEncoder::bindPipelineWithData(
     return SLANG_OK;
 }
 
+Result ComputePassEncoder::bindPipeline(IComputePipeline* pipeline, const FlatBindingDesc& bindings)
+{
+    m_pipeline = nullptr;
+    m_rootObject = nullptr;
+    m_fixedBindingData = nullptr;
+    if (!m_commandList)
+        return SLANG_E_INVALID_ARG;
+    SLANG_RETURN_ON_FAIL(m_commandEncoder->bindFlatPipeline(
+        checked_cast<ComputePipeline*>(pipeline), bindings, m_fixedBindingData
+    ));
+    m_pipeline = pipeline;
+    return SLANG_OK;
+}
+
 IShaderObject* ComputePassEncoder::bindPipeline(IComputePipeline* pipeline)
 {
     m_fixedBindingData = nullptr;
@@ -337,7 +383,8 @@ void ComputePassEncoder::dispatchCompute(uint32_t x, uint32_t y, uint32_t z)
 {
     if (m_commandList)
     {
-        if (!writeComputeState()) return;
+        if (!writeComputeState())
+            return;
         commands::DispatchCompute cmd;
         cmd.x = x;
         cmd.y = y;
@@ -350,7 +397,8 @@ void ComputePassEncoder::dispatchComputeIndirect(BufferOffsetPair argBuffer)
 {
     if (m_commandList)
     {
-        if (!writeComputeState()) return;
+        if (!writeComputeState())
+            return;
         commands::DispatchComputeIndirect cmd;
         cmd.argBuffer = argBuffer;
         m_commandList->write(std::move(cmd));
@@ -547,6 +595,99 @@ ICommandEncoder* CommandEncoder::getInterface(const Guid& guid)
     if (guid == ISlangUnknown::getTypeGuid() || guid == ICommandEncoder::getTypeGuid())
         return static_cast<ICommandEncoder*>(this);
     return nullptr;
+}
+
+Result CommandEncoder::bindFlatPipeline(
+    Pipeline* pipeline,
+    const FlatBindingDesc& bindings,
+    BindingData*& outBindingData
+)
+{
+    if (!pipeline)
+    {
+        getDevice()->printError("'pipeline' must not be null.");
+        return SLANG_E_INVALID_ARG;
+    }
+    PipelineLayout* layout = pipeline->m_layout;
+    if (!layout)
+    {
+        getDevice()->printError("The pipeline was not created with a pipeline layout.");
+        return SLANG_E_INVALID_ARG;
+    }
+    if (layout->getDevice() != getDevice())
+    {
+        getDevice()->printError("The pipeline layout does not belong to this device.");
+        return SLANG_E_INVALID_ARG;
+    }
+    if (bindings.setCount != layout->getSetCount())
+    {
+        getDevice()->printError("'bindings.setCount' must match the pipeline layout set count.");
+        return SLANG_E_INVALID_ARG;
+    }
+    if (bindings.setCount && !bindings.sets)
+    {
+        getDevice()->printError("'bindings.sets' must not be null when setCount is nonzero.");
+        return SLANG_E_INVALID_ARG;
+    }
+    for (uint32_t i = 0; i < bindings.setCount; ++i)
+    {
+        if (!bindings.sets[i])
+        {
+            getDevice()->printError("Binding set %u must not be null.", i);
+            return SLANG_E_INVALID_ARG;
+        }
+        BindingSet* set = checked_cast<BindingSet*>(bindings.sets[i]);
+        if (set->getDevice() != getDevice())
+        {
+            getDevice()->printError("Binding set %u does not belong to this device.", i);
+            return SLANG_E_INVALID_ARG;
+        }
+        if (set->m_layout.get() != layout->getSetLayout(i))
+        {
+            getDevice()->printError("Binding set %u layout does not match the pipeline set layout.", i);
+            return SLANG_E_INVALID_ARG;
+        }
+    }
+    if (bindings.constantsSize != layout->getConstantsSize())
+    {
+        getDevice()->printError("'bindings.constantsSize' must match the pipeline layout constants size.");
+        return SLANG_E_INVALID_ARG;
+    }
+    if (bindings.constantsSize && !bindings.constants)
+    {
+        getDevice()->printError("'bindings.constants' must not be null when constantsSize is nonzero.");
+        return SLANG_E_INVALID_ARG;
+    }
+    if (bindings.accessCount && !bindings.accesses)
+    {
+        getDevice()->printError("'bindings.accesses' must not be null when accessCount is nonzero.");
+        return SLANG_E_INVALID_ARG;
+    }
+    for (uint32_t i = 0; i < bindings.accessCount; ++i)
+    {
+        const ResourceAccess& access = bindings.accesses[i];
+        if ((access.buffer != nullptr) == (access.texture != nullptr))
+        {
+            getDevice()->printError("Resource access %u must specify exactly one buffer or texture.", i);
+            return SLANG_E_INVALID_ARG;
+        }
+        if (access.state == ResourceState::Undefined)
+        {
+            getDevice()->printError("Resource access %u state must not be Undefined.", i);
+            return SLANG_E_INVALID_ARG;
+        }
+    }
+
+    m_flatAccesses.clear();
+    for (uint32_t i = 0; i < bindings.setCount; ++i)
+    {
+        BindingSet* set = checked_cast<BindingSet*>(bindings.sets[i]);
+        for (const ResourceAccess& access : set->m_accesses)
+            m_flatAccesses.emplace_back(access);
+    }
+    for (uint32_t i = 0; i < bindings.accessCount; ++i)
+        m_flatAccesses.emplace_back(bindings.accesses[i]);
+    return getFlatBindingData(pipeline, bindings, m_flatAccesses, outBindingData);
 }
 
 IRenderPassEncoder* CommandEncoder::beginRenderPass(const RenderPassDesc& desc)

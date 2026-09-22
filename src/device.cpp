@@ -1,5 +1,7 @@
 #include "device.h"
 
+#include "binding-set.h"
+#include "pipeline-layout.h"
 #include "rhi-shared.h"
 #include "shader.h"
 #include "heap.h"
@@ -735,6 +737,74 @@ Result Device::createInputLayout(const InputLayoutDesc& desc, IInputLayout** out
     SLANG_UNUSED(desc);
     SLANG_UNUSED(outLayout);
     return SLANG_E_NOT_AVAILABLE;
+}
+
+Result Device::createBindingSetLayout(const BindingSetLayoutDesc& desc, IBindingSetLayout** outLayout)
+{
+    if (!outLayout)
+        return SLANG_E_INVALID_ARG;
+    if (!desc.entryCount || !desc.entries)
+    {
+        printError("Binding set layout '%s' requires entries.", desc.label ? desc.label : "<unnamed>");
+        return SLANG_E_INVALID_ARG;
+    }
+    for (uint32_t i = 0; i < desc.entryCount; ++i)
+    {
+        if (!desc.entries[i].count)
+        {
+            printError(
+                "Binding set layout '%s' entry %u has a zero count.",
+                desc.label ? desc.label : "<unnamed>",
+                i
+            );
+            return SLANG_E_INVALID_ARG;
+        }
+    }
+    RefPtr<BindingSetLayout> layout;
+    SLANG_RETURN_ON_FAIL(createBindingSetLayoutImpl(desc, layout));
+    SLANG_RETURN_ON_FAIL(layout->initNative());
+    returnComPtr(outLayout, layout);
+    return SLANG_OK;
+}
+
+Result Device::createBindingSet(const BindingSetDesc& desc, IBindingSet** outBindingSet)
+{
+    if (!outBindingSet)
+        return SLANG_E_INVALID_ARG;
+    if (!desc.layout)
+    {
+        printError("Binding set '%s' requires a layout.", desc.label ? desc.label : "<unnamed>");
+        return SLANG_E_INVALID_ARG;
+    }
+    auto* layout = checked_cast<BindingSetLayout*>(desc.layout);
+    if (layout->getDevice() != this)
+    {
+        printError("Binding set '%s' layout belongs to another device.", desc.label ? desc.label : "<unnamed>");
+        return SLANG_E_INVALID_ARG;
+    }
+    RefPtr<BindingSet> bindingSet;
+    SLANG_RETURN_ON_FAIL(createBindingSetImpl(layout, bindingSet));
+    SLANG_RETURN_ON_FAIL(bindingSet->init(desc));
+    SLANG_RETURN_ON_FAIL(bindingSet->initNative());
+    returnComPtr(outBindingSet, bindingSet);
+    return SLANG_OK;
+}
+
+Result Device::createPipelineLayout(const PipelineLayoutDesc& desc, IPipelineLayout** outLayout)
+{
+    if (!outLayout)
+        return SLANG_E_INVALID_ARG;
+    RefPtr<PipelineLayout> layout;
+    SLANG_RETURN_ON_FAIL(createPipelineLayoutImpl(desc, layout));
+    SLANG_RETURN_ON_FAIL(layout->init());
+    SLANG_RETURN_ON_FAIL(layout->initNative());
+    returnComPtr(outLayout, layout);
+    return SLANG_OK;
+}
+
+uint32_t Device::getInlineConstantsSizeLimit() const
+{
+    return uint32_t(kMaxInlineConstantsSize);
 }
 
 Result Device::createRenderPipeline(const RenderPipelineDesc& desc, IRenderPipeline** outPipeline)

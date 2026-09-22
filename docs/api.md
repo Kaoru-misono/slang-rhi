@@ -30,6 +30,9 @@
 | `createRootShaderObject`           | yes   | yes    |
 | `createShaderTable`                | yes   | yes    |
 | `createShaderProgram`              | yes   | yes    |
+| `createBindingSetLayout`           | yes   | yes    |
+| `createBindingSet`                 | yes   | yes    |
+| `createPipelineLayout`             | yes   | yes    |
 | `createRenderPipeline`             | yes   | yes    |
 | `createComputePipeline`            | yes   | yes    |
 | `createRayTracingPipeline`         | yes   | yes    |
@@ -125,6 +128,27 @@
 
 ## `IShaderTable` interface
 
+## `IBindingSetLayout` interface
+
+| API       | D3D12 | Vulkan |
+|-----------|-------|--------|
+| `getDesc` | yes   | yes    |
+
+## `IBindingSet` interface
+
+| API         | D3D12 | Vulkan |
+|-------------|-------|--------|
+| `getLayout` | yes   | yes    |
+
+## `IPipelineLayout` interface
+
+| API                   | D3D12 | Vulkan |
+|-----------------------|-------|--------|
+| `getDesc`             | yes   | yes    |
+| `getConstantsProfile` | yes   | yes    |
+| `getConstantsSize`    | yes   | yes    |
+| `getSetCount`         | yes   | yes    |
+
 ## `IPipeline` interface
 
 | API               | D3D12 | Vulkan |
@@ -218,6 +242,7 @@
 | API                   | D3D12 | Vulkan |
 |-----------------------|-------|--------|
 | `bindPipeline`        | yes   | yes    |
+| `bindPipeline` (flat) | yes   | yes    |
 | `setRenderState`      | yes   | yes    |
 | `draw`                | yes   | yes    |
 | `drawIndexed`         | yes   | yes    |
@@ -230,6 +255,7 @@
 | API                       | D3D12 | Vulkan |
 |---------------------------|-------|--------|
 | `bindPipeline`            | yes   | yes    |
+| `bindPipeline` (flat)     | yes   | yes    |
 | `dispatchCompute`         | yes   | yes    |
 | `dispatchComputeIndirect` | yes   | yes    |
 

@@ -22,11 +22,10 @@ class Pipeline : public DeviceChild
 {
 public:
     RefPtr<ShaderProgram> m_program;
+    RefPtr<PipelineLayout> m_layout;
 
-    Pipeline(Device* device)
-        : DeviceChild(device)
-    {
-    }
+    Pipeline(Device* device);
+    virtual ~Pipeline() override;
 
     virtual PipelineType getType() const = 0;
     virtual bool isVirtual() const { return false; }

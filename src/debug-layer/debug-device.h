@@ -121,6 +121,18 @@ public:
         IShaderProgram** outProgram,
         ISlangBlob** outDiagnostics
     ) override;
+    virtual SLANG_NO_THROW Result SLANG_MCALL createBindingSetLayout(
+        const BindingSetLayoutDesc& desc,
+        IBindingSetLayout** outLayout
+    ) override;
+    virtual SLANG_NO_THROW Result SLANG_MCALL createBindingSet(
+        const BindingSetDesc& desc,
+        IBindingSet** outBindingSet
+    ) override;
+    virtual SLANG_NO_THROW Result SLANG_MCALL createPipelineLayout(
+        const PipelineLayoutDesc& desc,
+        IPipelineLayout** outLayout
+    ) override;
     virtual SLANG_NO_THROW Result SLANG_MCALL createRenderPipeline(
         const RenderPipelineDesc& desc,
         IRenderPipeline** outPipeline

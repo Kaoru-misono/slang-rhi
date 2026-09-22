@@ -89,9 +89,11 @@ SlangResult validate(
     case Kind::Struct:
         if (expected.alignment < 16 || expected.size % 16 != 0)
             return fail(diagnostic, path, "portable structs require 16-byte alignment and padded size");
-        if (layout->getFieldCount() != expected.fields.size())
+        if (layout->getFieldCount() != expected.fieldCount)
             return fail(diagnostic, path, "field count mismatch");
-        for (size_t i = 0; i < expected.fields.size(); ++i)
+        if (expected.fieldCount && !expected.fields)
+            return fail(diagnostic, path, "invalid field schema");
+        for (uint32_t i = 0; i < expected.fieldCount; ++i)
         {
             const auto& field = expected.fields[i];
             if (!field.name || !*field.name || !field.type)
@@ -99,7 +101,7 @@ SlangResult validate(
             auto fieldPath = path + "." + field.name;
             if (field.offset > expected.size || field.type->size > expected.size - field.offset)
                 return fail(diagnostic, fieldPath, "field extends beyond CPU struct");
-            for (size_t j = 0; j < i; ++j)
+            for (uint32_t j = 0; j < i; ++j)
             {
                 const auto& previous = expected.fields[j];
                 if (std::string_view(previous.name) == field.name)
