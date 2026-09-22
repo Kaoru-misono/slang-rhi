@@ -32,21 +32,18 @@ public:
     ~CommandQueueImpl();
 
     void init(VkQueue queue, uint32_t queueFamilyIndex);
-    // Wait for GPU work and release command buffers before releasing device-owned heaps.
-    void waitAndReleaseCommandBuffers();
-    // Drain deferred deletes and destroy native queue services after command buffers and device-owned heaps are
-    // released.
-    void shutdown();
 
     Result createCommandBuffer(CommandBufferImpl** outCommandBuffer);
     Result getOrCreateCommandBuffer(CommandBufferImpl** outCommandBuffer);
     void retireCommandBuffer(CommandBufferImpl* commandBuffer);
-    void retireCommandBuffers();
     /// Marks the submitted recordings as consumed by `sequence` and retains them until it completes.
     void consumeCommandBuffers(const SubmitDesc& desc, uint64_t sequence);
+    virtual void waitAndReleaseCommandBuffers() override;
+    virtual void shutdown() override;
     virtual void retireCompletedCommandBuffers(uint64_t completed) override;
     virtual void abandonCommandBuffersAfterDeviceLoss() override;
     virtual uint64_t updateLastFinishedID() override;
+    virtual Result waitForSequenceNative(uint64_t sequence, uint64_t timeoutNs) override;
 
     // ICommandQueue implementation
     virtual SLANG_NO_THROW Result SLANG_MCALL createCommandEncoder(
@@ -55,7 +52,6 @@ public:
     ) override;
     virtual SLANG_NO_THROW Result SLANG_MCALL submit(const SubmitDesc& desc) override;
     virtual SLANG_NO_THROW Result SLANG_MCALL waitOnHost() override;
-    Result waitForSequence(uint64_t sequence, uint64_t timeoutNs);
     virtual SLANG_NO_THROW Result SLANG_MCALL getNativeHandle(NativeHandle* outHandle) override;
     virtual SLANG_NO_THROW Result SLANG_MCALL getTimestampCalibration(TimestampCalibration* outCalibration) override;
 };

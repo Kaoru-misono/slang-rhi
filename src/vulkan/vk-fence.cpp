@@ -9,11 +9,6 @@ FenceImpl::FenceImpl(Device* device, const FenceDesc& desc)
 {
 }
 
-void FenceImpl::deleteThis()
-{
-    getDevice<DeviceImpl>()->deferDelete(this);
-}
-
 FenceImpl::~FenceImpl()
 {
     DeviceImpl* device = getDevice<DeviceImpl>();

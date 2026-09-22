@@ -2181,11 +2181,6 @@ void CommandQueueImpl::retireCommandBuffer(CommandBufferImpl* commandBuffer)
     }
 }
 
-void CommandQueueImpl::retireCommandBuffers()
-{
-    getDevice<DeviceImpl>()->collectGarbage();
-}
-
 void CommandQueueImpl::retireCompletedCommandBuffers(uint64_t completed)
 {
     std::list<InternalRefPtr<CommandBufferImpl>> ready;
@@ -2330,10 +2325,8 @@ Result CommandQueueImpl::waitOnHost()
     return SLANG_OK;
 }
 
-Result CommandQueueImpl::waitForSequence(uint64_t sequence, uint64_t timeoutNs)
+Result CommandQueueImpl::waitForSequenceNative(uint64_t sequence, uint64_t timeoutNs)
 {
-    if (sequence > m_lastSubmittedID.load())
-        return SLANG_E_INVALID_ARG;
     DeviceImpl* device = getDevice<DeviceImpl>();
     auto loseDevice = [&]() -> Result
     {
@@ -2341,8 +2334,6 @@ Result CommandQueueImpl::waitForSequence(uint64_t sequence, uint64_t timeoutNs)
         device->collectGarbage();
         return SLANG_FAIL;
     };
-    if (device->m_deviceLost)
-        return SLANG_FAIL;
     if (m_trackingFence->GetCompletedValue() < sequence)
     {
         // A private event per call keeps concurrent waiters on different targets independent.
@@ -2363,9 +2354,7 @@ Result CommandQueueImpl::waitForSequence(uint64_t sequence, uint64_t timeoutNs)
     }
     if (m_trackingFence->GetCompletedValue() == UINT64_MAX || FAILED(m_d3dDevice->GetDeviceRemovedReason()))
         return loseDevice();
-    advanceLastFinishedID(sequence);
-    retireCommandBuffers();
-    return device->m_deviceLost ? SLANG_FAIL : SLANG_OK;
+    return SLANG_OK;
 }
 
 Result CommandQueueImpl::getNativeHandle(NativeHandle* outHandle)
