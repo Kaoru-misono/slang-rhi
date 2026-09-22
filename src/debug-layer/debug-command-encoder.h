@@ -18,6 +18,10 @@ public:
 public:
     // IRenderPassEncoder implementation
     virtual SLANG_NO_THROW IShaderObject* SLANG_MCALL bindPipeline(IRenderPipeline* pipeline) override;
+    virtual SLANG_NO_THROW Result SLANG_MCALL bindPipeline(
+        IRenderPipeline* pipeline,
+        const FlatBindingDesc& bindings
+    ) override;
     virtual SLANG_NO_THROW void SLANG_MCALL bindPipeline(IRenderPipeline* pipeline, IShaderObject* rootObject) override;
 
     virtual SLANG_NO_THROW void SLANG_MCALL setRenderState(const RenderState& state) override;
@@ -63,6 +67,10 @@ public:
 public:
     // IComputePassEncoder implementation
     virtual SLANG_NO_THROW IShaderObject* SLANG_MCALL bindPipeline(IComputePipeline* pipeline) override;
+    virtual SLANG_NO_THROW Result SLANG_MCALL bindPipeline(
+        IComputePipeline* pipeline,
+        const FlatBindingDesc& bindings
+    ) override;
     virtual SLANG_NO_THROW void SLANG_MCALL bindPipeline(
         IComputePipeline* pipeline,
         IShaderObject* rootObject

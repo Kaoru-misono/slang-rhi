@@ -1,8 +1,16 @@
 #include "pipeline.h"
+#include "pipeline-layout.h"
 
 #include "rhi-shared.h"
 
 namespace rhi {
+
+Pipeline::Pipeline(Device* device)
+    : DeviceChild(device)
+{
+}
+
+Pipeline::~Pipeline() = default;
 
 // ----------------------------------------------------------------------------
 // RenderPipeline
@@ -23,6 +31,7 @@ RenderPipeline::RenderPipeline(Device* device, const RenderPipelineDesc& desc)
     m_descHolder.holdList(m_desc.targets, m_desc.targetCount);
     m_descHolder.holdString(m_desc.label);
     m_program = checked_cast<ShaderProgram*>(desc.program);
+    m_layout = checked_cast<PipelineLayout*>(desc.layout);
     m_inputLayout = checked_cast<InputLayout*>(desc.inputLayout);
 }
 
@@ -59,6 +68,7 @@ ComputePipeline::ComputePipeline(Device* device, const ComputePipelineDesc& desc
 {
     m_descHolder.holdString(m_desc.label);
     m_program = checked_cast<ShaderProgram*>(desc.program);
+    m_layout = checked_cast<PipelineLayout*>(desc.layout);
 }
 
 

@@ -30,6 +30,9 @@
 | `createRootShaderObject`           | yes     | yes  | yes   | yes   | yes    | yes     | yes  |
 | `createShaderTable`                | :x:     | yes  | :x:   | yes   | yes    | :x:     | :x:  |
 | `createShaderProgram`              | yes     | yes  | yes   | yes   | yes    | yes     | yes  |
+| `createBindingSetLayout`           | :x:     | :x:  | :x:   | yes   | yes    | :x:     | :x:  |
+| `createBindingSet`                 | :x:     | :x:  | :x:   | yes   | yes    | :x:     | :x:  |
+| `createPipelineLayout`             | :x:     | :x:  | :x:   | yes   | yes    | :x:     | :x:  |
 | `createRenderPipeline`             | :x:     | :x:  | yes   | yes   | yes    | yes     | yes  |
 | `createComputePipeline`            | yes     | yes  | yes   | yes   | yes    | yes     | yes  |
 | `createRayTracingPipeline`         | :x:     | yes  | :x:   | yes   | yes    | :x:     | :x:  |
@@ -125,6 +128,27 @@
 
 ## `IShaderTable` interface
 
+## `IBindingSetLayout` interface
+
+| API       | CPU | CUDA | D3D11 | D3D12 | Vulkan | Metal | WGPU |
+|-----------|-----|------|-------|-------|--------|-------|------|
+| `getDesc` | :x: | :x:  | :x:   | yes   | yes    | :x:   | :x:  |
+
+## `IBindingSet` interface
+
+| API         | CPU | CUDA | D3D11 | D3D12 | Vulkan | Metal | WGPU |
+|-------------|-----|------|-------|-------|--------|-------|------|
+| `getLayout` | :x: | :x:  | :x:   | yes   | yes    | :x:   | :x:  |
+
+## `IPipelineLayout` interface
+
+| API                   | CPU | CUDA | D3D11 | D3D12 | Vulkan | Metal | WGPU |
+|-----------------------|-----|------|-------|-------|--------|-------|------|
+| `getDesc`             | :x: | :x:  | :x:   | yes   | yes    | :x:   | :x:  |
+| `getConstantsProfile` | :x: | :x:  | :x:   | yes   | yes    | :x:   | :x:  |
+| `getConstantsSize`    | :x: | :x:  | :x:   | yes   | yes    | :x:   | :x:  |
+| `getSetCount`         | :x: | :x:  | :x:   | yes   | yes    | :x:   | :x:  |
+
 ## `IPipeline` interface
 
 | API               | CPU | CUDA | D3D11 | D3D12 | Vulkan | Metal | WGPU |
@@ -218,6 +242,7 @@
 | API                   | CPU | CUDA | D3D11 | D3D12 | Vulkan | Metal | WGPU |
 |-----------------------|-----|------|-------|-------|--------|-------|------|
 | `bindPipeline`        | :x: | :x:  | yes   | yes   | yes    | yes   | yes  |
+| `bindPipeline` (flat) | :x: | :x:  | :x:   | yes   | yes    | :x:   | :x:  |
 | `setRenderState`      | :x: | :x:  | yes   | yes   | yes    | yes   | yes  |
 | `draw`                | :x: | :x:  | yes   | yes   | yes    | yes   | yes  |
 | `drawIndexed`         | :x: | :x:  | yes   | yes   | yes    | yes   | yes  |
@@ -230,6 +255,7 @@
 | API                       | CPU | CUDA | D3D11 | D3D12 | Vulkan | Metal | WGPU |
 |---------------------------|-----|------|-------|-------|--------|-------|------|
 | `bindPipeline`            | yes | yes  | yes   | yes   | yes    | yes   | yes  |
+| `bindPipeline` (flat)     | :x: | :x:  | :x:   | yes   | yes    | :x:   | :x:  |
 | `dispatchCompute`         | yes | yes  | yes   | yes   | yes    | yes   | yes  |
 | `dispatchComputeIndirect` | :x: | yes  | yes   | yes   | yes    | yes   | yes  |
 

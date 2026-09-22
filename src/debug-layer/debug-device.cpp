@@ -6,6 +6,7 @@
 #include "debug-query.h"
 #include "debug-shader-object.h"
 
+#include "binding-set.h"
 #include "core/short_vector.h"
 #include "resource-desc-utils.h"
 
@@ -13,9 +14,26 @@
 #include <slang-rhi/cuda-driver-api.h>
 #endif
 
+#include <cstring>
+#include <set>
 #include <vector>
 
 namespace rhi::debug {
+
+namespace {
+
+bool matchesBindingKind(BindingKind kind, const BindingSetEntry& entry)
+{
+    if (isSamplerBindingKind(kind))
+        return entry.sampler != nullptr;
+    if (isTextureBindingKind(kind))
+        return entry.textureView != nullptr;
+    if (isBufferBindingKind(kind))
+        return entry.buffer != nullptr;
+    return entry.accelerationStructure != nullptr;
+}
+
+} // namespace
 
 Result DebugDevice::queryInterface(const SlangUUID& uuid, void** outObject) noexcept
 {
@@ -1015,6 +1033,174 @@ Result DebugDevice::createShaderProgram(
     }
 
     return baseObject->createShaderProgram(patchedDesc, outProgram, outDiagnostics);
+}
+
+Result DebugDevice::createBindingSetLayout(const BindingSetLayoutDesc& desc, IBindingSetLayout** outLayout)
+{
+    SLANG_RHI_DEBUG_API(IDevice, createBindingSetLayout);
+
+    validateCudaContext();
+
+    if (!outLayout)
+    {
+        RHI_VALIDATION_ERROR("'outLayout' must not be null.");
+        return SLANG_E_INVALID_ARG;
+    }
+    if (!desc.entries || !desc.entryCount)
+    {
+        RHI_VALIDATION_ERROR("Binding set layout requires non-null entries and a nonzero entry count.");
+        return SLANG_E_INVALID_ARG;
+    }
+    for (uint32_t i = 0; i < desc.entryCount; ++i)
+    {
+        const auto& entry = desc.entries[i];
+        if (!entry.count)
+        {
+            RHI_VALIDATION_ERROR_FORMAT("Binding set layout entry %u must have a nonzero count.", i);
+            return SLANG_E_INVALID_ARG;
+        }
+        if (entry.kind > BindingKind::RaytracingAccelerationStructure)
+        {
+            RHI_VALIDATION_ERROR_FORMAT("Binding set layout entry %u has an invalid kind.", i);
+            return SLANG_E_INVALID_ARG;
+        }
+    }
+
+    return baseObject->createBindingSetLayout(desc, outLayout);
+}
+
+Result DebugDevice::createBindingSet(const BindingSetDesc& desc, IBindingSet** outBindingSet)
+{
+    SLANG_RHI_DEBUG_API(IDevice, createBindingSet);
+
+    validateCudaContext();
+
+    if (!outBindingSet)
+    {
+        RHI_VALIDATION_ERROR("'outBindingSet' must not be null.");
+        return SLANG_E_INVALID_ARG;
+    }
+    if (!desc.layout)
+    {
+        RHI_VALIDATION_ERROR("Binding set requires a layout.");
+        return SLANG_E_INVALID_ARG;
+    }
+    if (!desc.entries || !desc.entryCount)
+    {
+        RHI_VALIDATION_ERROR("Binding set requires non-null entries and a nonzero entry count.");
+        return SLANG_E_INVALID_ARG;
+    }
+
+    const auto& layoutDesc = desc.layout->getDesc();
+    std::set<std::pair<uint32_t, uint32_t>> boundEntries;
+    for (uint32_t i = 0; i < desc.entryCount; ++i)
+    {
+        const auto& entry = desc.entries[i];
+        if (entry.slot >= layoutDesc.entryCount)
+        {
+            RHI_VALIDATION_ERROR_FORMAT(
+                "Binding at slot %u, array index %u has an out-of-range slot.",
+                entry.slot,
+                entry.arrayIndex
+            );
+            return SLANG_E_INVALID_ARG;
+        }
+        const auto& layoutEntry = layoutDesc.entries[entry.slot];
+        if (entry.arrayIndex >= layoutEntry.count)
+        {
+            RHI_VALIDATION_ERROR_FORMAT(
+                "Binding at slot %u, array index %u has an out-of-range array index.",
+                entry.slot,
+                entry.arrayIndex
+            );
+            return SLANG_E_INVALID_ARG;
+        }
+        uint32_t resourceCount = uint32_t(entry.sampler != nullptr) + uint32_t(entry.textureView != nullptr) +
+                                 uint32_t(entry.buffer != nullptr) + uint32_t(entry.accelerationStructure != nullptr);
+        if (resourceCount != 1)
+        {
+            RHI_VALIDATION_ERROR_FORMAT(
+                "Binding at slot %u, array index %u must set exactly one resource.",
+                entry.slot,
+                entry.arrayIndex
+            );
+            return SLANG_E_INVALID_ARG;
+        }
+        if (!matchesBindingKind(layoutEntry.kind, entry))
+        {
+            RHI_VALIDATION_ERROR_FORMAT(
+                "Binding at slot %u, array index %u has a resource that does not match the layout kind.",
+                entry.slot,
+                entry.arrayIndex
+            );
+            return SLANG_E_INVALID_ARG;
+        }
+        if (!boundEntries.emplace(entry.slot, entry.arrayIndex).second)
+        {
+            RHI_VALIDATION_ERROR_FORMAT("Binding at slot %u, array index %u is bound twice.", entry.slot, entry.arrayIndex);
+            return SLANG_E_INVALID_ARG;
+        }
+    }
+    for (uint32_t slot = 0; slot < layoutDesc.entryCount; ++slot)
+    {
+        for (uint32_t arrayIndex = 0; arrayIndex < layoutDesc.entries[slot].count; ++arrayIndex)
+        {
+            if (boundEntries.find({slot, arrayIndex}) == boundEntries.end())
+            {
+                RHI_VALIDATION_ERROR_FORMAT("Binding at slot %u, array index %u is not filled.", slot, arrayIndex);
+                return SLANG_E_INVALID_ARG;
+            }
+        }
+    }
+
+    return baseObject->createBindingSet(desc, outBindingSet);
+}
+
+Result DebugDevice::createPipelineLayout(const PipelineLayoutDesc& desc, IPipelineLayout** outLayout)
+{
+    SLANG_RHI_DEBUG_API(IDevice, createPipelineLayout);
+
+    validateCudaContext();
+
+    if (!outLayout)
+    {
+        RHI_VALIDATION_ERROR("'outLayout' must not be null.");
+        return SLANG_E_INVALID_ARG;
+    }
+    if (!desc.program)
+    {
+        RHI_VALIDATION_ERROR("Pipeline layout requires a program.");
+        return SLANG_E_INVALID_ARG;
+    }
+    if (desc.setCount && !desc.sets)
+    {
+        RHI_VALIDATION_ERROR("'sets' must not be null when 'setCount' is nonzero.");
+        return SLANG_E_INVALID_ARG;
+    }
+    for (uint32_t i = 0; i < desc.setCount; ++i)
+    {
+        const auto& set = desc.sets[i];
+        if (!set.path || !set.path[0])
+        {
+            RHI_VALIDATION_ERROR_FORMAT("Pipeline layout set %u requires a nonempty path.", i);
+            return SLANG_E_INVALID_ARG;
+        }
+        if (!set.layout)
+        {
+            RHI_VALIDATION_ERROR_FORMAT("Pipeline layout set %u ('%s') requires a layout.", i, set.path);
+            return SLANG_E_INVALID_ARG;
+        }
+        for (uint32_t j = 0; j < i; ++j)
+        {
+            if (std::strcmp(set.path, desc.sets[j].path) == 0)
+            {
+                RHI_VALIDATION_ERROR_FORMAT("Pipeline layout sets %u and %u have the same path '%s'.", j, i, set.path);
+                return SLANG_E_INVALID_ARG;
+            }
+        }
+    }
+
+    return baseObject->createPipelineLayout(desc, outLayout);
 }
 
 Result DebugDevice::createRenderPipeline(const RenderPipelineDesc& desc, IRenderPipeline** outPipeline)

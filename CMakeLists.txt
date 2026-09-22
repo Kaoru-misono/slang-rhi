@@ -796,6 +796,7 @@ endif()
 
 target_sources(slang-rhi PRIVATE
     src/aftermath.cpp
+    src/binding-set.cpp
     src/command-buffer.cpp
     src/command-list.cpp
     src/cuda-driver-api.cpp
@@ -805,6 +806,7 @@ target_sources(slang-rhi PRIVATE
     src/format-conversion.cpp
     src/heap.cpp
     src/pipeline.cpp
+    src/pipeline-layout.cpp
     src/pipeline-resolver.cpp
     src/resource-desc-utils.cpp
     src/rhi-shared.cpp

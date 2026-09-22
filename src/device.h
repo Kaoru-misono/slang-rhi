@@ -222,6 +222,18 @@ public:
         IInputLayout** outLayout
     ) override;
 
+    virtual SLANG_NO_THROW Result SLANG_MCALL createBindingSetLayout(
+        const BindingSetLayoutDesc& desc,
+        IBindingSetLayout** outLayout
+    ) override;
+    virtual SLANG_NO_THROW Result SLANG_MCALL createBindingSet(
+        const BindingSetDesc& desc,
+        IBindingSet** outBindingSet
+    ) override;
+    virtual SLANG_NO_THROW Result SLANG_MCALL createPipelineLayout(
+        const PipelineLayoutDesc& desc,
+        IPipelineLayout** outLayout
+    ) override;
     virtual SLANG_NO_THROW Result SLANG_MCALL createRenderPipeline(
         const RenderPipelineDesc& desc,
         IRenderPipeline** outPipeline
@@ -488,6 +500,20 @@ public:
     ) = 0;
 
     virtual void customizeShaderObject(ShaderObject* shaderObject) { SLANG_UNUSED(shaderObject); }
+
+    /// Allocates the backend object behind one of the three flat binding object kinds. Choosing the
+    /// type is all a backend does here: the shared create path validates the description, then
+    /// initializes the object in two steps, `init` against the shader reflection followed by
+    /// `initNative` on the result.
+    virtual Result createBindingSetLayoutImpl(
+        const BindingSetLayoutDesc& desc,
+        RefPtr<BindingSetLayout>& outLayout
+    ) = 0;
+    virtual Result createBindingSetImpl(BindingSetLayout* layout, RefPtr<BindingSet>& outBindingSet) = 0;
+    virtual Result createPipelineLayoutImpl(const PipelineLayoutDesc& desc, RefPtr<PipelineLayout>& outLayout) = 0;
+
+    /// Largest execution constant block the backend can deliver inline as push constants.
+    virtual uint32_t getInlineConstantsSizeLimit() const;
 
     virtual Result createRenderPipeline2(const RenderPipelineDesc& desc, IRenderPipeline** outPipeline);
     virtual Result createComputePipeline2(const ComputePipelineDesc& desc, IComputePipeline** outPipeline);
