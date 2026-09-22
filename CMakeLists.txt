@@ -639,6 +639,7 @@ target_sources(slang-rhi PRIVATE
     src/rhi.cpp
     src/shader-object.cpp
     src/shader.cpp
+    src/constant-layout.cpp
     src/staging-heap.cpp
     src/transient-buffer-heap.cpp
     src/core/assert.cpp
@@ -768,6 +769,10 @@ if(SLANG_RHI_BUILD_TESTS AND NOT SLANG_RHI_BUILD_SHARED AND NOT EMSCRIPTEN)
         tests/test-aftermath.cpp
         tests/test-arena-allocator.cpp
         tests/test-device-features.cpp
+        tests/test-flat-binding-abi.cpp
+        tests/test-constant-layout.cpp
+        tests/test-flat-native-d3d12.cpp
+        tests/test-flat-native-vulkan.cpp
         tests/test-execute-callback.cpp
         tests/test-block-allocator.cpp
         tests/test-benchmark-command.cpp
