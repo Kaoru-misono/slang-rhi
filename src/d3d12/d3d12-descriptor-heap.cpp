@@ -218,7 +218,7 @@ GPUDescriptorRangeAllocation GPUDescriptorHeap::allocate(uint32_t count)
         stderr,
         "slang-rhi: GPU descriptor heap allocation failed (requested %u descriptors, "
         "heap size %u, free space %u, high water mark %u). "
-        "Consider increasing DeviceDesc::d3d12CbvSrvUavHeapSize or d3d12SamplerHeapSize.\n",
+        "Consider increasing D3D12DeviceExtendedDesc::cbvSrvUavHeapSize or samplerHeapSize.\n",
         count,
         m_size,
         report.totalFreeSpace,

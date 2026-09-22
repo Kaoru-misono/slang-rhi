@@ -3602,14 +3602,6 @@ struct DeviceDesc
     /// Size of a page in staging heap.
     Size stagingHeapPageSize = 16 * 1024 * 1024;
 
-    /// D3D12: Maximum number of CBV/SRV/UAV descriptors in the GPU-visible heap.
-    /// Default is 1,000,000. Increase for large bindless scenes with many textures/buffers.
-    uint32_t d3d12CbvSrvUavHeapSize = 1000000;
-
-    /// D3D12: Maximum number of Sampler descriptors in the GPU-visible heap.
-    /// Default is 2,048 (D3D12 hardware limit). Cannot exceed 2,048.
-    uint32_t d3d12SamplerHeapSize = 2048;
-
     // Configuration for bindless resources.
     BindlessDesc bindless = {};
 };
@@ -4332,6 +4324,10 @@ struct D3D12DeviceExtendedDesc
     /// Limits the maximum shader model using D3D_SHADER_MODEL encoding (for example, 0x6a for SM 6.10).
     /// A value of 0 uses automatic detection.
     uint32_t highestShaderModel = 0;
+    /// Number of CBV/SRV/UAV descriptors in the shader-visible heap. Large bindless scenes need more.
+    uint32_t cbvSrvUavHeapSize = 1000000;
+    /// Number of sampler descriptors in the shader-visible heap; clamped to the 2,048 hardware limit.
+    uint32_t samplerHeapSize = 2048;
 };
 
 struct VulkanDeviceExtendedDesc
