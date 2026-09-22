@@ -187,6 +187,7 @@ DeviceImpl::~DeviceImpl()
     m_memoryAllocator.destroy();
 
     descriptorSetAllocator.close();
+    m_bindingSetDescriptorPool.release();
 
     if (m_device != VK_NULL_HANDLE)
     {
@@ -1761,6 +1762,7 @@ Result DeviceImpl::initialize(const DeviceDesc& desc, BackendImpl* backend)
     std::vector<Feature> availableFeatures;
     std::vector<Capability> availableCapabilities;
     SLANG_RETURN_ON_FAIL(initVulkanDevice(desc, extendedDesc, backend, availableFeatures, availableCapabilities));
+    m_bindingSetDescriptorPool.initialize(this);
 
     VkPhysicalDeviceIDProperties idProps = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ID_PROPERTIES};
     VkPhysicalDeviceSubgroupProperties subgroupProps = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SUBGROUP_PROPERTIES};

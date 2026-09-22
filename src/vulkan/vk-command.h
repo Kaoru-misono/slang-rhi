@@ -72,6 +72,13 @@ public:
         const ComputeBufferAccess* buffers, uint32_t bufferCount, BindingData*& outBindingData
     ) override;
 
+    virtual Result getFlatBindingData(
+        Pipeline* pipeline,
+        const FlatBindingDesc& bindings,
+        std::span<const ResourceAccess> accesses,
+        BindingData*& outBindingData
+    ) override;
+
     // ICommandEncoder implementation
 
     virtual SLANG_NO_THROW Result SLANG_MCALL finish(

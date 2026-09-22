@@ -1,4 +1,5 @@
 #include "vk-command.h"
+#include "vk-binding-set.h"
 #include "vk-device.h"
 #include "vk-buffer.h"
 #include "vk-texture.h"
@@ -1974,11 +1975,7 @@ void CommandRecorder::requireBindingStates(BindingDataImpl* bindingData)
     for (uint32_t i = 0; i < bindingData->textureStateCount; ++i)
     {
         const auto& textureState = bindingData->textureStates[i];
-        requireTextureState(
-            textureState.textureView->m_texture,
-            textureState.textureView->m_desc.subresourceRange,
-            textureState.state
-        );
+        requireTextureState(textureState.texture, textureState.subresourceRange, textureState.state);
     }
 }
 
@@ -2560,6 +2557,112 @@ Result CommandEncoderImpl::init()
 {
     SLANG_RETURN_ON_FAIL(m_queue->getOrCreateCommandBuffer(m_commandBuffer.writeRef()));
     m_commandList = &m_commandBuffer->m_commandList;
+    return SLANG_OK;
+}
+
+Result CommandEncoderImpl::getFlatBindingData(
+    Pipeline* pipeline,
+    const FlatBindingDesc& bindings,
+    std::span<const ResourceAccess> accesses,
+    BindingData*& outBindingData
+)
+{
+    auto* device = getDevice<DeviceImpl>();
+    auto* layout = checked_cast<PipelineLayoutImpl*>(pipeline->m_layout.get());
+    auto& arena = m_commandBuffer->m_allocator;
+    auto* data = arena.allocate<BindingDataImpl>();
+    *data = {};
+    data->pipelineLayout = layout->m_pipelineLayout;
+
+    data->descriptorSetCount = layout->m_descriptorSetCount;
+    if (data->descriptorSetCount)
+    {
+        data->descriptorSets = arena.allocate<VkDescriptorSet>(data->descriptorSetCount);
+        for (uint32_t i = 0; i < data->descriptorSetCount; ++i)
+            data->descriptorSets[i] = VK_NULL_HANDLE;
+    }
+    for (uint32_t i = 0; i < bindings.setCount; ++i)
+    {
+        auto* set = checked_cast<BindingSetImpl*>(bindings.sets[i]);
+        data->descriptorSets[layout->m_setIndices[i]] = set->m_descriptorSet;
+        m_commandBuffer->m_trackedObjects.insert(set);
+    }
+
+    switch (layout->getConstantsProfile())
+    {
+    case ConstantsProfile::None:
+        break;
+    case ConstantsProfile::Inline:
+        data->pushConstantCount = 1;
+        data->pushConstantRanges = arena.allocate<VkPushConstantRange>();
+        data->pushConstantRanges[0] = {VK_SHADER_STAGE_ALL, 0, layout->getConstantsSize()};
+        data->pushConstantData = arena.allocate<void*>();
+        data->pushConstantData[0] = arena.allocate(bindings.constantsSize);
+        std::memcpy(data->pushConstantData[0], bindings.constants, bindings.constantsSize);
+        break;
+    case ConstantsProfile::Buffered:
+    {
+        TransientBufferArena::Allocation allocation;
+        SLANG_RETURN_ON_FAIL(m_commandBuffer->m_constantBufferArena.allocate(bindings.constantsSize, &allocation));
+        std::memcpy(allocation.mappedData, bindings.constants, bindings.constantsSize);
+        auto descriptorSet = m_commandBuffer->m_descriptorSetAllocator.allocate(layout->m_constantsSetLayout);
+        if (!descriptorSet.handle)
+            return SLANG_E_OUT_OF_MEMORY;
+
+        VkDescriptorBufferInfo bufferInfo = {};
+        bufferInfo.buffer = checked_cast<BufferImpl*>(allocation.buffer)->m_buffer.m_buffer;
+        bufferInfo.offset = allocation.offset;
+        bufferInfo.range = bindings.constantsSize;
+        VkWriteDescriptorSet write = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+        write.dstSet = descriptorSet.handle;
+        write.dstBinding = layout->m_constantsBinding;
+        write.descriptorCount = 1;
+        write.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+        write.pBufferInfo = &bufferInfo;
+        device->m_api.vkUpdateDescriptorSets(device->m_api.m_device, 1, &write, 0, nullptr);
+        data->descriptorSets[layout->m_constantsSetIndex] = descriptorSet.handle;
+        break;
+    }
+    }
+
+    if (layout->m_bindlessSetIndex != kInvalidDescriptorSetIndex)
+        data->descriptorSets[layout->m_bindlessSetIndex] = device->m_bindlessDescriptorSet->m_descriptorSet;
+    // Every set is rebound on every bind, so the indices no parameter occupies still need a set.
+    for (uint32_t i = 0; i < data->descriptorSetCount; ++i)
+    {
+        if (data->descriptorSets[i] == VK_NULL_HANDLE)
+        {
+            auto descriptorSet = m_commandBuffer->m_descriptorSetAllocator.allocate(layout->m_emptySetLayout);
+            if (!descriptorSet.handle)
+                return SLANG_E_OUT_OF_MEMORY;
+            data->descriptorSets[i] = descriptorSet.handle;
+        }
+    }
+
+    // `accesses` is scratch storage the next bind overwrites, so the states have to be copied.
+    data->bufferStateCapacity = data->textureStateCapacity = uint32_t(accesses.size());
+    if (!accesses.empty())
+    {
+        data->bufferStates = arena.allocate<BindingDataImpl::BufferState>(accesses.size());
+        data->textureStates = arena.allocate<BindingDataImpl::TextureState>(accesses.size());
+    }
+    for (const auto& access : accesses)
+    {
+        if (access.buffer)
+        {
+            auto* buffer = checked_cast<BufferImpl*>(access.buffer);
+            data->bufferStates[data->bufferStateCount++] = {buffer, access.state};
+            m_commandBuffer->m_trackedObjects.insert(buffer);
+        }
+        else
+        {
+            auto* texture = checked_cast<TextureImpl*>(access.texture);
+            data->textureStates[data->textureStateCount++] = {texture, access.subresourceRange, access.state};
+            m_commandBuffer->m_trackedObjects.insert(texture);
+        }
+    }
+
+    outBindingData = data;
     return SLANG_OK;
 }
 

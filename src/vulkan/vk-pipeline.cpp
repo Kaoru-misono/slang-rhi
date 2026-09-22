@@ -1,4 +1,5 @@
 #include "vk-pipeline.h"
+#include "vk-binding-set.h"
 #include "vk-device.h"
 #include "vk-shader-object-layout.h"
 #include "vk-shader-program.h"
@@ -777,7 +778,9 @@ Result DeviceImpl::createRenderPipeline2(const RenderPipelineDesc& desc, IRender
     createInfo.pMultisampleState = &multisampling;
     createInfo.pColorBlendState = &colorBlending;
     createInfo.pDepthStencilState = &depthStencilStateInfo;
-    createInfo.layout = program->m_rootShaderObjectLayout->m_pipelineLayout;
+    auto* pipelineLayout = checked_cast<PipelineLayoutImpl*>(desc.layout);
+    createInfo.layout = pipelineLayout ? pipelineLayout->m_pipelineLayout
+                                       : program->m_rootShaderObjectLayout->m_pipelineLayout;
     createInfo.subpass = 0;
     createInfo.basePipelineHandle = VK_NULL_HANDLE;
     createInfo.pDynamicState = &dynamicStateInfo;
@@ -857,7 +860,9 @@ Result DeviceImpl::createComputePipeline2(const ComputePipelineDesc& desc, IComp
 
     VkComputePipelineCreateInfo createInfo = {VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO};
     createInfo.stage = program->m_stageCreateInfos[0];
-    createInfo.layout = program->m_rootShaderObjectLayout->m_pipelineLayout;
+    auto* pipelineLayout = checked_cast<PipelineLayoutImpl*>(desc.layout);
+    createInfo.layout = pipelineLayout ? pipelineLayout->m_pipelineLayout
+                                       : program->m_rootShaderObjectLayout->m_pipelineLayout;
 
     VkPipeline vkPipeline = VK_NULL_HANDLE;
     ComPtr<ISlangBlob> cacheKey;

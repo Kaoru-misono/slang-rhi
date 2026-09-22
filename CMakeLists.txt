@@ -709,6 +709,7 @@ if(SLANG_RHI_ENABLE_VULKAN)
         src/vulkan/vk-acceleration-structure.cpp
         src/vulkan/vk-api.cpp
         src/vulkan/vk-backend.cpp
+        src/vulkan/vk-binding-set.cpp
         src/vulkan/vk-bindless-descriptor-set.cpp
         src/vulkan/vk-buffer.cpp
         src/vulkan/vk-command.cpp
