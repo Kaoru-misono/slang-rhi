@@ -294,11 +294,11 @@ for WebGPU recording errors and asynchronous validation.
 
 ### Queue type support
 
-| Queue Type | D3D12 | Vulkan |
-| ------------------------ | ------- | -------- |
-| `QueueType::Graphics` | yes | yes |
-| `QueueType::Compute` | yes | yes |
-| `QueueType::Transfer` | yes | yes |
+| Queue Type             | D3D12 | Vulkan |
+|------------------------|-------|--------|
+| `QueueType::Graphics`  | yes   | yes    |
+| `QueueType::Compute`   | yes   | yes    |
+| `QueueType::Transfer`  | yes   | yes    |
 
 The queue family ownership transfer (QFOT) methods (`releaseBufferForQueue`, `releaseTextureForQueue`,
 `acquireBufferFromQueue`, `acquireTextureFromQueue`) are used to transfer resource ownership between
