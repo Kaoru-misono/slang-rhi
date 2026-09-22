@@ -693,11 +693,14 @@ Result DeviceImpl::initialize(const DeviceDesc& desc, BackendImpl* backend)
             )
         );
 
+        D3D12DeviceExtendedDesc defaultHeapSizes;
+        const D3D12DeviceExtendedDesc& heapSizes = extendedDesc ? *extendedDesc : defaultHeapSizes;
+        uint32_t samplerHeapSize = min(heapSizes.samplerHeapSize, 2048u);
         SLANG_RETURN_ON_FAIL(
             GPUDescriptorHeap::create(
                 m_device,
                 D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV,
-                desc.d3d12CbvSrvUavHeapSize,
+                heapSizes.cbvSrvUavHeapSize,
                 16 * 1024,
                 m_gpuCbvSrvUavHeap.writeRef()
             )
@@ -706,8 +709,8 @@ Result DeviceImpl::initialize(const DeviceDesc& desc, BackendImpl* backend)
             GPUDescriptorHeap::create(
                 m_device,
                 D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER,
-                min(desc.d3d12SamplerHeapSize, 2048u),
-                min(desc.d3d12SamplerHeapSize, 2048u),
+                samplerHeapSize,
+                samplerHeapSize,
                 m_gpuSamplerHeap.writeRef()
             )
         );
