@@ -19,6 +19,7 @@ class ResourceHeap;
 
 class CommandBuffer;
 class CommandEncoder;
+class CommandQueue;
 class ComputePassEncoder;
 class RayTracingPassEncoder;
 

@@ -11,6 +11,7 @@ public:
 
     FenceImpl(Device* device, const FenceDesc& desc);
     ~FenceImpl();
+    virtual void deleteThis() override;
 
     Result init();
 

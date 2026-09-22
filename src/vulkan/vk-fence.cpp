@@ -9,6 +9,11 @@ FenceImpl::FenceImpl(Device* device, const FenceDesc& desc)
 {
 }
 
+void FenceImpl::deleteThis()
+{
+    getDevice<DeviceImpl>()->deferDelete(this);
+}
+
 FenceImpl::~FenceImpl()
 {
     DeviceImpl* device = getDevice<DeviceImpl>();
@@ -74,6 +79,11 @@ Result FenceImpl::init()
 Result FenceImpl::getCurrentValue(uint64_t* outValue)
 {
     DeviceImpl* device = getDevice<DeviceImpl>();
+    if (device->m_deviceLost)
+    {
+        *outValue = 0;
+        return SLANG_FAIL;
+    }
     SLANG_VK_RETURN_ON_FAIL_REPORT(
         device->m_api.vkGetSemaphoreCounterValue(device->m_api.m_device, m_semaphore, outValue),
         device

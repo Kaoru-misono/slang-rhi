@@ -32,7 +32,7 @@ void VulkanDeviceQueue::destroy()
     }
 }
 
-Result VulkanDeviceQueue::init(const VulkanApi& api, VkQueue queue, int queueIndex)
+Result VulkanDeviceQueue::init(const VulkanApi& api, VkQueue queue, int queueIndex, std::mutex& queueMutex)
 {
     SLANG_RHI_ASSERT(m_api == nullptr);
 
@@ -46,6 +46,7 @@ Result VulkanDeviceQueue::init(const VulkanApi& api, VkQueue queue, int queueInd
     m_queueIndex = queueIndex;
 
     m_queue = queue;
+    m_queueMutex = &queueMutex;
 
     for (int i = 0; i < m_numCommandBuffers; i++)
     {
@@ -121,7 +122,10 @@ void VulkanDeviceQueue::flushStepA()
 
     FenceInfo& fence = m_fences[m_commandBufferIndex];
 
-    m_api->vkQueueSubmit(m_queue, 1, &submitInfo, fence.fence);
+    {
+        std::lock_guard<std::mutex> lock(*m_queueMutex);
+        m_api->vkQueueSubmit(m_queue, 1, &submitInfo, fence.fence);
+    }
 
     // mark signaled fence value
     fence.value = m_nextFenceValue;
@@ -179,6 +183,16 @@ void VulkanDeviceQueue::retireCompleted()
     {
         _updateFenceAtIndex(i, false);
     }
+}
+
+void VulkanDeviceQueue::discardRetainedResources()
+{
+    for (int i = 0; i < m_numCommandBuffers; ++i)
+    {
+        m_fences[i].retainedResources.clear();
+        m_fences[i].active = false;
+    }
+    m_pendingResourceRetirements = 0;
 }
 
 void VulkanDeviceQueue::retireCompletedResources()

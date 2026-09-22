@@ -8,12 +8,13 @@ FenceImpl::FenceImpl(Device* device, const FenceDesc& desc)
 {
 }
 
+void FenceImpl::deleteThis()
+{
+    getDevice<DeviceImpl>()->deferDelete(this);
+}
+
 FenceImpl::~FenceImpl()
 {
-    if (m_waitEvent)
-    {
-        ::CloseHandle(m_waitEvent);
-    }
     if (m_sharedHandle)
     {
 #if SLANG_WINDOWS_FAMILY
@@ -41,17 +42,16 @@ Result FenceImpl::init()
     return SLANG_OK;
 }
 
-HANDLE FenceImpl::getWaitEvent()
-{
-    if (m_waitEvent)
-        return m_waitEvent;
-    m_waitEvent = CreateEventEx(nullptr, nullptr, 0, EVENT_ALL_ACCESS);
-    return m_waitEvent;
-}
-
 Result FenceImpl::getCurrentValue(uint64_t* outValue)
 {
-    *outValue = m_fence->GetCompletedValue();
+    uint64_t value = m_fence->GetCompletedValue();
+    if (value == UINT64_MAX || getDevice()->m_deviceLost)
+    {
+        getDevice()->m_deviceLost = true;
+        *outValue = 0;
+        return SLANG_FAIL;
+    }
+    *outValue = value;
     return SLANG_OK;
 }
 

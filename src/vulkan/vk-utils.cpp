@@ -77,6 +77,8 @@ void reportVulkanError(VkResult res, const char* call, const SourceLocation loca
 {
     if (res == VK_ERROR_DEVICE_LOST)
     {
+        if (device)
+            device->m_deviceLost = true;
 #if SLANG_RHI_ENABLE_AFTERMATH
         AftermathCrashDumper::waitForDump();
 #endif

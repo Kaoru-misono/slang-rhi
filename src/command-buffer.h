@@ -15,6 +15,7 @@
 
 #include "rhi-shared-fwd.h"
 
+#include <atomic>
 #include <set>
 
 namespace rhi {
@@ -48,9 +49,31 @@ public:
         return SLANG_E_NOT_AVAILABLE;
     }
 
+    /// Polls the backend tracking primitive and returns the highest sequence known complete.
+    virtual uint64_t updateLastFinishedID() = 0;
+    /// Returns every command buffer submitted at or below `completed` to the reuse pool.
+    virtual void retireCompletedCommandBuffers(uint64_t completed) = 0;
+    /// Releases the retained command buffers of a device whose completion can no longer be proven.
+    virtual void abandonCommandBuffersAfterDeviceLoss() = 0;
+
+protected:
+    void advanceLastFinishedID(uint64_t finished)
+    {
+        uint64_t previous = m_lastFinishedID.load();
+        while (previous < finished && !m_lastFinishedID.compare_exchange_weak(previous, finished))
+        {}
+    }
+
 public:
     QueueType m_type;
     TransientBufferHeap m_constantBufferHeap;
+
+    /// Sequence of the most recent submission that reached the native queue. The next submission
+    /// is assigned this value plus one and publishes it only once the native submit succeeded,
+    /// so a failed submission leaves no gap to wait on.
+    std::atomic<uint64_t> m_lastSubmittedID{0};
+    /// Highest sequence the backend tracking primitive has been observed to reach.
+    std::atomic<uint64_t> m_lastFinishedID{0};
 };
 
 class RenderPassEncoder : public IRenderPassEncoder
