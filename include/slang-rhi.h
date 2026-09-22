@@ -2702,8 +2702,8 @@ public:
     virtual SLANG_NO_THROW IShaderObject* SLANG_MCALL bindPipeline(IComputePipeline* pipeline) = 0;
     virtual SLANG_NO_THROW void SLANG_MCALL bindPipeline(IComputePipeline* pipeline, IShaderObject* rootObject) = 0;
 
-    /// April extension: bind a fully specialized single-entry-point compute program
-    /// with only ordinary entry-point data (no globals, resource slots or subobjects).
+    /// Binds a fully specialized single-entry-point compute program without a shader object,
+    /// passing only ordinary entry-point data (no globals, resource slots or subobjects).
     /// The data is copied immediately and must exactly match the reflected layout,
     /// be nonempty, at most 128 bytes, and a multiple of four bytes.
     /// Buffers are retained until command completion and transitioned to their listed
