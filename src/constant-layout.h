@@ -6,12 +6,9 @@
 
 namespace rhi {
 
-// Checks the portable POD subset against one fully specialized target layout.
-// This validates bytes only; native slots/profile and resource-set identity are separate contracts.
-SlangResult validateConstantLayout(
-    slang::TypeLayoutReflection* layout,
-    const ConstantTypeDesc& expected,
-    std::string& diagnostic
-);
+// Checks one reflected execution constant block against the portable subset. Passing means a C
+// struct sharing the shader's declarations has the same byte layout, so no CPU type description is
+// needed: the caller only supplies its size.
+SlangResult validateConstantLayout(slang::TypeLayoutReflection* layout, std::string& diagnostic);
 
 } // namespace rhi

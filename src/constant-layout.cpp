@@ -1,15 +1,13 @@
 #include "constant-layout.h"
 
-#include <bit>
-#include <string_view>
-
 namespace rhi {
 namespace {
 
 using Kind = slang::TypeReflection::Kind;
 using Scalar = slang::TypeReflection::ScalarType;
 
-constexpr unsigned kMaxSchemaNestingDepth = 64;
+constexpr unsigned kMaxNestingDepth = 64;
+constexpr size_t kRowSize = 16;
 
 SlangResult fail(std::string& diagnostic, const std::string& path, const char* reason)
 {
@@ -22,128 +20,167 @@ bool portableScalar(Scalar scalar)
     return scalar == Scalar::Int32 || scalar == Scalar::UInt32 || scalar == Scalar::Float32;
 }
 
-SlangResult validate(
-    slang::TypeLayoutReflection* layout,
-    const ConstantTypeDesc& expected,
-    const std::string& path,
-    unsigned depth,
-    std::string& diagnostic
-)
+/// Anything the target layouts give a 16-byte alignment to; the C struct only agrees when the
+/// shader author already placed it on a row boundary.
+bool startsOnRow(slang::TypeLayoutReflection* layout)
 {
-    // Reject malformed/cyclic caller schemas before recursing indefinitely.
-    if (!layout || depth > kMaxSchemaNestingDepth)
-        return fail(diagnostic, path, "missing reflection or excessive schema nesting");
-    if (layout->getKind() != expected.kind)
-        return fail(diagnostic, path, "type kind mismatch");
-    if (!expected.size || expected.size == SLANG_UNBOUNDED_SIZE || expected.size == SLANG_UNKNOWN_SIZE ||
-        expected.size != layout->getSize())
-        return fail(diagnostic, path, "byte size mismatch or unresolved size");
-    if (!std::has_single_bit(expected.alignment) || expected.size % expected.alignment != 0)
-        return fail(diagnostic, path, "invalid CPU alignment");
-
-    for (unsigned i = 0; i < layout->getCategoryCount(); ++i)
+    switch (layout->getKind())
     {
-        if (layout->getCategoryByIndex(i) != slang::ParameterCategory::Uniform)
-            return fail(diagnostic, path, "resource or specialization data is not an execution constant");
-    }
-
-    switch (expected.kind)
-    {
-    case Kind::Scalar:
-        if (!portableScalar(expected.scalar) || expected.size != 4 || layout->getScalarType() != expected.scalar)
-            return fail(diagnostic, path, "expected a matching 32-bit int, uint or float");
-        break;
     case Kind::Vector:
-        if (!portableScalar(expected.scalar) || layout->getScalarType() != expected.scalar)
-            return fail(diagnostic, path, "vector scalar type mismatch or unsupported scalar");
-        if (expected.elementCount < 2 || expected.elementCount > 4 ||
-            layout->getElementCount() != expected.elementCount || expected.size != 4 * expected.elementCount)
-            return fail(diagnostic, path, "vector width mismatch");
-        break;
+        return layout->getElementCount() == 4;
     case Kind::Matrix:
-        if (expected.scalar != Scalar::Float32 || layout->getScalarType() != expected.scalar || expected.size != 64 ||
-            layout->getRowCount() != 4 || layout->getColumnCount() != 4)
-            return fail(diagnostic, path, "portable matrices must be float4x4");
-        if ((expected.matrixLayout != SLANG_MATRIX_LAYOUT_ROW_MAJOR &&
-             expected.matrixLayout != SLANG_MATRIX_LAYOUT_COLUMN_MAJOR) ||
-            layout->getMatrixLayoutMode() != expected.matrixLayout)
-            return fail(diagnostic, path, "matrix row/column layout mismatch");
-        break;
     case Kind::Array:
-        if (!expected.elementType || expected.elementType->kind != Kind::Vector ||
-            expected.elementType->elementCount != 4)
-            return fail(diagnostic, path, "portable arrays require four-component vector elements");
-        if (!std::has_single_bit(expected.elementType->alignment) ||
-            expected.alignment < expected.elementType->alignment ||
-            expected.elementStride % expected.elementType->alignment != 0)
-            return fail(diagnostic, path, "array alignment does not cover its CPU element type");
-        if (!expected.elementCount || expected.elementCount == SLANG_UNBOUNDED_SIZE ||
-            expected.elementCount == SLANG_UNKNOWN_SIZE || layout->getElementCount() != expected.elementCount)
-            return fail(diagnostic, path, "array count mismatch or unresolved count");
-        if (expected.elementStride != 16 ||
-            layout->getElementStride(SLANG_PARAMETER_CATEGORY_UNIFORM) != expected.elementStride ||
-            expected.size % expected.elementStride != 0 ||
-            expected.size / expected.elementStride != expected.elementCount)
-            return fail(diagnostic, path, "array stride mismatch");
-        return validate(layout->getElementTypeLayout(), *expected.elementType, path + "[]", depth + 1, diagnostic);
     case Kind::Struct:
-        if (expected.alignment < 16 || expected.size % 16 != 0)
-            return fail(diagnostic, path, "portable structs require 16-byte alignment and padded size");
-        if (layout->getFieldCount() != expected.fieldCount)
-            return fail(diagnostic, path, "field count mismatch");
-        if (expected.fieldCount && !expected.fields)
-            return fail(diagnostic, path, "invalid field schema");
-        for (uint32_t i = 0; i < expected.fieldCount; ++i)
-        {
-            const auto& field = expected.fields[i];
-            if (!field.name || !*field.name || !field.type)
-                return fail(diagnostic, path, "invalid field schema");
-            auto fieldPath = path + "." + field.name;
-            if (field.offset > expected.size || field.type->size > expected.size - field.offset)
-                return fail(diagnostic, fieldPath, "field extends beyond CPU struct");
-            for (uint32_t j = 0; j < i; ++j)
-            {
-                const auto& previous = expected.fields[j];
-                if (std::string_view(previous.name) == field.name)
-                    return fail(diagnostic, fieldPath, "duplicate field schema");
-                if (field.offset < previous.offset + previous.type->size &&
-                    previous.offset < field.offset + field.type->size)
-                    return fail(diagnostic, fieldPath, "overlapping CPU fields");
-            }
-            if (!std::has_single_bit(field.type->alignment) || expected.alignment < field.type->alignment ||
-                field.offset % field.type->alignment != 0)
-                return fail(diagnostic, fieldPath, "misaligned CPU field");
-            auto index = layout->findFieldIndexByName(field.name);
-            if (index < 0)
-                return fail(diagnostic, fieldPath, "field not found in target layout");
-            auto reflected = layout->getFieldByIndex(unsigned(index));
-            if (reflected->getOffset() != field.offset)
-                return fail(diagnostic, fieldPath, "field offset mismatch");
-            auto targetAlignment = reflected->getTypeLayout()->getAlignment();
-            if (targetAlignment <= 0 || expected.alignment < size_t(targetAlignment) ||
-                field.offset % size_t(targetAlignment) != 0)
-                return fail(diagnostic, fieldPath, "field placement does not satisfy target alignment");
-            auto result = validate(reflected->getTypeLayout(), *field.type, fieldPath, depth + 1, diagnostic);
-            if (SLANG_FAILED(result))
-                return result;
-        }
-        break;
+        return true;
     default:
-        return fail(diagnostic, path, "unsupported execution-constant type");
+        return false;
     }
-    return SLANG_OK;
 }
+
+bool isVector(slang::TypeLayoutReflection* layout, size_t componentCount)
+{
+    return layout->getKind() == Kind::Vector && layout->getElementCount() == componentCount;
+}
+
+/// A float3 leaves four bytes of its row free, and only a scalar may be packed into them.
+bool scalarFollows(slang::TypeLayoutReflection* structLayout, unsigned fieldIndex)
+{
+    if (fieldIndex + 1 == structLayout->getFieldCount())
+        return true;
+    auto* next = structLayout->getFieldByIndex(fieldIndex + 1)->getTypeLayout();
+    return next && next->getKind() == Kind::Scalar;
+}
+
+struct Validator
+{
+    std::string& diagnostic;
+
+    SlangResult requireUniform(slang::TypeLayoutReflection* layout, const std::string& path)
+    {
+        for (unsigned i = 0; i < layout->getCategoryCount(); ++i)
+        {
+            if (layout->getCategoryByIndex(i) != slang::ParameterCategory::Uniform)
+                return fail(diagnostic, path, "resource or specialization data is not an execution constant");
+        }
+        return SLANG_OK;
+    }
+
+    /// `outSize` is what the matching 4-byte-packed C type occupies. A reflected size or offset that
+    /// differs from it means the target inserted padding the CPU struct does not have.
+    SlangResult validateType(
+        slang::TypeLayoutReflection* layout,
+        const std::string& path,
+        unsigned depth,
+        size_t& outSize
+    )
+    {
+        if (!layout || depth > kMaxNestingDepth)
+            return fail(diagnostic, path, "missing reflection or excessive nesting");
+        SLANG_RETURN_ON_FAIL(requireUniform(layout, path));
+        switch (layout->getKind())
+        {
+        case Kind::Scalar:
+            if (!portableScalar(layout->getScalarType()))
+                return fail(diagnostic, path, "expected a 32-bit int, uint or float");
+            outSize = 4;
+            break;
+        case Kind::Vector:
+        {
+            if (!portableScalar(layout->getScalarType()))
+                return fail(diagnostic, path, "expected a vector of 32-bit int, uint or float");
+            size_t componentCount = layout->getElementCount();
+            if (componentCount < 2 || componentCount > 4)
+                return fail(diagnostic, path, "portable vectors have two to four components");
+            outSize = 4 * componentCount;
+            break;
+        }
+        case Kind::Matrix:
+            if (layout->getScalarType() != Scalar::Float32 || layout->getRowCount() != 4 ||
+                layout->getColumnCount() != 4)
+                return fail(diagnostic, path, "the only portable matrix is float4x4");
+            if (layout->getMatrixLayoutMode() != SLANG_MATRIX_LAYOUT_COLUMN_MAJOR)
+                return fail(diagnostic, path, "portable matrices are column-major");
+            outSize = 4 * kRowSize;
+            break;
+        case Kind::Array:
+        {
+            auto* elementLayout = layout->getElementTypeLayout();
+            if (!elementLayout || !isVector(elementLayout, 4))
+                return fail(diagnostic, path, "portable arrays have four-component vector elements");
+            size_t elementCount = layout->getElementCount();
+            if (!elementCount || elementCount == SLANG_UNBOUNDED_SIZE || elementCount == SLANG_UNKNOWN_SIZE)
+                return fail(diagnostic, path, "array element count must be fixed and known");
+            if (layout->getElementStride(SLANG_PARAMETER_CATEGORY_UNIFORM) != kRowSize)
+                return fail(diagnostic, path, "portable array elements are 16 bytes apart");
+            size_t elementSize = 0;
+            SLANG_RETURN_ON_FAIL(validateType(elementLayout, path + "[]", depth + 1, elementSize));
+            outSize = kRowSize * elementCount;
+            break;
+        }
+        case Kind::Struct:
+            return validateStruct(layout, path, depth, outSize);
+        default:
+            return fail(diagnostic, path, "unsupported execution-constant type");
+        }
+        if (layout->getSize() != outSize)
+            return fail(diagnostic, path, "reflected size does not match the packed C layout");
+        return SLANG_OK;
+    }
+
+    SlangResult validateStruct(
+        slang::TypeLayoutReflection* layout,
+        const std::string& path,
+        unsigned depth,
+        size_t& outSize
+    )
+    {
+        size_t offset = 0;
+        for (unsigned i = 0; i < layout->getFieldCount(); ++i)
+        {
+            auto* field = layout->getFieldByIndex(i);
+            const char* name = field->getName();
+            std::string fieldPath = path + "." + (name ? name : "<unnamed>");
+            auto* fieldLayout = field->getTypeLayout();
+            size_t fieldSize = 0;
+            SLANG_RETURN_ON_FAIL(validateType(fieldLayout, fieldPath, depth + 1, fieldSize));
+            if (field->getOffset() != offset)
+                return fail(diagnostic, fieldPath, "reflected offset does not match the packed C layout");
+            if (startsOnRow(fieldLayout) && offset % kRowSize != 0)
+                return fail(
+                    diagnostic,
+                    fieldPath,
+                    "four-component vectors, arrays, matrices and nested structs start on a 16-byte boundary"
+                );
+            if (isVector(fieldLayout, 3) && !scalarFollows(layout, i))
+                return fail(
+                    diagnostic,
+                    fieldPath,
+                    "a three-component vector is followed by a 4-byte scalar or ends its struct"
+                );
+            offset += fieldSize;
+        }
+        if (offset % kRowSize != 0)
+            return fail(diagnostic, path, "struct size must be a multiple of 16 bytes");
+        if (layout->getSize() != offset)
+            return fail(diagnostic, path, "reflected size does not match the packed C layout");
+        outSize = offset;
+        return SLANG_OK;
+    }
+};
 
 } // namespace
 
-SlangResult validateConstantLayout(
-    slang::TypeLayoutReflection* layout,
-    const ConstantTypeDesc& expected,
-    std::string& diagnostic
-)
+SlangResult validateConstantLayout(slang::TypeLayoutReflection* layout, std::string& diagnostic)
 {
     diagnostic.clear();
-    return validate(layout, expected, "constants", 0, diagnostic);
+    const std::string path = "constants";
+    if (!layout)
+        return fail(diagnostic, path, "missing reflection");
+    if (layout->getKind() != Kind::Struct)
+        return fail(diagnostic, path, "an execution constant block must be a struct");
+    Validator validator{diagnostic};
+    size_t size = 0;
+    return validator.validateType(layout, path, 0, size);
 }
 
 } // namespace rhi

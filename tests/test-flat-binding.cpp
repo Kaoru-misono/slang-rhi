@@ -22,53 +22,6 @@ struct alignas(16) Params
 };
 static_assert(sizeof(Params) == 48 && alignof(Params) == 16);
 
-auto paramsSchema() -> const ConstantTypeDesc&
-{
-    using Kind = slang::TypeReflection::Kind;
-    using Scalar = slang::TypeReflection::ScalarType;
-    static const ConstantTypeDesc floatType{
-        .kind = Kind::Scalar,
-        .size = 4,
-        .alignment = 4,
-        .scalar = Scalar::Float32,
-    };
-    static const ConstantTypeDesc float3Type{
-        .kind = Kind::Vector,
-        .size = 12,
-        .alignment = 4,
-        .scalar = Scalar::Float32,
-        .elementCount = 3,
-    };
-    static const ConstantTypeDesc float4Type{
-        .kind = Kind::Vector,
-        .size = 16,
-        .alignment = 4,
-        .scalar = Scalar::Float32,
-        .elementCount = 4,
-    };
-    static const ConstantTypeDesc samplesType{
-        .kind = Kind::Array,
-        .size = sizeof(Params::samples),
-        .alignment = 16,
-        .elementCount = 2,
-        .elementStride = 16,
-        .elementType = &float4Type,
-    };
-    static const ConstantFieldDesc fields[]{
-        {"direction", offsetof(Params, direction), &float3Type},
-        {"scale", offsetof(Params, scale), &floatType},
-        {"samples", offsetof(Params, samples), &samplesType},
-    };
-    static const ConstantTypeDesc params{
-        .kind = Kind::Struct,
-        .size = sizeof(Params),
-        .alignment = alignof(Params),
-        .fields = fields,
-        .fieldCount = 3,
-    };
-    return params;
-}
-
 constexpr const char* sceneSource = R"(
 struct Params
 {
@@ -281,7 +234,7 @@ GPU_TEST_CASE("flat-binding-pipeline-layout-accepted", D3D12 | Vulkan)
     desc.program = program;
     desc.sets = sets;
     desc.setCount = 1;
-    desc.constants = &paramsSchema();
+    desc.constantsSize = sizeof(Params);
     ComPtr<IPipelineLayout> layout;
     REQUIRE_CALL(device->createPipelineLayout(desc, layout.writeRef()));
     REQUIRE(layout != nullptr);
@@ -292,7 +245,7 @@ GPU_TEST_CASE("flat-binding-pipeline-layout-accepted", D3D12 | Vulkan)
     REQUIRE(stored.setCount == 1);
     REQUIRE(stored.sets != nullptr);
     CHECK(stored.sets[0].layout == sceneLayout.get());
-    CHECK(stored.constants == nullptr);
+    CHECK(stored.constantsSize == sizeof(Params));
 }
 
 GPU_TEST_CASE("flat-binding-pipeline-layout-rejections", D3D12 | Vulkan)
@@ -308,52 +261,7 @@ GPU_TEST_CASE("flat-binding-pipeline-layout-rejections", D3D12 | Vulkan)
         desc.program = program;
         desc.sets = sets;
         desc.setCount = 1;
-        desc.constants = &paramsSchema();
-        auto schema = paramsSchema();
-        schema.size += 16;
-        desc.constants = &schema;
-        ComPtr<IPipelineLayout> layout;
-        CHECK(SLANG_FAILED(device->createPipelineLayout(desc, layout.writeRef())));
-    }
-    {
-        INFO("constants type mismatch");
-        ComPtr<IShaderProgram> program;
-        REQUIRE_CALL(rhi::testing::loadComputeProgramFromSource(device, sceneSource, program.writeRef()));
-        auto sceneLayout = createSceneSetLayout(device);
-        PipelineLayoutSetDesc sets[]{{"scene", sceneLayout}};
-        PipelineLayoutDesc desc{};
-        desc.program = program;
-        desc.sets = sets;
-        desc.setCount = 1;
-        desc.constants = &paramsSchema();
-        auto schema = paramsSchema();
-        std::vector<ConstantFieldDesc> fields(schema.fields, schema.fields + schema.fieldCount);
-        auto scaleType = *fields[1].type;
-        scaleType.scalar = slang::TypeReflection::ScalarType::UInt32;
-        fields[1].type = &scaleType;
-        schema.fields = fields.data();
-        desc.constants = &schema;
-        ComPtr<IPipelineLayout> layout;
-        CHECK(SLANG_FAILED(device->createPipelineLayout(desc, layout.writeRef())));
-    }
-    {
-        INFO("constants stride mismatch");
-        ComPtr<IShaderProgram> program;
-        REQUIRE_CALL(rhi::testing::loadComputeProgramFromSource(device, sceneSource, program.writeRef()));
-        auto sceneLayout = createSceneSetLayout(device);
-        PipelineLayoutSetDesc sets[]{{"scene", sceneLayout}};
-        PipelineLayoutDesc desc{};
-        desc.program = program;
-        desc.sets = sets;
-        desc.setCount = 1;
-        desc.constants = &paramsSchema();
-        auto schema = paramsSchema();
-        std::vector<ConstantFieldDesc> fields(schema.fields, schema.fields + schema.fieldCount);
-        auto samplesType = *fields[2].type;
-        samplesType.elementStride = 32;
-        fields[2].type = &samplesType;
-        schema.fields = fields.data();
-        desc.constants = &schema;
+        desc.constantsSize = sizeof(Params) + 16;
         ComPtr<IPipelineLayout> layout;
         CHECK(SLANG_FAILED(device->createPipelineLayout(desc, layout.writeRef())));
     }
@@ -367,7 +275,7 @@ GPU_TEST_CASE("flat-binding-pipeline-layout-rejections", D3D12 | Vulkan)
         desc.program = program;
         desc.sets = sets;
         desc.setCount = 1;
-        desc.constants = &paramsSchema();
+        desc.constantsSize = sizeof(Params);
         ComPtr<IPipelineLayout> layout;
         CHECK(SLANG_FAILED(device->createPipelineLayout(desc, layout.writeRef())));
     }
@@ -381,8 +289,7 @@ GPU_TEST_CASE("flat-binding-pipeline-layout-rejections", D3D12 | Vulkan)
         desc.program = program;
         desc.sets = sets;
         desc.setCount = 1;
-        desc.constants = &paramsSchema();
-        desc.constants = nullptr;
+        desc.constantsSize = 0;
         ComPtr<IPipelineLayout> layout;
         CHECK(SLANG_FAILED(device->createPipelineLayout(desc, layout.writeRef())));
     }
@@ -396,7 +303,7 @@ GPU_TEST_CASE("flat-binding-pipeline-layout-rejections", D3D12 | Vulkan)
         desc.program = program;
         desc.sets = sets;
         desc.setCount = 1;
-        desc.constants = &paramsSchema();
+        desc.constantsSize = sizeof(Params);
         ComPtr<IPipelineLayout> layout;
         CHECK(SLANG_FAILED(device->createPipelineLayout(desc, layout.writeRef())));
     }
@@ -410,7 +317,7 @@ GPU_TEST_CASE("flat-binding-pipeline-layout-rejections", D3D12 | Vulkan)
         desc.program = program;
         desc.sets = sets;
         desc.setCount = 1;
-        desc.constants = &paramsSchema();
+        desc.constantsSize = sizeof(Params);
         ComPtr<IPipelineLayout> layout;
         CHECK(SLANG_FAILED(device->createPipelineLayout(desc, layout.writeRef())));
     }
@@ -424,7 +331,7 @@ GPU_TEST_CASE("flat-binding-pipeline-layout-rejections", D3D12 | Vulkan)
         desc.program = program;
         desc.sets = sets;
         desc.setCount = 1;
-        desc.constants = &paramsSchema();
+        desc.constantsSize = sizeof(Params);
         desc.setCount = 0;
         ComPtr<IPipelineLayout> layout;
         CHECK(SLANG_FAILED(device->createPipelineLayout(desc, layout.writeRef())));
@@ -439,7 +346,7 @@ GPU_TEST_CASE("flat-binding-pipeline-layout-rejections", D3D12 | Vulkan)
         desc.program = program;
         desc.sets = sets;
         desc.setCount = 1;
-        desc.constants = &paramsSchema();
+        desc.constantsSize = sizeof(Params);
         auto otherLayout = createSceneSetLayout(device);
         const PipelineLayoutSetDesc extraSets[]{{"scene", sceneLayout}, {"missing", otherLayout}};
         desc.sets = extraSets;
@@ -457,7 +364,7 @@ GPU_TEST_CASE("flat-binding-pipeline-layout-rejections", D3D12 | Vulkan)
         desc.program = program;
         desc.sets = sets;
         desc.setCount = 1;
-        desc.constants = &paramsSchema();
+        desc.constantsSize = sizeof(Params);
         ComPtr<IPipelineLayout> layout;
         CHECK(SLANG_FAILED(device->createPipelineLayout(desc, layout.writeRef())));
     }
@@ -471,7 +378,7 @@ GPU_TEST_CASE("flat-binding-pipeline-layout-rejections", D3D12 | Vulkan)
         desc.program = program;
         desc.sets = sets;
         desc.setCount = 1;
-        desc.constants = &paramsSchema();
+        desc.constantsSize = sizeof(Params);
         const BindingSetLayoutEntry entries[]{
             {BindingKind::Texture2D, 1, "albedo"},
             {BindingKind::SamplerState, 1, "sampler"},
@@ -627,50 +534,6 @@ static_assert(offsetof(FlatWideConstants, offset) == 0 && offsetof(FlatWideConst
 static_assert(offsetof(FlatWideConstants, bias) == 8 && offsetof(FlatWideConstants, tag) == 12);
 static_assert(offsetof(FlatWideConstants, extra) == 16 && sizeof(FlatWideConstants::extra) == 16);
 
-auto flatConstantsSchema() -> const ConstantTypeDesc&
-{
-    using Kind = slang::TypeReflection::Kind;
-    using Scalar = slang::TypeReflection::ScalarType;
-    static const ConstantTypeDesc uintType{Kind::Scalar, 4, 4, Scalar::UInt32};
-    static const ConstantFieldDesc fields[]{
-        {"offset", offsetof(FlatConstants, offset), &uintType},
-        {"multiplier", offsetof(FlatConstants, multiplier), &uintType},
-        {"bias", offsetof(FlatConstants, bias), &uintType},
-        {"tag", offsetof(FlatConstants, tag), &uintType},
-    };
-    static const ConstantTypeDesc constants{
-        .kind = Kind::Struct,
-        .size = sizeof(FlatConstants),
-        .alignment = alignof(FlatConstants),
-        .fields = fields,
-        .fieldCount = 4,
-    };
-    return constants;
-}
-
-auto flatWideConstantsSchema() -> const ConstantTypeDesc&
-{
-    using Kind = slang::TypeReflection::Kind;
-    using Scalar = slang::TypeReflection::ScalarType;
-    static const ConstantTypeDesc uintType{Kind::Scalar, 4, 4, Scalar::UInt32};
-    static const ConstantTypeDesc uint4Type{Kind::Vector, 16, 4, Scalar::UInt32, 4};
-    static const ConstantFieldDesc fields[]{
-        {"offset", offsetof(FlatWideConstants, offset), &uintType},
-        {"multiplier", offsetof(FlatWideConstants, multiplier), &uintType},
-        {"bias", offsetof(FlatWideConstants, bias), &uintType},
-        {"tag", offsetof(FlatWideConstants, tag), &uintType},
-        {"extra", offsetof(FlatWideConstants, extra), &uint4Type},
-    };
-    static const ConstantTypeDesc constants{
-        .kind = Kind::Struct,
-        .size = sizeof(FlatWideConstants),
-        .alignment = alignof(FlatWideConstants),
-        .fields = fields,
-        .fieldCount = 5,
-    };
-    return constants;
-}
-
 struct alignas(16) FlatBindlessConstants
 {
     uint32_t offset;
@@ -685,29 +548,6 @@ static_assert(sizeof(FlatBindlessConstants) == 32 && alignof(FlatBindlessConstan
 static_assert(offsetof(FlatBindlessConstants, offset) == 0 && offsetof(FlatBindlessConstants, multiplier) == 4);
 static_assert(offsetof(FlatBindlessConstants, bias) == 8 && offsetof(FlatBindlessConstants, tag) == 12);
 static_assert(offsetof(FlatBindlessConstants, handle) == 16 && sizeof(FlatBindlessConstants::handle) == 16);
-
-auto flatBindlessConstantsSchema() -> const ConstantTypeDesc&
-{
-    using Kind = slang::TypeReflection::Kind;
-    using Scalar = slang::TypeReflection::ScalarType;
-    static const ConstantTypeDesc uintType{Kind::Scalar, 4, 4, Scalar::UInt32};
-    static const ConstantTypeDesc uint4Type{Kind::Vector, 16, 4, Scalar::UInt32, 4};
-    static const ConstantFieldDesc fields[]{
-        {"offset", offsetof(FlatBindlessConstants, offset), &uintType},
-        {"multiplier", offsetof(FlatBindlessConstants, multiplier), &uintType},
-        {"bias", offsetof(FlatBindlessConstants, bias), &uintType},
-        {"tag", offsetof(FlatBindlessConstants, tag), &uintType},
-        {"handle", offsetof(FlatBindlessConstants, handle), &uint4Type},
-    };
-    static const ConstantTypeDesc constants{
-        .kind = Kind::Struct,
-        .size = sizeof(FlatBindlessConstants),
-        .alignment = alignof(FlatBindlessConstants),
-        .fields = fields,
-        .fieldCount = 5,
-    };
-    return constants;
-}
 
 struct FlatVariant
 {
@@ -856,12 +696,12 @@ auto createFlatPipelineLayout(
     IDevice* device,
     IShaderProgram* program,
     IBindingSetLayout* setLayout,
-    const ConstantTypeDesc& constants,
+    size_t constantsSize,
     const char* label
 ) -> ComPtr<IPipelineLayout>
 {
     const PipelineLayoutSetDesc sets[]{{"scene", setLayout}};
-    const PipelineLayoutDesc desc{program, sets, 1, &constants, label};
+    const PipelineLayoutDesc desc{program, sets, 1, constantsSize, label};
     ComPtr<IPipelineLayout> layout;
     REQUIRE_CALL(device->createPipelineLayout(desc, layout.writeRef()));
     REQUIRE(layout != nullptr);
@@ -1005,7 +845,7 @@ auto runFlatCompute(IDevice* device, bool inlineConstants) -> void
     FlatScene scene;
     scene.setLayout = createFlatSceneSetLayout(device);
     createFlatSceneResources(device, input, 4, scene);
-    auto layout = createFlatPipelineLayout(device, program, scene.setLayout, flatConstantsSchema(), "compute");
+    auto layout = createFlatPipelineLayout(device, program, scene.setLayout, sizeof(FlatConstants), "compute");
     createFlatSceneBindingSet(device, scene);
     CHECK(layout->getSetCount() == 1);
     CHECK(layout->getConstantsSize() == sizeof(FlatConstants));
@@ -1066,7 +906,7 @@ GPU_TEST_CASE("flat-binding-graphics-vs-ps", D3D12 | Vulkan)
     FlatScene scene;
     scene.setLayout = createFlatSceneSetLayout(device);
     createFlatSceneResources(device, input, 4, scene);
-    auto layout = createFlatPipelineLayout(device, program, scene.setLayout, flatConstantsSchema(), "graphics");
+    auto layout = createFlatPipelineLayout(device, program, scene.setLayout, sizeof(FlatConstants), "graphics");
     createFlatSceneBindingSet(device, scene);
     ColorTargetDesc target{};
     target.format = Format::RGBA32Float;
@@ -1148,7 +988,7 @@ GPU_TEST_CASE("flat-binding-set-immutable-and-early-release", D3D12 | Vulkan)
     FlatScene scene;
     scene.setLayout = createFlatSceneSetLayout(device);
     createFlatSceneResources(device, input, 4, scene);
-    auto layout = createFlatPipelineLayout(device, program, scene.setLayout, flatConstantsSchema(), "early-release");
+    auto layout = createFlatPipelineLayout(device, program, scene.setLayout, sizeof(FlatConstants), "early-release");
     createFlatSceneBindingSet(device, scene);
     const ComputePipelineDesc desc{.program = program, .layout = layout};
     ComPtr<IComputePipeline> pipeline;
@@ -1189,7 +1029,7 @@ GPU_TEST_CASE("flat-binding-constants-copied-at-bind", D3D12 | Vulkan)
     FlatScene scene;
     scene.setLayout = createFlatSceneSetLayout(device);
     createFlatSceneResources(device, input, 4, scene);
-    auto layout = createFlatPipelineLayout(device, program, scene.setLayout, flatConstantsSchema(), "constants-copy");
+    auto layout = createFlatPipelineLayout(device, program, scene.setLayout, sizeof(FlatConstants), "constants-copy");
     createFlatSceneBindingSet(device, scene);
     const ComputePipelineDesc desc{.program = program, .layout = layout};
     ComPtr<IComputePipeline> pipeline;
@@ -1227,7 +1067,7 @@ GPU_TEST_CASE("flat-binding-uav-order", D3D12 | Vulkan)
     FlatScene scene;
     scene.setLayout = createFlatSceneSetLayout(device);
     createFlatSceneResources(device, input, 4, scene);
-    auto layout = createFlatPipelineLayout(device, program, scene.setLayout, flatConstantsSchema(), "uav-order");
+    auto layout = createFlatPipelineLayout(device, program, scene.setLayout, sizeof(FlatConstants), "uav-order");
     createFlatSceneBindingSet(device, scene);
     const ComputePipelineDesc desc{.program = program, .layout = layout};
     ComPtr<IComputePipeline> pipeline;
@@ -1268,7 +1108,7 @@ GPU_TEST_CASE("flat-binding-set-shared-by-two-command-buffers", D3D12 | Vulkan)
     FlatScene scene;
     scene.setLayout = createFlatSceneSetLayout(device);
     createFlatSceneResources(device, input, 8, scene);
-    auto layout = createFlatPipelineLayout(device, program, scene.setLayout, flatConstantsSchema(), "shared-set");
+    auto layout = createFlatPipelineLayout(device, program, scene.setLayout, sizeof(FlatConstants), "shared-set");
     createFlatSceneBindingSet(device, scene);
     const ComputePipelineDesc desc{.program = program, .layout = layout};
     ComPtr<IComputePipeline> pipeline;
@@ -1339,8 +1179,8 @@ GPU_TEST_CASE("flat-binding-set-reused-across-constants-layouts", D3D12 | Vulkan
     scene.setLayout = createFlatSceneSetLayout(device);
     createFlatSceneResources(device, input, 8, scene);
     auto narrowLayout =
-        createFlatPipelineLayout(device, narrowProgram, scene.setLayout, flatConstantsSchema(), "narrow");
-    auto wideLayout = createFlatPipelineLayout(device, wideProgram, scene.setLayout, flatWideConstantsSchema(), "wide");
+        createFlatPipelineLayout(device, narrowProgram, scene.setLayout, sizeof(FlatConstants), "narrow");
+    auto wideLayout = createFlatPipelineLayout(device, wideProgram, scene.setLayout, sizeof(FlatWideConstants), "wide");
     createFlatSceneBindingSet(device, scene);
     CHECK(narrowLayout->getConstantsSize() == 16);
     CHECK(wideLayout->getConstantsSize() == 32);
@@ -1400,7 +1240,7 @@ GPU_TEST_CASE("flat-binding-reverse-order-submission", D3D12 | Vulkan)
     FlatScene scene;
     scene.setLayout = createFlatSceneSetLayout(device);
     createFlatSceneResources(device, input, 8, scene);
-    auto layout = createFlatPipelineLayout(device, program, scene.setLayout, flatConstantsSchema(), "reverse-order");
+    auto layout = createFlatPipelineLayout(device, program, scene.setLayout, sizeof(FlatConstants), "reverse-order");
     createFlatSceneBindingSet(device, scene);
     const ComputePipelineDesc desc{.program = program, .layout = layout};
     ComPtr<IComputePipeline> pipeline;
@@ -1466,7 +1306,7 @@ GPU_TEST_CASE("flat-binding-handle-access-keepalive", D3D12 | Vulkan)
     scene.setLayout = createFlatSceneSetLayout(device);
     createFlatSceneResources(device, input, 4, scene);
     auto layout =
-        createFlatPipelineLayout(device, program, scene.setLayout, flatBindlessConstantsSchema(), "handle-keepalive");
+        createFlatPipelineLayout(device, program, scene.setLayout, sizeof(FlatBindlessConstants), "handle-keepalive");
     createFlatSceneBindingSet(device, scene);
     const ComputePipelineDesc desc{.program = program, .layout = layout};
     ComPtr<IComputePipeline> pipeline;
@@ -1581,13 +1421,14 @@ GPU_TEST_CASE("flat-binding-handle-access-transition", D3D12 | Vulkan)
     auto handleReadResult = createFlatTransitionBuffer(device, kCount, "handle-read-result");
     auto setReadResult = createFlatTransitionBuffer(device, kCount, "set-read-result");
 
-    const auto& constantsSchema = flatBindlessConstantsSchema();
-    auto setWriteLayout = createFlatPipelineLayout(device, setWrite, scene.setLayout, constantsSchema, "set-write");
+    auto setWriteLayout =
+        createFlatPipelineLayout(device, setWrite, scene.setLayout, sizeof(FlatBindlessConstants), "set-write");
     auto handleReadLayout =
-        createFlatPipelineLayout(device, handleRead, scene.setLayout, constantsSchema, "handle-read");
+        createFlatPipelineLayout(device, handleRead, scene.setLayout, sizeof(FlatBindlessConstants), "handle-read");
     auto handleWriteLayout =
-        createFlatPipelineLayout(device, handleWrite, scene.setLayout, constantsSchema, "handle-write");
-    auto setReadLayout = createFlatPipelineLayout(device, setRead, scene.setLayout, constantsSchema, "set-read");
+        createFlatPipelineLayout(device, handleWrite, scene.setLayout, sizeof(FlatBindlessConstants), "handle-write");
+    auto setReadLayout =
+        createFlatPipelineLayout(device, setRead, scene.setLayout, sizeof(FlatBindlessConstants), "set-read");
 
     auto setWriteSet = createFlatSceneSet(device, scene, scene.input, bridgeToHandle, "set-write");
     auto handleReadSet = createFlatSceneSet(device, scene, scene.input, handleReadResult, "handle-read");
@@ -1710,7 +1551,7 @@ GPU_TEST_CASE("flat-binding-d3d12-sampler-dedup-and-exhaustion", D3D12 | DontCre
         ComPtr<IShaderProgram> program;
         REQUIRE_CALL(loadAndLinkProgram(local, session, "test-flat-binding-cases", "csSamplers", program.writeRef()));
         auto setLayout = createFlatSamplerSetLayout(local, samplerCount);
-        auto layout = createFlatPipelineLayout(local, program, setLayout, flatConstantsSchema(), "sampler-dedup");
+        auto layout = createFlatPipelineLayout(local, program, setLayout, sizeof(FlatConstants), "sampler-dedup");
         auto scene = createFlatSamplerScene(local, setLayout, samplerCount, bindCount);
         const ComputePipelineDesc desc{.program = program, .layout = layout};
         ComPtr<IComputePipeline> pipeline;
@@ -1757,7 +1598,7 @@ GPU_TEST_CASE("flat-binding-d3d12-sampler-dedup-and-exhaustion", D3D12 | DontCre
         ComPtr<IShaderProgram> program;
         REQUIRE_CALL(loadAndLinkProgram(local, session, "test-flat-binding-cases", "csSamplers", program.writeRef()));
         auto setLayout = createFlatSamplerSetLayout(local, samplerCount);
-        auto layout = createFlatPipelineLayout(local, program, setLayout, flatConstantsSchema(), "sampler-exhaustion");
+        auto layout = createFlatPipelineLayout(local, program, setLayout, sizeof(FlatConstants), "sampler-exhaustion");
         auto scene = createFlatSamplerScene(local, setLayout, samplerCount, 1);
         const ComputePipelineDesc desc{.program = program, .layout = layout};
         ComPtr<IComputePipeline> pipeline;

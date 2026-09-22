@@ -1,5 +1,6 @@
 #include "testing.h"
 #include "flat-binding-test-data.h"
+#include "constant-layout.h"
 
 #if SLANG_RHI_ENABLE_VULKAN
 #include "vulkan/vk-api.h"
@@ -236,7 +237,7 @@ ComPtr<slang::IComponentType> compileNativeProgram(
     slang::SessionDesc desc{};
     desc.targets = &target;
     desc.targetCount = 1;
-    desc.defaultMatrixLayoutMode = SLANG_MATRIX_LAYOUT_ROW_MAJOR;
+    desc.defaultMatrixLayoutMode = SLANG_MATRIX_LAYOUT_COLUMN_MAJOR;
     desc.searchPaths = paths.data();
     desc.searchPathCount = paths.size();
     desc.preprocessorMacros = macros;
@@ -265,9 +266,7 @@ ComPtr<slang::IComponentType> compileNativeProgram(
     CHECK(parameters->getBindingSpace(category) == (inlineConstants ? 0u : 1u));
     CHECK(parameters->getTypeLayout()->getElementTypeLayout()->getSize() == sizeof(NativeParams));
     std::string diagnostic;
-    REQUIRE_CALL(
-        validateConstantLayout(parameters->getTypeLayout()->getElementTypeLayout(), flat::paramsSchema(), diagnostic)
-    );
+    REQUIRE_CALL(validateConstantLayout(parameters->getTypeLayout()->getElementTypeLayout(), diagnostic));
     return linked;
 }
 
@@ -374,7 +373,7 @@ void runNativeVulkanConstants(IDevice* device, bool inlineConstants)
             REQUIRE_CALL(queue->waitOnHost());
             if (!render)
             {
-                auto expected = makeArray<float>(37, 81, 127, 168, 19, 31, 45, 54);
+                auto expected = makeArray<float>(97, 111, 127, 138, 49, 55, 63, 66);
                 if (i == 1)
                     for (uint32_t j = 0; j < 8; ++j)
                         expected[j] += j % 4 == 3 ? 0.f : float(j % 4 + 1);
@@ -385,7 +384,7 @@ void runNativeVulkanConstants(IDevice* device, bool inlineConstants)
                 ComPtr<ISlangBlob> pixels;
                 SubresourceLayout pixelLayout{};
                 REQUIRE_CALL(device->readTexture(texture, 0, 0, pixels.writeRef(), &pixelLayout));
-                auto expected = makeArray<float>(56, 112, 172, 222);
+                auto expected = makeArray<float>(146, 166, 190, 204);
                 if (i == 1)
                     for (uint32_t j = 0; j < 3; ++j)
                         expected[j] += float(2 * (j + 1));
