@@ -491,7 +491,11 @@ VkBufferUsageFlagBits _calcBufferUsageFlags(BufferUsage usage)
     if (is_set(usage, BufferUsage::ShaderResource))
         flags |= (VK_BUFFER_USAGE_UNIFORM_TEXEL_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
     if (is_set(usage, BufferUsage::UnorderedAccess))
-        flags |= (VK_BUFFER_USAGE_STORAGE_TEXEL_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
+    {
+        // clearBuffer implements UAV clearing with vkCmdFillBuffer.
+        flags |= (VK_BUFFER_USAGE_STORAGE_TEXEL_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+                  VK_BUFFER_USAGE_TRANSFER_DST_BIT);
+    }
     if (is_set(usage, BufferUsage::IndirectArgument))
         flags |= VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT;
     if (is_set(usage, BufferUsage::CopySource))
