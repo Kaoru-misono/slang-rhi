@@ -927,7 +927,7 @@ GPU_TEST_CASE("flat-binding-graphics-vs-ps", D3D12 | Vulkan)
     auto view = device->createTextureView(texture, {});
     REQUIRE(view != nullptr);
     // The vertex stage consumes multiplier and the pixel stage bias/tag, detecting constants lost in either stage.
-    const FlatConstants constants{.offset = 0, .multiplier = 3, .bias = 7, .tag = 11};
+    FlatConstants constants{.offset = 0, .multiplier = 3, .bias = 7, .tag = 11};
     IBindingSet* const sets[]{scene.set};
     const auto bindings = flatBindings(&constants, sizeof(constants), sets);
     auto queue = device->getQueue(QueueType::Graphics);
@@ -950,6 +950,43 @@ GPU_TEST_CASE("flat-binding-graphics-vs-ps", D3D12 | Vulkan)
     DrawArguments draw{};
     draw.vertexCount = 3;
     pass->draw(draw);
+    const auto bindShaderObject = [&](bool suppliedRoot)
+    {
+        auto legacyDesc = desc;
+        legacyDesc.layout = nullptr;
+        ComPtr<IRenderPipeline> legacyPipeline;
+        REQUIRE_CALL(device->createRenderPipeline(legacyDesc, legacyPipeline.writeRef()));
+        ComPtr<IShaderObject> root;
+        if (suppliedRoot)
+        {
+            REQUIRE_CALL(device->createRootShaderObject(program, root.writeRef()));
+            pass->bindPipeline(legacyPipeline, root);
+        }
+        else
+        {
+            root = pass->bindPipeline(legacyPipeline);
+        }
+        REQUIRE(root != nullptr);
+        constants.bias = 19;
+        ShaderCursor cursor(root);
+        REQUIRE_CALL(cursor["constants"].getDereferenced().setData(&constants, sizeof(constants)));
+        REQUIRE_CALL(cursor["scene"]["input"].setBinding(scene.input));
+        REQUIRE_CALL(cursor["scene"]["output"].setBinding(scene.output));
+        REQUIRE_CALL(cursor["scene"]["texture"].setBinding(scene.textureView));
+        REQUIRE_CALL(cursor["scene"]["sampler"].setBinding(scene.sampler));
+        pass->setRenderState(state);
+        pass->draw(draw);
+    };
+    SUBCASE("flat only") {}
+    SUBCASE("switch to encoder-created root") { bindShaderObject(false); }
+    SUBCASE("switch to supplied root") { bindShaderObject(true); }
+    SUBCASE("new pass has no inherited binding")
+    {
+        pass->end();
+        pass = encoder->beginRenderPass(passDesc);
+        pass->setRenderState(state);
+        bindShaderObject(false);
+    }
     pass->end();
     auto commands = encoder->finish();
     REQUIRE(commands != nullptr);

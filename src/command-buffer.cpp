@@ -105,6 +105,7 @@ Result RenderPassEncoder::bindPipeline(IRenderPipeline* pipeline, const FlatBind
 
 IShaderObject* RenderPassEncoder::bindPipeline(IRenderPipeline* pipeline)
 {
+    m_fixedBindingData = nullptr;
     if (m_commandList)
     {
         m_pipeline = pipeline;
@@ -118,6 +119,7 @@ IShaderObject* RenderPassEncoder::bindPipeline(IRenderPipeline* pipeline)
 
 void RenderPassEncoder::bindPipeline(IRenderPipeline* pipeline, IShaderObject* rootObject)
 {
+    m_fixedBindingData = nullptr;
     if (m_commandList)
     {
         m_pipeline = checked_cast<RenderPipeline*>(pipeline);
@@ -253,6 +255,9 @@ void RenderPassEncoder::writeTimestamp(IQueryPool* queryPool, uint32_t queryInde
 
 void RenderPassEncoder::end()
 {
+    m_pipeline = nullptr;
+    m_rootObject = nullptr;
+    m_fixedBindingData = nullptr;
     if (m_commandList)
     {
         commands::EndRenderPass cmd;
