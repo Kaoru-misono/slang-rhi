@@ -61,3 +61,26 @@ GPU_TEST_CASE("cmd-clear-buffer", ALL)
     testClearBuffer(device, 128, {64, 64});
     testClearBuffer(device, 128, {124, 4});
 }
+
+GPU_TEST_CASE("cmd-clear-buffer-uav-without-copy-destination", D3D12 | Vulkan)
+{
+    BufferDesc desc{};
+    desc.size = 64;
+    desc.usage = BufferUsage::UnorderedAccess | BufferUsage::CopySource;
+    ComPtr<IBuffer> buffer;
+    REQUIRE_CALL(device->createBuffer(desc, nullptr, buffer.writeRef()));
+    auto queue = device->getQueue(QueueType::Graphics);
+    auto encoder = queue->createCommandEncoder();
+    encoder->clearBuffer(buffer);
+    auto commands = encoder->finish();
+    REQUIRE(commands != nullptr);
+    REQUIRE_CALL(queue->submit(commands));
+    REQUIRE_CALL(queue->waitOnHost());
+
+    ComPtr<ISlangBlob> blob;
+    REQUIRE_CALL(device->readBuffer(buffer, 0, desc.size, blob.writeRef()));
+    REQUIRE(blob->getBufferSize() == desc.size);
+    const auto* data = static_cast<const uint8_t*>(blob->getBufferPointer());
+    for (size_t i = 0; i < desc.size; ++i)
+        CHECK(data[i] == 0);
+}
