@@ -4,6 +4,7 @@
 #include <array>
 #include <cstddef>
 #include <cstring>
+#include <mutex>
 // doctest stringifies the string_view comparisons below, which needs the stream operator.
 #include <ostream>
 #include <string>
@@ -636,6 +637,7 @@ auto createFlatSceneResources(IDevice* device, std::span<const uint32_t> input, 
         .elementSize = 4,
         .usage = BufferUsage::ShaderResource | BufferUsage::CopyDestination,
         .defaultState = ResourceState::ShaderResource,
+        .label = "flat-scene-input",
     };
     REQUIRE_CALL(device->createBuffer(inputDesc, input.data(), scene.input.writeRef()));
     const BufferDesc outputDesc{
@@ -652,6 +654,7 @@ auto createFlatSceneResources(IDevice* device, std::span<const uint32_t> input, 
     textureDesc.format = Format::RGBA32Float;
     textureDesc.usage = TextureUsage::ShaderResource | TextureUsage::CopyDestination;
     textureDesc.defaultState = ResourceState::ShaderResource;
+    textureDesc.label = "flat-scene-texture";
     const std::array<float, 4> texel{static_cast<float>(kFlatSampledValue), 0.f, 0.f, 0.f};
     const SubresourceData data{.data = texel.data(), .rowPitch = 16, .slicePitch = 16};
     REQUIRE_CALL(device->createTexture(textureDesc, &data, scene.texture.writeRef()));
@@ -1657,6 +1660,7 @@ GPU_TEST_CASE("flat-binding-d3d12-sampler-dedup-and-exhaustion", D3D12 | DontCre
     }
 }
 
+
 // Independent regression for the partial-layer tracker fix: transitions must stop at layerCount.
 GPU_TEST_CASE("texture-state-requested-layers", D3D12 | Vulkan)
 {
@@ -1708,4 +1712,202 @@ GPU_TEST_CASE("texture-state-requested-layers", D3D12 | Vulkan)
     tracking.setTextureState(native, {0, 2, 0, kAllMips}, ResourceState::ShaderResource);
     tracking.setTextureState(native, {2, kAllLayers, 0, 1}, ResourceState::ShaderResource);
     CHECK(tracking.getTextureBarriers().empty());
+}
+
+namespace {
+struct FlatTransitionMessageSink final : IDebugCallback
+{
+    std::mutex               mutex;
+    std::vector<std::string> transitions;
+    std::string              errors;
+    bool                     correctCategory = true;
+
+    virtual SLANG_NO_THROW void SLANG_MCALL handleMessage(
+        DebugMessageType type,
+        DebugMessageSource source,
+        const char* message
+    ) override
+    {
+        const std::lock_guard lock(mutex);
+        if (type == DebugMessageType::Error)
+        {
+            errors += message;
+            errors += '\n';
+        }
+        if (std::string_view(message).starts_with("Flat binding required state transition:"))
+        {
+            transitions.emplace_back(message);
+            correctCategory &= type == DebugMessageType::Warning && source == DebugMessageSource::Layer;
+        }
+    }
+};
+} // namespace
+
+GPU_TEST_CASE("flat-binding-state-transition-diagnostics", D3D12 | Vulkan | DontCreateDevice)
+{
+    bool validation = true;
+    bool pretransition = false;
+    bool shaderObject = false;
+    SUBCASE("flat implicit transitions warn") {}
+    SUBCASE("flat explicit transitions do not warn") { pretransition = true; }
+    SUBCASE("validation disabled does not warn") { validation = false; }
+    SUBCASE("shader object does not warn") { shaderObject = true; }
+
+    FlatTransitionMessageSink sink;
+    DeviceDesc deviceDesc{.deviceType = ctx->deviceType, .adapter = getSelectedDeviceAdapter(ctx->deviceType)};
+    deviceDesc.enableValidation = validation;
+    deviceDesc.debugCallback = &sink;
+    ComPtr<IDevice> local;
+    REQUIRE_CALL(getRHI()->createDevice(deviceDesc, local.writeRef()));
+    const FlatDeviceDrain drain{local};
+    auto session = createFlatSession(local, {});
+    ComPtr<IShaderProgram> program;
+    REQUIRE_CALL(loadAndLinkProgram(local, session, "test-flat-binding-cases", "csMain", program.writeRef()));
+    const std::array<uint32_t, 4> input{5, 6, 7, 8};
+    FlatScene scene;
+    scene.setLayout = createFlatSceneSetLayout(local);
+    createFlatSceneResources(local, input, 4, scene);
+    auto layout = createFlatPipelineLayout(local, program, scene.setLayout, sizeof(FlatConstants), "diagnostics");
+    createFlatSceneBindingSet(local, scene);
+    const ComputePipelineDesc desc{.program = program, .layout = shaderObject ? nullptr : layout.get()};
+    ComPtr<IComputePipeline> pipeline;
+    REQUIRE_CALL(local->createComputePipeline(desc, pipeline.writeRef()));
+
+    // A labeled source proves copy/clear transitions themselves never produce flat-binding warnings.
+    const BufferDesc sourceDesc{
+        .size = sizeof(input),
+        .elementSize = 4,
+        .usage = BufferUsage::CopySource | BufferUsage::CopyDestination,
+        .defaultState = ResourceState::CopySource,
+        .label = "diagnostic-copy-source",
+    };
+    auto source = local->createBuffer(sourceDesc, input.data());
+    REQUIRE(source != nullptr);
+    auto queue = local->getQueue(QueueType::Graphics);
+    auto encoder = queue->createCommandEncoder();
+    encoder->clearBuffer(scene.output);
+    encoder->copyBuffer(scene.input, 0, source, 0, sizeof(input));
+    encoder->setTextureState(scene.texture, ResourceState::CopyDestination);
+    // Output must already be UAV: repeated dispatches below still require real UAV ordering.
+    encoder->setBufferState(scene.output, ResourceState::UnorderedAccess);
+    if (pretransition)
+    {
+        encoder->setBufferState(scene.input, ResourceState::ShaderResource);
+        encoder->setTextureState(scene.texture, ResourceState::ShaderResource);
+    }
+    auto pass = encoder->beginComputePass();
+    const FlatConstants first{.offset = 0, .multiplier = 3, .bias = 7, .tag = 0};
+    const FlatConstants second{.offset = 0, .multiplier = 5, .bias = 11, .tag = 2};
+    IBindingSet* const sets[]{scene.set};
+    for (const auto& constants : {first, second})
+    {
+        if (shaderObject)
+        {
+            auto root = pass->bindPipeline(pipeline);
+            REQUIRE(root != nullptr);
+            ShaderCursor cursor(root);
+            REQUIRE_CALL(cursor["constants"].getDereferenced().setData(&constants, sizeof(constants)));
+            REQUIRE_CALL(cursor["scene"]["input"].setBinding(scene.input));
+            REQUIRE_CALL(cursor["scene"]["output"].setBinding(scene.output));
+            REQUIRE_CALL(cursor["scene"]["texture"].setBinding(scene.textureView));
+            REQUIRE_CALL(cursor["scene"]["sampler"].setBinding(scene.sampler));
+        }
+        else
+        {
+            REQUIRE_CALL(pass->bindPipeline(pipeline, flatBindings(&constants, sizeof(constants), sets)));
+        }
+        pass->dispatchCompute(4, 1, 1);
+    }
+    pass->end();
+    auto commands = encoder->finish();
+    REQUIRE(commands != nullptr);
+    REQUIRE_CALL(queue->submit(commands));
+    REQUIRE_CALL(queue->waitOnHost());
+    std::array<uint32_t, 4> expected{};
+    for (uint32_t i = 0; i < 4; ++i)
+        expected[i] = flatExpected(flatExpected(0, input[i], first), input[i], second);
+    compareComputeResult(local, scene.output, expected);
+    const std::lock_guard lock(sink.mutex);
+    INFO(sink.errors);
+    CHECK(sink.errors.empty());
+    CHECK(sink.correctCategory);
+    if (validation && !pretransition && !shaderObject)
+    {
+        REQUIRE(sink.transitions.size() == 2);
+        CHECK(sink.transitions[0].find("buffer 'flat-scene-input'") != std::string::npos);
+        CHECK(sink.transitions[0].find("target=ShaderResource") != std::string::npos);
+        CHECK(sink.transitions[1].find("texture 'flat-scene-texture'") != std::string::npos);
+        CHECK(sink.transitions[1].find("target=ShaderResource") != std::string::npos);
+        CHECK(sink.transitions[1].find("layer=0 layerCount=1 mip=0 mipCount=1") != std::string::npos);
+    }
+    else
+    {
+        CHECK(sink.transitions.empty());
+    }
+}
+
+
+GPU_TEST_CASE("flat-binding-state-transition-read-union", D3D12 | Vulkan | DontCreateDevice)
+{
+    FlatTransitionMessageSink sink;
+    DeviceDesc deviceDesc{.deviceType = ctx->deviceType, .adapter = getSelectedDeviceAdapter(ctx->deviceType)};
+    deviceDesc.enableValidation = true;
+    deviceDesc.debugCallback = &sink;
+    ComPtr<IDevice> local;
+    REQUIRE_CALL(getRHI()->createDevice(deviceDesc, local.writeRef()));
+    const FlatDeviceDrain drain{local};
+    auto session = createFlatSession(local, {});
+    ComPtr<IShaderProgram> program;
+    REQUIRE_CALL(loadAndLinkProgram(local, session, "test-flat-binding-cases", "csMain", program.writeRef()));
+    const std::array<uint32_t, 4> input{5, 6, 7, 8};
+    FlatScene scene;
+    scene.setLayout = createFlatSceneSetLayout(local);
+    createFlatSceneResources(local, input, 4, scene);
+    auto layout = createFlatPipelineLayout(local, program, scene.setLayout, sizeof(FlatConstants), "read-union");
+    createFlatSceneBindingSet(local, scene);
+    ComPtr<IComputePipeline> pipeline;
+    REQUIRE_CALL(local->createComputePipeline({.program = program, .layout = layout}, pipeline.writeRef()));
+    const std::array<uint32_t, 3> dispatch{4, 1, 1};
+    const BufferDesc argumentDesc{
+        .size = sizeof(dispatch),
+        .elementSize = 4,
+        .usage = BufferUsage::ShaderResource | BufferUsage::IndirectArgument | BufferUsage::CopyDestination,
+        .defaultState = ResourceState::IndirectArgument,
+        .label = "flat-read-union-arguments",
+    };
+    auto arguments = local->createBuffer(argumentDesc, dispatch.data());
+    REQUIRE(arguments != nullptr);
+    // SRV extends the already-known indirect state once. Subsequent SRV and indirect requests
+    // are subsets of that effective union, and must not be diagnosed as additional transitions.
+    const ResourceAccess accesses[]{
+        {.buffer = arguments, .state = ResourceState::ShaderResource},
+        {.buffer = arguments, .state = ResourceState::IndirectArgument},
+    };
+    IBindingSet* const sets[]{scene.set};
+    const FlatConstants constants{.offset = 0, .multiplier = 3, .bias = 7, .tag = 2};
+    auto bindings = flatBindings(&constants, sizeof(constants), sets);
+    bindings.accesses = accesses;
+    bindings.accessCount = 2;
+    auto queue = local->getQueue(QueueType::Graphics);
+    auto encoder = queue->createCommandEncoder();
+    auto pass = encoder->beginComputePass();
+    REQUIRE_CALL(pass->bindPipeline(pipeline, bindings));
+    // Reuse the very same BindingData, covering both the retained read union and UAV ordering.
+    pass->dispatchComputeIndirect({arguments, 0});
+    pass->dispatchComputeIndirect({arguments, 0});
+    pass->end();
+    auto commands = encoder->finish();
+    REQUIRE(commands != nullptr);
+    REQUIRE_CALL(queue->submit(commands));
+    REQUIRE_CALL(queue->waitOnHost());
+    std::array<uint32_t, 4> expected{};
+    for (uint32_t i = 0; i < 4; ++i)
+        expected[i] = flatExpected(flatExpected(0, input[i], constants), input[i], constants);
+    compareComputeResult(local, scene.output, expected);
+    const std::lock_guard lock(sink.mutex);
+    INFO(sink.errors);
+    CHECK(sink.errors.empty());
+    CHECK(sink.correctCategory);
+    REQUIRE(sink.transitions.size() == 1);
+    CHECK(sink.transitions[0].find("buffer 'flat-read-union-arguments', target=ShaderResource") != std::string::npos);
 }

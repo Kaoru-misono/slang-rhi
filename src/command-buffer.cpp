@@ -6,8 +6,36 @@
 #include "pipeline-resolver.h"
 #include "binding-set.h"
 #include "pipeline-layout.h"
+#include "enum-strings.h"
 
 namespace rhi {
+
+void reportFlatBindingTransition(Device* device, Buffer* buffer, ResourceState state)
+{
+    device->printMessage(
+        DebugMessageType::Warning,
+        DebugMessageSource::Layer,
+        "Flat binding required state transition: buffer '%s', target=%s.",
+        buffer->m_desc.label ? buffer->m_desc.label : "<unnamed>",
+        enumToString(state)
+    );
+}
+
+void reportFlatBindingTransition(Device* device, Texture* texture, SubresourceRange range, ResourceState state)
+{
+    range = texture->resolveSubresourceRange(range);
+    device->printMessage(
+        DebugMessageType::Warning,
+        DebugMessageSource::Layer,
+        "Flat binding required state transition: texture '%s', target=%s, layer=%u layerCount=%u mip=%u mipCount=%u.",
+        texture->m_desc.label ? texture->m_desc.label : "<unnamed>",
+        enumToString(state),
+        range.layer,
+        range.layerCount,
+        range.mip,
+        range.mipCount
+    );
+}
 
 // ----------------------------------------------------------------------------
 // CommandQueue
@@ -691,7 +719,9 @@ Result CommandEncoder::bindFlatPipeline(
     }
     for (uint32_t i = 0; i < bindings.accessCount; ++i)
         m_flatAccesses.emplace_back(bindings.accesses[i]);
-    return getFlatBindingData(pipeline, bindings, m_flatAccesses, outBindingData);
+    SLANG_RETURN_ON_FAIL(getFlatBindingData(pipeline, bindings, m_flatAccesses, outBindingData));
+    outBindingData->diagnoseStateTransitions = m_diagnoseFlatBindingTransitions;
+    return SLANG_OK;
 }
 
 IRenderPassEncoder* CommandEncoder::beginRenderPass(const RenderPassDesc& desc)

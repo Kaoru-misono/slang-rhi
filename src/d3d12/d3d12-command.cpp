@@ -1756,12 +1756,24 @@ void CommandRecorder::setBindings(BindingDataImpl* bindingData, BindMode bindMod
     for (uint32_t i = 0; i < bindingData->bufferStateCount; ++i)
     {
         const auto& bufferState = bindingData->bufferStates[i];
-        requireBufferState(bufferState.buffer, bufferState.state);
+        const bool changed = m_stateTracking.requireBufferState(
+            bufferState.buffer, bufferState.state, getBufferReadStatePolicy(m_queueType)
+        );
+        if (changed && bindingData->diagnoseStateTransitions)
+        {
+            reportFlatBindingTransition(m_device, bufferState.buffer, bufferState.state);
+        }
     }
     for (uint32_t i = 0; i < bindingData->textureStateCount; ++i)
     {
         const auto& textureState = bindingData->textureStates[i];
-        requireTextureState(textureState.texture, textureState.range, textureState.state);
+        const bool changed = m_stateTracking.setTextureState(
+            textureState.texture, textureState.range, textureState.state
+        );
+        if (changed && bindingData->diagnoseStateTransitions)
+        {
+            reportFlatBindingTransition(m_device, textureState.texture, textureState.range, textureState.state);
+        }
     }
 
     // We need barriers to be committed before setting root parameters.
@@ -2500,11 +2512,14 @@ Result CommandEncoderImpl::getBindingData(RootShaderObject* rootObject, BindingD
     builder.m_samplerArena = &m_commandBuffer->m_samplerArena;
     ShaderObjectLayout* specializedLayout = nullptr;
     SLANG_RETURN_ON_FAIL(rootObject->getSpecializedLayout(specializedLayout));
-    return builder.bindAsRoot(
+    SLANG_RETURN_ON_FAIL(builder.bindAsRoot(
         rootObject,
         checked_cast<RootShaderObjectLayoutImpl*>(specializedLayout),
         (BindingDataImpl*&)outBindingData
-    );
+    ));
+    // Arena allocations do not run BindingData's default member initializers.
+    outBindingData->diagnoseStateTransitions = false;
+    return SLANG_OK;
 }
 
 Result CommandEncoderImpl::finish(const CommandBufferDesc& desc, ICommandBuffer** outCommandBuffer)

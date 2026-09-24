@@ -23,7 +23,13 @@
 namespace rhi {
 
 struct BindingData
-{};
+{
+    // Enabled only by the debug wrapper, and only for formal flat bindings.
+    bool diagnoseStateTransitions = false;
+};
+
+void reportFlatBindingTransition(Device* device, Buffer* buffer, ResourceState state);
+void reportFlatBindingTransition(Device* device, Texture* texture, SubresourceRange range, ResourceState state);
 
 /// Upper bound on the inline constant block a pipeline can be bound with, matching the smallest
 /// push-constant budget the supported backends guarantee.
@@ -255,6 +261,7 @@ public:
 public:
     CommandEncoderDesc m_desc;
     StructHolder m_descHolder;
+    bool m_diagnoseFlatBindingTransitions = false;
 
     // Current command list to write to. Must be set by the derived class.
     CommandList* m_commandList = nullptr;
