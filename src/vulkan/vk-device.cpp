@@ -2779,6 +2779,14 @@ Result DeviceImpl::convertCooperativeVectorMatrix(
 
 Result DeviceImpl::createInputLayout(const InputLayoutDesc& desc, IInputLayout** outLayout)
 {
+    if (!outLayout)
+        return SLANG_E_INVALID_ARG;
+    *outLayout = nullptr;
+    if ((desc.inputElementCount && !desc.inputElements) || (desc.vertexStreamCount && !desc.vertexStreams) ||
+        desc.inputElementCount > m_info.limits.maxVertexInputElements ||
+        desc.vertexStreamCount > m_info.limits.maxVertexStreams)
+        return SLANG_E_INVALID_ARG;
+
     RefPtr<InputLayoutImpl> layout(new InputLayoutImpl);
 
     std::vector<VkVertexInputAttributeDescription>& dstAttributes = layout->m_attributeDescs;
@@ -2802,7 +2810,15 @@ Result DeviceImpl::createInputLayout(const InputLayoutDesc& desc, IInputLayout**
         const InputElementDesc& srcDesc = desc.inputElements[i];
         VkVertexInputAttributeDescription& dstDesc = dstAttributes[i];
 
-        dstDesc.location = i;
+        dstDesc.location = srcDesc.shaderLocation == UINT32_MAX ? i : srcDesc.shaderLocation;
+        if (dstDesc.location >= m_info.limits.maxVertexInputElements ||
+            srcDesc.bufferSlotIndex >= desc.vertexStreamCount)
+            return SLANG_E_INVALID_ARG;
+        for (uint32_t j = 0; j < i; ++j)
+        {
+            if (dstAttributes[j].location == dstDesc.location)
+                return SLANG_E_INVALID_ARG;
+        }
         dstDesc.binding = srcDesc.bufferSlotIndex;
         dstDesc.format = getVkFormat(srcDesc.format);
         if (dstDesc.format == VK_FORMAT_UNDEFINED)

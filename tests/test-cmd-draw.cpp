@@ -712,4 +712,39 @@ GPU_TEST_CASE("dynamic-blend-factor-draw-pipeline-pass", D3D12 | Vulkan)
     checkPixels(device, second, {});
 }
 
+GPU_TEST_CASE("input-layout-explicit-location-validation", Vulkan)
+{
+    VertexStreamDesc stream{};
+    stream.stride = 16;
+    InputElementDesc elements[2] = {
+        {"POSITION", 0, Format::RG32Float, 0, 0},
+        {"TEXCOORD", 0, Format::RG32Float, 8, 0},
+    };
+    InputLayoutDesc desc{};
+    desc.inputElements = elements;
+    desc.inputElementCount = 2;
+    desc.vertexStreams = &stream;
+    desc.vertexStreamCount = 1;
+    ComPtr<IInputLayout> layout;
+    REQUIRE_CALL(device->createInputLayout(desc, layout.writeRef()));
+    layout.setNull();
+    elements[0].shaderLocation = 3;
+    elements[1].shaderLocation = 7;
+    REQUIRE_CALL(device->createInputLayout(desc, layout.writeRef()));
+    layout.setNull();
+    elements[1].shaderLocation = 3;
+    CHECK(device->createInputLayout(desc, layout.writeRef()) == SLANG_E_INVALID_ARG);
+    CHECK(layout == nullptr);
+    elements[0].shaderLocation = 1;
+    elements[1].shaderLocation = UINT32_MAX;
+    CHECK(device->createInputLayout(desc, layout.writeRef()) == SLANG_E_INVALID_ARG);
+    CHECK(layout == nullptr);
+    elements[0].shaderLocation = UINT32_MAX - 1;
+    CHECK(device->createInputLayout(desc, layout.writeRef()) == SLANG_E_INVALID_ARG);
+    CHECK(layout == nullptr);
+    elements[0].shaderLocation = device->getInfo().limits.maxVertexInputElements;
+    CHECK(device->createInputLayout(desc, layout.writeRef()) == SLANG_E_INVALID_ARG);
+    CHECK(layout == nullptr);
+}
+
 } // namespace dynamicDrawStateTests
