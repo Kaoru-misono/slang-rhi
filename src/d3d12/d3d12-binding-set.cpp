@@ -240,7 +240,18 @@ Result PipelineLayoutImpl::initNative()
         );
         return SLANG_E_INVALID_ARG;
     }
-    if (builder.m_descriptorSets.size() != m_setLayouts.size() + 1)
+    // The reflection builder allocates a descriptor-set node for structural parents too.
+    // Keep its original register spaces, but only expose nodes containing descriptors as slots.
+    std::vector<uint32_t> resourceSetIndices;
+    for (uint32_t i = 0; i < builder.m_descriptorSets.size(); ++i)
+    {
+        if (i == rootSetIndex)
+            continue;
+        const auto& set = builder.m_descriptorSets[i];
+        if (!set.m_resourceRanges.empty() || !set.m_samplerRanges.empty())
+            resourceSetIndices.push_back(i);
+    }
+    if (resourceSetIndices.size() != m_setLayouts.size())
     {
         device->printError(
             "Pipeline layout '%s': the program's parameter blocks do not match the layout's binding sets",
@@ -286,7 +297,7 @@ Result PipelineLayoutImpl::initNative()
     for (uint32_t i = 0; i < m_setLayouts.size(); ++i)
     {
         auto* setLayout = static_cast<BindingSetLayoutImpl*>(m_setLayouts[i].get());
-        const auto& descriptorSet = builder.m_descriptorSets[i + 1];
+        const auto& descriptorSet = builder.m_descriptorSets[resourceSetIndices[i]];
         std::vector<D3D12_DESCRIPTOR_RANGE_TYPE> resourceTypes;
         std::vector<D3D12_DESCRIPTOR_RANGE_TYPE> samplerTypes;
         for (uint32_t e = 0; e < setLayout->m_desc.entryCount; ++e)
@@ -326,7 +337,7 @@ Result PipelineLayoutImpl::initNative()
     for (uint32_t i = 0; i < m_setLayouts.size(); ++i)
     {
         auto* setLayout = static_cast<BindingSetLayoutImpl*>(m_setLayouts[i].get());
-        const auto& descriptorSet = builder.m_descriptorSets[i + 1];
+        const auto& descriptorSet = builder.m_descriptorSets[resourceSetIndices[i]];
         if (setLayout->m_resourceCount)
         {
             D3D12_ROOT_PARAMETER1 parameter = {};

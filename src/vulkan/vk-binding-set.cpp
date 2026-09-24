@@ -363,8 +363,17 @@ Result PipelineLayoutImpl::initNative()
     {
         uint32_t setIndex =
             parentSetIndex + uint32_t(varLayout->getOffset(SLANG_PARAMETER_CATEGORY_SUB_ELEMENT_REGISTER_SPACE));
-        m_setIndices.push_back(setIndex);
         auto* elementTypeLayout = varLayout->getTypeLayout()->getElementTypeLayout();
+        // Preserve reflected descriptor-set numbers while omitting structural parents
+        // from the caller's flat binding slots. Native numbering gaps are filled below.
+        for (unsigned i = 0; i < elementTypeLayout->getFieldCount(); ++i)
+        {
+            if (elementTypeLayout->getFieldByIndex(i)->getTypeLayout()->getKind() != Kind::ParameterBlock)
+            {
+                m_setIndices.push_back(setIndex);
+                break;
+            }
+        }
         for (unsigned i = 0; i < elementTypeLayout->getFieldCount(); ++i)
         {
             auto* field = elementTypeLayout->getFieldByIndex(i);
@@ -380,11 +389,18 @@ Result PipelineLayoutImpl::initNative()
         m_constantsSetIndex = uint32_t(varLayout->getBindingSpace(SLANG_PARAMETER_CATEGORY_DESCRIPTOR_TABLE_SLOT));
         m_constantsBinding = uint32_t(varLayout->getOffset(SLANG_PARAMETER_CATEGORY_DESCRIPTOR_TABLE_SLOT));
     };
+    // Parameter offsets are relative to their scope. Slang assigns the scope's
+    // register-space base after preceding global/entry-point allocations.
+    auto scopeSetOffset = [](slang::VariableLayoutReflection* scope) -> uint32_t
+    {
+        return scope ? uint32_t(scope->getOffset(SLANG_PARAMETER_CATEGORY_SUB_ELEMENT_REGISTER_SPACE)) : 0;
+    };
+    const uint32_t globalSetOffset = scopeSetOffset(programLayout->getGlobalParamsVarLayout());
     for (unsigned i = 0; i < programLayout->getParameterCount(); ++i)
     {
         auto* param = programLayout->getParameterByIndex(i);
         if (param->getTypeLayout()->getKind() == Kind::ParameterBlock)
-            collectSet(collectSet, param, 0);
+            collectSet(collectSet, param, globalSetOffset);
         else if (param->getTypeLayout()->getKind() == Kind::ConstantBuffer)
             collectConstants(param);
     }
@@ -397,7 +413,7 @@ Result PipelineLayoutImpl::initNative()
             auto* param = entryPoint->getParameterByIndex(j);
             if (param->getTypeLayout()->getKind() == Kind::ParameterBlock)
             {
-                collectSet(collectSet, param, 0);
+                collectSet(collectSet, param, scopeSetOffset(entryPoint->getVarLayout()));
             }
             else if (param->getCategoryCount() == 1 && param->getCategoryByIndex(0) == Category::Uniform)
             {
