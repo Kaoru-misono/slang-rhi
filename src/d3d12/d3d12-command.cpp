@@ -1756,12 +1756,24 @@ void CommandRecorder::setBindings(BindingDataImpl* bindingData, BindMode bindMod
     for (uint32_t i = 0; i < bindingData->bufferStateCount; ++i)
     {
         const auto& bufferState = bindingData->bufferStates[i];
-        requireBufferState(bufferState.buffer, bufferState.state);
+        const bool changed = m_stateTracking.requireBufferState(
+            bufferState.buffer, bufferState.state, getBufferReadStatePolicy(m_queueType)
+        );
+        if (changed && bindingData->diagnoseStateTransitions)
+        {
+            reportFlatBindingTransition(m_device, bufferState.buffer, bufferState.state);
+        }
     }
     for (uint32_t i = 0; i < bindingData->textureStateCount; ++i)
     {
         const auto& textureState = bindingData->textureStates[i];
-        requireTextureState(textureState.texture, textureState.range, textureState.state);
+        const bool changed = m_stateTracking.setTextureState(
+            textureState.texture, textureState.range, textureState.state
+        );
+        if (changed && bindingData->diagnoseStateTransitions)
+        {
+            reportFlatBindingTransition(m_device, textureState.texture, textureState.range, textureState.state);
+        }
     }
 
     // We need barriers to be committed before setting root parameters.
@@ -2104,7 +2116,22 @@ Result CommandQueueImpl::getOrCreateCommandBuffer(CommandBufferImpl** outCommand
 
 void CommandQueueImpl::retireCommandBuffer(CommandBufferImpl* commandBuffer)
 {
-    commandBuffer->reset();
+    const Result result = commandBuffer->reset();
+    if (SLANG_FAILED(result))
+    {
+        commandBuffer->m_resetResult = result;
+        // There will be no pool reference. External handles must keep the device, queue and
+        // backing heap alive until the failed command buffer and any retained chunks are destroyed.
+        DeviceImpl* device = getDevice<DeviceImpl>();
+        // During device teardown only internal references remain; do not resurrect the device.
+        if (!device->m_isShuttingDown)
+            commandBuffer->setInternalReferenceCount(0);
+        device->printError(
+            "D3D12 command buffer retirement reset failed (0x%08x); discarding from reuse.",
+            uint32_t(result)
+        );
+        return;
+    }
     {
         std::lock_guard<std::mutex> lock(m_mutex);
         m_commandBuffersPool.push_back(commandBuffer);
@@ -2191,8 +2218,12 @@ Result CommandQueueImpl::submit(const SubmitDesc& desc)
 
     std::unique_lock<std::mutex> submitLock(m_submitMutex);
     for (uint32_t i = 0; i < desc.commandBufferCount; ++i)
-        if (checked_cast<CommandBufferImpl*>(desc.commandBuffers[i])->m_submissionID != 0)
+    {
+        auto* commandBuffer = checked_cast<CommandBufferImpl*>(desc.commandBuffers[i]);
+        if (commandBuffer->m_submissionID != 0)
             return SLANG_E_INVALID_ARG;
+        SLANG_RETURN_ON_FAIL(commandBuffer->m_resetResult);
+    }
     uint64_t sequence = m_lastSubmittedID.load() + 1;
     HRESULT result = S_OK;
     for (uint32_t i = 0; i < desc.waitFenceCount && SUCCEEDED(result); ++i)
@@ -2488,51 +2519,6 @@ Result CommandEncoderImpl::getFlatBindingData(
     return SLANG_OK;
 }
 
-Result CommandEncoderImpl::getComputeBindingData(
-    ShaderProgram* program, const void* data, size_t size,
-    const ComputeBufferAccess* buffers, uint32_t bufferCount, BindingData*& outBindingData
-)
-{
-    auto* layout = checked_cast<RootShaderObjectLayoutImpl*>(program->getRootShaderObjectLayout());
-    if (layout->getTotalOrdinaryDataSize() || layout->m_entryPoints.size() != 1 ||
-        layout->m_entryPoints[0].layout->getTotalOrdinaryDataSize() != size ||
-        layout->getTotalResourceDescriptorCount() != 1 || layout->getTotalSamplerDescriptorCount() ||
-        layout->m_rootSignatureRootParameterCount || layout->m_rootSignatureTotalParameterCount != 1 ||
-        layout->m_entryPoints[0].offset.resource != 0)
-        return SLANG_E_INVALID_ARG;
-
-    TransientBufferArena::Allocation allocation;
-    SLANG_RETURN_ON_FAIL(
-        m_commandBuffer->m_constantBufferArena.allocate(D3D12_CONSTANT_BUFFER_DATA_PLACEMENT_ALIGNMENT, &allocation)
-    );
-    auto descriptors = m_commandBuffer->m_cbvSrvUavArena.allocate(1);
-    if (!descriptors.isValid()) return SLANG_E_OUT_OF_MEMORY;
-    std::memcpy(allocation.mappedData, data, size);
-    D3D12_CONSTANT_BUFFER_VIEW_DESC view = {};
-    view.BufferLocation = checked_cast<BufferImpl*>(allocation.buffer)->getDeviceAddress() + allocation.offset;
-    view.SizeInBytes = D3D12_CONSTANT_BUFFER_DATA_PLACEMENT_ALIGNMENT;
-    getDevice<DeviceImpl>()->m_device->CreateConstantBufferView(&view, descriptors.getCpuHandle(0));
-
-    auto& arena = m_commandBuffer->m_allocator;
-    auto* binding = arena.allocate<BindingDataImpl>();
-    *binding = {};
-    binding->bufferStateCount = binding->bufferStateCapacity = bufferCount;
-    binding->bufferStates = arena.allocate<BindingDataImpl::BufferState>(bufferCount);
-    for (uint32_t i = 0; i < bufferCount; ++i)
-    {
-        auto* buffer = checked_cast<BufferImpl*>(buffers[i].buffer);
-        binding->bufferStates[i] = {buffer, buffers[i].state};
-        m_commandBuffer->m_trackedObjects.insert(buffer);
-    }
-    binding->rootParameterCount = 1;
-    binding->rootParameters = arena.allocate<BindingDataImpl::RootParameter>();
-    binding->rootParameters[0].type = BindingDataImpl::RootParameter::DescriptorTable;
-    binding->rootParameters[0].index = 0;
-    binding->rootParameters[0].baseDescriptor = descriptors.firstGpuHandle;
-    outBindingData = binding;
-    return SLANG_OK;
-}
-
 Result CommandEncoderImpl::getBindingData(RootShaderObject* rootObject, BindingData*& outBindingData)
 {
     rootObject->trackResources(m_commandBuffer->m_trackedObjects);
@@ -2545,11 +2531,14 @@ Result CommandEncoderImpl::getBindingData(RootShaderObject* rootObject, BindingD
     builder.m_samplerArena = &m_commandBuffer->m_samplerArena;
     ShaderObjectLayout* specializedLayout = nullptr;
     SLANG_RETURN_ON_FAIL(rootObject->getSpecializedLayout(specializedLayout));
-    return builder.bindAsRoot(
+    SLANG_RETURN_ON_FAIL(builder.bindAsRoot(
         rootObject,
         checked_cast<RootShaderObjectLayoutImpl*>(specializedLayout),
         (BindingDataImpl*&)outBindingData
-    );
+    ));
+    // Arena allocations do not run BindingData's default member initializers.
+    outBindingData->diagnoseStateTransitions = false;
+    return SLANG_OK;
 }
 
 Result CommandEncoderImpl::finish(const CommandBufferDesc& desc, ICommandBuffer** outCommandBuffer)
@@ -2652,6 +2641,7 @@ Result CommandBufferImpl::init()
 
 Result CommandBufferImpl::reset()
 {
+    SLANG_RETURN_ON_FAIL(m_resetResult);
     DeviceImpl* device = getDevice<DeviceImpl>();
     if (!device->m_deviceLost)
     {

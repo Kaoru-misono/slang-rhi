@@ -148,10 +148,11 @@ public:
         );
     }
 
-    void requireBufferState(Buffer* buffer, ResourceState state, BufferReadStatePolicy policy)
+    // Returns whether the effective state changed, excluding same-state UAV ordering barriers.
+    bool requireBufferState(Buffer* buffer, ResourceState state, BufferReadStatePolicy policy)
     {
         if (buffer->m_desc.memoryType != MemoryType::DeviceLocal)
-            return;
+            return false;
 
         BufferState* bufferState = getBufferState(buffer);
         BufferStateSet requiredStates(state);
@@ -162,28 +163,33 @@ public:
             requiredStates.add(state);
         }
 
+        const bool changed = requiredStates != bufferState->states;
         transitionBufferState(
             buffer,
             *bufferState,
             requiredStates,
             state == ResourceState::UnorderedAccess
         );
+        return changed;
     }
 
-    void setTextureState(Texture* texture, SubresourceRange subresourceRange, ResourceState state)
+    // Returns whether any requested subresource changed state, excluding UAV ordering barriers.
+    bool setTextureState(Texture* texture, SubresourceRange subresourceRange, ResourceState state)
     {
-        // Cannot change state of upload/readback buffers.
+        // Cannot change state of upload/readback textures.
         if (texture->m_desc.memoryType != MemoryType::DeviceLocal)
         {
-            return;
+            return false;
         }
 
         subresourceRange = texture->resolveSubresourceRange(subresourceRange);
         bool isEntireTexture = texture->isEntireTexture(subresourceRange);
         TextureState* textureState = getTextureState(texture);
+        bool changed = false;
 
         if (isEntireTexture && textureState->subresourceStates.empty())
         {
+            changed = state != textureState->state;
             // Transition entire texture.
             if (state != textureState->state || state == ResourceState::UnorderedAccess)
             {
@@ -213,12 +219,13 @@ public:
                 textureState->subresourceStates.resize(texture->m_desc.getSubresourceCount(), textureState->state);
                 textureState->state = ResourceState::Undefined;
             }
-            uint32_t layerCount = texture->m_desc.getLayerCount();
-            for (uint32_t layer = subresourceRange.layer; layer < layerCount; layer++)
+            const uint32_t layerEnd = subresourceRange.layer + subresourceRange.layerCount;
+            for (uint32_t layer = subresourceRange.layer; layer < layerEnd; layer++)
             {
                 for (uint32_t mip = subresourceRange.mip; mip < subresourceRange.mip + subresourceRange.mipCount; mip++)
                 {
                     uint32_t subresourceIndex = layer * texture->m_desc.mipCount + mip;
+                    changed |= state != textureState->subresourceStates[subresourceIndex];
                     if (state != textureState->subresourceStates[subresourceIndex] ||
                         state == ResourceState::UnorderedAccess)
                     {
@@ -252,6 +259,7 @@ public:
                 textureState->subresourceStates.clear();
             }
         }
+        return changed;
     }
 
     void requireDefaultStates()

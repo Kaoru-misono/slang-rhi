@@ -2854,14 +2854,6 @@ public:
     virtual SLANG_NO_THROW void SLANG_MCALL drawMeshTasks(uint32_t x, uint32_t y, uint32_t z) = 0;
 };
 
-/// Flat buffer accesses for bindless compute parameters. Every buffer reached through
-/// a descriptor handle must be listed, including transitively accessed buffers.
-struct ComputeBufferAccess
-{
-    IBuffer* buffer;
-    ResourceState state;
-};
-
 class IComputePassEncoder : public IPassEncoder
 {
     SLANG_COM_INTERFACE(0x8479334f, 0xfb45, 0x471c, {0xb7, 0x75, 0x94, 0xa5, 0x76, 0x72, 0x32, 0xc8});
@@ -2875,21 +2867,6 @@ public:
     virtual SLANG_NO_THROW Result SLANG_MCALL bindPipeline(
         IComputePipeline* pipeline,
         const FlatBindingDesc& bindings
-    ) = 0;
-
-    /// Binds a fully specialized single-entry-point compute program without a shader object,
-    /// passing only ordinary entry-point data (no globals, resource slots or subobjects).
-    /// The data is copied immediately and must exactly match the reflected layout,
-    /// be nonempty, at most 128 bytes, and a multiple of four bytes.
-    /// Buffers are retained until command completion and transitioned to their listed
-    /// ShaderResource/UnorderedAccess states. Aliased accesses must use the same state.
-    /// Failure clears the current binding. Textures and samplers are not supported.
-    virtual SLANG_NO_THROW Result SLANG_MCALL bindPipelineWithData(
-        IComputePipeline* pipeline,
-        const void* data,
-        size_t size,
-        const ComputeBufferAccess* buffers,
-        uint32_t bufferCount
     ) = 0;
 
     virtual SLANG_NO_THROW void SLANG_MCALL dispatchCompute(uint32_t x, uint32_t y, uint32_t z) = 0;
@@ -4585,6 +4562,14 @@ struct VulkanDeviceExtendedDesc
     const char* const* instanceExtensions = nullptr;
     uint32_t deviceExtensionCount = 0;
     const char* const* deviceExtensions = nullptr;
+
+    /// Maximum live persistent binding sets, excluding bindless and command-buffer-local sets. 0 is unlimited.
+    uint32_t maxBindingSets = 0;
+    /// Maximum internal descriptor sets allocated by each command buffer until reset. 0 is unlimited.
+    uint32_t maxCommandBufferDescriptorSets = 0;
+    /// Maximum aligned constant-buffer bytes allocated by each command buffer until reset. 0 is unlimited.
+    /// This limits allocation usage, not the physical capacity of the queue-owned backing heap.
+    Size maxCommandBufferConstantBytes = 0;
 };
 
 } // namespace rhi

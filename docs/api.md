@@ -259,6 +259,45 @@
 | `dispatchCompute`         | yes | yes  | yes   | yes   | yes    | yes   | yes  |
 | `dispatchComputeIndirect` | :x: | yes  | yes   | yes   | yes    | yes   | yes  |
 
+Compute binding supports the general shader-object overloads and the `FlatBindingDesc` overload.
+Flat bindings use an `IPipelineLayout`, copy constant bytes immediately, and retain and transition
+resources declared by binding sets and explicit accesses. The earlier entry-point-data-only
+compute binding API has been removed.
+
+With `DeviceDesc::enableValidation`, replay of a flat binding reports `Warning` / `Layer` when
+its declared accesses require an effective resource-state change. Messages identify the resource
+label and target state, and include resolved layer/mip ranges for textures. Read-state unions are
+compared against the tracked effective state; repeated accesses already covered by that union and
+same-state UAV ordering barriers do not warn. The diagnostic does not suppress barriers or alter
+failure handling. Without the debug wrapper it is disabled, and general shader-object bindings,
+copy/clear commands, attachments, and default-state restoration do not produce this diagnostic.
+This applies to flat render, compute, and ray-tracing bindings on D3D12 and Vulkan.
+
+D3D12 caches flat sampler tables by immutable binding-set identity for the command buffer's
+lifetime, including workloads using more than 16 distinct sets. Rebinding an existing set does
+not allocate another sampler table. Command-buffer reset clears the cache along with its
+descriptor arenas. Distinct sets still consume the configured shader-visible sampler heap;
+exhaustion returns an allocation failure and does not overwrite tables used by earlier commands.
+
+### Vulkan allocation quotas
+
+`VulkanDeviceExtendedDesc` provides three independent production allocation budgets (0 means unlimited):
+
+- `maxBindingSets`: live persistent binding sets, excluding bindless sets and command-buffer-internal sets.
+  A recorded/submitted command buffer retains its sets; dropping the caller reference alone does not free quota.
+  Quota returns when the native set is actually freed through the existing retirement/deferred-deletion path.
+- `maxCommandBufferDescriptorSets`: internal descriptor sets allocated by each command buffer, including
+  buffered constants, empty layout slots and general shader-object bindings. Persistent binding sets do not count.
+- `maxCommandBufferConstantBytes`: cumulative aligned uniform-buffer allocation bytes per command buffer.
+  This is a logical allocation budget, not the physical reserved size of the queue-owned backing heap.
+  Inline/push constants do not consume this budget.
+
+Configured budget exhaustion returns `SLANG_E_OUT_OF_MEMORY`; this status does not imply physical
+device-memory exhaustion. It does not evict descriptors or overwrite existing constant data. Partially successful allocations from a failed bind remain owned until normal reset/release.
+Command-local budgets recover on reset, after completion for submitted work or when an unsubmitted encoder
+is discarded. Native allocation failures propagate without allocation-failure assertions. D3D12 descriptors
+and its public extended descriptor are unchanged.
+
 ## `IRayTracingPassEncoder` interface
 
 | API                   | CPU | CUDA | D3D11 | D3D12 | Vulkan | Metal | WGPU |

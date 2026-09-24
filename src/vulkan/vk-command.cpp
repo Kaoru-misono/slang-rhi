@@ -1970,12 +1970,24 @@ void CommandRecorder::requireBindingStates(BindingDataImpl* bindingData)
     for (uint32_t i = 0; i < bindingData->bufferStateCount; ++i)
     {
         const auto& bufferState = bindingData->bufferStates[i];
-        requireBufferState(bufferState.buffer, bufferState.state);
+        const bool changed = m_stateTracking.requireBufferState(
+            bufferState.buffer, bufferState.state, getBufferReadStatePolicy(m_queueType)
+        );
+        if (changed && bindingData->diagnoseStateTransitions)
+        {
+            reportFlatBindingTransition(m_device, bufferState.buffer, bufferState.state);
+        }
     }
     for (uint32_t i = 0; i < bindingData->textureStateCount; ++i)
     {
         const auto& textureState = bindingData->textureStates[i];
-        requireTextureState(textureState.texture, textureState.subresourceRange, textureState.state);
+        const bool changed = m_stateTracking.setTextureState(
+            textureState.texture, textureState.subresourceRange, textureState.state
+        );
+        if (changed && bindingData->diagnoseStateTransitions)
+        {
+            reportFlatBindingTransition(m_device, textureState.texture, textureState.subresourceRange, textureState.state);
+        }
     }
 }
 
@@ -2280,7 +2292,22 @@ Result CommandQueueImpl::getOrCreateCommandBuffer(CommandBufferImpl** outCommand
 
 void CommandQueueImpl::retireCommandBuffer(CommandBufferImpl* commandBuffer)
 {
-    commandBuffer->reset();
+    const Result result = commandBuffer->reset();
+    if (SLANG_FAILED(result))
+    {
+        commandBuffer->m_resetResult = result;
+        // There will be no pool reference. External handles must keep the device, queue and
+        // backing heap alive until the failed command buffer and any retained chunks are destroyed.
+        DeviceImpl* device = getDevice<DeviceImpl>();
+        // During device teardown only internal references remain; do not resurrect the device.
+        if (!device->m_isShuttingDown)
+            commandBuffer->setInternalReferenceCount(0);
+        device->printError(
+            "Vulkan command buffer retirement reset failed (0x%08x); discarding from reuse.",
+            uint32_t(result)
+        );
+        return;
+    }
     {
         std::lock_guard<std::mutex> lock(m_mutex);
         m_commandBuffersPool.push_back(commandBuffer);
@@ -2368,6 +2395,7 @@ Result CommandQueueImpl::submit(const SubmitDesc& desc)
         auto* commandBuffer = checked_cast<CommandBufferImpl*>(desc.commandBuffers[i]);
         if (commandBuffer->m_submissionID != 0)
             return SLANG_E_INVALID_ARG;
+        SLANG_RETURN_ON_FAIL(commandBuffer->m_resetResult);
         vkCommandBuffers.push_back(commandBuffer->m_commandBuffer);
     }
 
@@ -2605,9 +2633,10 @@ Result CommandEncoderImpl::getFlatBindingData(
         TransientBufferArena::Allocation allocation;
         SLANG_RETURN_ON_FAIL(m_commandBuffer->m_constantBufferArena.allocate(bindings.constantsSize, &allocation));
         std::memcpy(allocation.mappedData, bindings.constants, bindings.constantsSize);
-        auto descriptorSet = m_commandBuffer->m_descriptorSetAllocator.allocate(layout->m_constantsSetLayout);
-        if (!descriptorSet.handle)
-            return SLANG_E_OUT_OF_MEMORY;
+        VulkanDescriptorSet descriptorSet;
+        SLANG_RETURN_ON_FAIL(m_commandBuffer->m_descriptorSetAllocator.allocate(
+            layout->m_constantsSetLayout, &descriptorSet
+        ));
 
         VkDescriptorBufferInfo bufferInfo = {};
         bufferInfo.buffer = checked_cast<BufferImpl*>(allocation.buffer)->m_buffer.m_buffer;
@@ -2632,9 +2661,10 @@ Result CommandEncoderImpl::getFlatBindingData(
     {
         if (data->descriptorSets[i] == VK_NULL_HANDLE)
         {
-            auto descriptorSet = m_commandBuffer->m_descriptorSetAllocator.allocate(layout->m_emptySetLayout);
-            if (!descriptorSet.handle)
-                return SLANG_E_OUT_OF_MEMORY;
+            VulkanDescriptorSet descriptorSet;
+            SLANG_RETURN_ON_FAIL(m_commandBuffer->m_descriptorSetAllocator.allocate(
+                layout->m_emptySetLayout, &descriptorSet
+            ));
             data->descriptorSets[i] = descriptorSet.handle;
         }
     }
@@ -2666,54 +2696,6 @@ Result CommandEncoderImpl::getFlatBindingData(
     return SLANG_OK;
 }
 
-Result CommandEncoderImpl::getComputeBindingData(
-    ShaderProgram* program, const void* data, size_t size,
-    const ComputeBufferAccess* buffers, uint32_t bufferCount, BindingData*& outBindingData
-)
-{
-    auto* layout = checked_cast<RootShaderObjectLayoutImpl*>(program->getRootShaderObjectLayout());
-    auto ranges = layout->getAllPushConstantRanges();
-    if (layout->getTotalOrdinaryDataSize() || layout->getChildDescriptorSetCount() ||
-        ranges.size() != 1 || ranges[0].size != size || !(ranges[0].stageFlags & VK_SHADER_STAGE_COMPUTE_BIT))
-        return SLANG_E_INVALID_ARG;
-    for (const auto& set : layout->getOwnDescriptorSets())
-        if (!set.vkBindings.empty()) return SLANG_E_INVALID_ARG;
-
-    auto& arena = m_commandBuffer->m_allocator;
-    auto* binding = arena.allocate<BindingDataImpl>();
-    *binding = {};
-    binding->bufferStateCount = binding->bufferStateCapacity = bufferCount;
-    binding->bufferStates = arena.allocate<BindingDataImpl::BufferState>(bufferCount);
-    for (uint32_t i = 0; i < bufferCount; ++i)
-    {
-        auto* buffer = checked_cast<BufferImpl*>(buffers[i].buffer);
-        binding->bufferStates[i] = {buffer, buffers[i].state};
-        m_commandBuffer->m_trackedObjects.insert(buffer);
-    }
-    binding->pipelineLayout = layout->m_pipelineLayout;
-    binding->pushConstantCount = 1;
-    binding->pushConstantRanges = arena.allocate<VkPushConstantRange>();
-    binding->pushConstantRanges[0] = ranges[0];
-    binding->pushConstantData = arena.allocate<void*>();
-    binding->pushConstantData[0] = arena.allocate(size);
-    std::memcpy(binding->pushConstantData[0], data, size);
-    auto* bindless = getDevice<DeviceImpl>()->m_bindlessDescriptorSet.get();
-    binding->descriptorSets = arena.allocate<VkDescriptorSet>(layout->getOwnDescriptorSetCount() + (bindless ? 1 : 0));
-    // Slang can reserve empty sets before the global bindless table.
-    for (const auto& set : layout->getOwnDescriptorSets())
-    {
-        auto allocation = m_commandBuffer->m_descriptorSetAllocator.allocate(set.descriptorSetLayout);
-        if (!allocation.handle) return SLANG_E_OUT_OF_MEMORY;
-        binding->descriptorSets[binding->descriptorSetCount++] = allocation.handle;
-    }
-    if (bindless)
-    {
-        binding->descriptorSets[binding->descriptorSetCount++] = bindless->m_descriptorSet;
-    }
-    outBindingData = binding;
-    return SLANG_OK;
-}
-
 Result CommandEncoderImpl::getBindingData(RootShaderObject* rootObject, BindingData*& outBindingData)
 {
     rootObject->trackResources(m_commandBuffer->m_trackedObjects);
@@ -2725,11 +2707,14 @@ Result CommandEncoderImpl::getBindingData(RootShaderObject* rootObject, BindingD
     builder.m_descriptorSetAllocator = &m_commandBuffer->m_descriptorSetAllocator;
     ShaderObjectLayout* specializedLayout = nullptr;
     SLANG_RETURN_ON_FAIL(rootObject->getSpecializedLayout(specializedLayout));
-    return builder.bindAsRoot(
+    SLANG_RETURN_ON_FAIL(builder.bindAsRoot(
         rootObject,
         checked_cast<RootShaderObjectLayoutImpl*>(specializedLayout),
         (BindingDataImpl*&)outBindingData
-    );
+    ));
+    // Arena allocations do not run BindingData's default member initializers.
+    outBindingData->diagnoseStateTransitions = false;
+    return SLANG_OK;
 }
 
 Result CommandEncoderImpl::finish(const CommandBufferDesc& desc, ICommandBuffer** outCommandBuffer)
@@ -2792,8 +2777,10 @@ CommandBufferImpl::~CommandBufferImpl()
 Result CommandBufferImpl::init()
 {
     DeviceImpl* device = getDevice<DeviceImpl>();
-    m_constantBufferArena.initialize(&m_queue->m_constantBufferHeap);
-    m_descriptorSetAllocator.init(&device->m_api);
+    TransientBufferArenaDesc constantArenaDesc;
+    constantArenaDesc.maxAllocationBytes = device->m_maxCommandBufferConstantBytes;
+    m_constantBufferArena.initialize(&m_queue->m_constantBufferHeap, constantArenaDesc);
+    m_descriptorSetAllocator.init(&device->m_api, device->m_maxCommandBufferDescriptorSets);
 
     VkCommandPoolCreateInfo createInfo = {VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};
     createInfo.flags = VK_COMMAND_POOL_CREATE_TRANSIENT_BIT;
@@ -2817,6 +2804,7 @@ Result CommandBufferImpl::init()
 
 Result CommandBufferImpl::reset()
 {
+    SLANG_RETURN_ON_FAIL(m_resetResult);
     DeviceImpl* device = getDevice<DeviceImpl>();
     m_commandList.reset();
     if (!device->m_deviceLost)
@@ -2824,7 +2812,7 @@ Result CommandBufferImpl::reset()
         SLANG_VK_RETURN_ON_FAIL_REPORT(device->m_api.vkResetCommandPool(device->m_device, m_commandPool, 0), device);
     }
     m_constantBufferArena.reset();
-    m_descriptorSetAllocator.reset();
+    SLANG_RETURN_ON_FAIL(m_descriptorSetAllocator.reset());
     m_bindingCache.reset();
     return CommandBuffer::reset();
 }

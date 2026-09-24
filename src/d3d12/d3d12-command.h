@@ -65,11 +65,6 @@ public:
     Result init();
 
     virtual Result getBindingData(RootShaderObject* rootObject, BindingData*& outBindingData) override;
-    virtual Result getComputeBindingData(
-        ShaderProgram* program, const void* data, size_t size,
-        const ComputeBufferAccess* buffers, uint32_t bufferCount, BindingData*& outBindingData
-    ) override;
-
     virtual Result getFlatBindingData(
         Pipeline* pipeline,
         const FlatBindingDesc& bindings,
@@ -97,6 +92,8 @@ public:
     BindingCache m_bindingCache;
     // Nonzero consumes this recording, including a submission that lost the device.
     uint64_t m_submissionID = 0;
+    // A failed retirement is terminal for this object, even if a caller still holds it.
+    Result m_resetResult = SLANG_OK;
 
 #if SLANG_RHI_ENABLE_AFTERMATH
     GFSDK_Aftermath_ContextHandle m_aftermathContext;

@@ -22,9 +22,8 @@ static constexpr uint32_t kInvalidDescriptorSetIndex = 0xffffffff;
 class BindingSetDescriptorPool
 {
 public:
-    void initialize(DeviceImpl* device);
+    void initialize(DeviceImpl* device, uint32_t maxSets = 0);
     void release();
-
     Result allocate(
         VkDescriptorSetLayout setLayout,
         std::span<const VkDescriptorPoolSize> poolSizes,
@@ -47,6 +46,8 @@ private:
     DeviceImpl* m_device = nullptr;
     std::mutex m_mutex;
     std::vector<Pool> m_pools;
+    uint32_t m_maxSets = 0;
+    uint64_t m_liveSets = 0;
 };
 
 class BindingSetLayoutImpl : public BindingSetLayout

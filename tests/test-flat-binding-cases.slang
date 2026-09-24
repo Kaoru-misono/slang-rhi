@@ -71,6 +71,18 @@ void csSamplers(uint3 id : SV_DispatchThreadID)
     scene.output[constants.offset + id.x] = sum * constants.multiplier + constants.bias;
 }
 
+// D3D12 sampler-cache identity oracle: every set and array element has a distinct border color.
+[shader("compute")]
+[numthreads(1, 1, 1)]
+void csSamplerColors(uint3 id : SV_DispatchThreadID)
+{
+    float4 sum = float4(0);
+    for (uint i = 0; i < SAMPLER_COUNT; ++i)
+        sum += scene.texture.SampleLevel(scene.samplers[i], float2(-1, -1), 0) * float(i + 1);
+    for (uint channel = 0; channel < 4; ++channel)
+        scene.output[constants.offset + channel] = uint(sum[channel]) * constants.multiplier + constants.bias;
+}
+
 #else
 
 uint sampled()

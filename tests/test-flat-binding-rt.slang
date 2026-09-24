@@ -41,6 +41,24 @@ void rayGenMain()
     scene.output[pixel] = payload.color;
 }
 
+[shader("raygeneration")]
+void rayGenAlternate()
+{
+    uint2 pixel = DispatchRaysIndex().xy;
+    if (any(pixel >= params.dims))
+        return;
+
+    RayDesc ray;
+    ray.Origin = float3(0.05 + 0.25 * pixel.x, 0.05 + 0.25 * pixel.y, 0.0);
+    ray.Direction = float3(0, 0, 1);
+    ray.TMin = 0.001;
+    ray.TMax = 10000.0;
+
+    RayPayload payload = {float4(0, 0, 0, 0)};
+    TraceRay(scene.tlas, RAY_FLAG_NONE, ~0, 0, 0, 0, ray, payload);
+    scene.output[pixel] = payload.color + float4(0.125, 0.125, 0.125, 0);
+}
+
 [shader("miss")]
 void missMain(inout RayPayload payload)
 {

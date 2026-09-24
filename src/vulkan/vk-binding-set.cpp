@@ -5,6 +5,7 @@
 #include "vk-device.h"
 #include "vk-sampler.h"
 #include "vk-texture.h"
+#include "vk-utils.h"
 
 #include "../command-buffer.h"
 #include "../shader.h"
@@ -67,9 +68,10 @@ static bool poolCovers(std::span<const VkDescriptorPoolSize> pool, std::span<con
     return true;
 }
 
-void BindingSetDescriptorPool::initialize(DeviceImpl* device)
+void BindingSetDescriptorPool::initialize(DeviceImpl* device, uint32_t maxSets)
 {
     m_device = device;
+    m_maxSets = maxSets;
 }
 
 void BindingSetDescriptorPool::release()
@@ -78,6 +80,7 @@ void BindingSetDescriptorPool::release()
     for (const Pool& pool : m_pools)
         m_device->m_api.vkDestroyDescriptorPool(m_device->m_api.m_device, pool.pool, nullptr);
     m_pools.clear();
+    m_liveSets = 0;
 }
 
 Result BindingSetDescriptorPool::createPool(std::span<const VkDescriptorPoolSize> poolSizes, VkDescriptorPool* outPool)
@@ -85,7 +88,9 @@ Result BindingSetDescriptorPool::createPool(std::span<const VkDescriptorPoolSize
     Pool pool;
     pool.sizes.assign(poolSizes.begin(), poolSizes.end());
     for (auto& size : pool.sizes)
-        size.descriptorCount = std::max(1u, size.descriptorCount * 256u);
+        size.descriptorCount = size.descriptorCount > UINT32_MAX / 256u
+                                   ? size.descriptorCount
+                                   : std::max(1u, size.descriptorCount * 256u);
     if (pool.sizes.empty())
         pool.sizes.emplace_back(VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_SAMPLER, 1});
     VkDescriptorPoolCreateInfo createInfo = {VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
@@ -94,10 +99,13 @@ Result BindingSetDescriptorPool::createPool(std::span<const VkDescriptorPoolSize
     createInfo.poolSizeCount = uint32_t(pool.sizes.size());
     createInfo.pPoolSizes = pool.sizes.data();
     auto& api = m_device->m_api;
-    if (api.vkCreateDescriptorPool(api.m_device, &createInfo, nullptr, &pool.pool) != VK_SUCCESS)
+    m_pools.reserve(m_pools.size() + 1);
+    const VkResult result = api.vkCreateDescriptorPool(api.m_device, &createInfo, nullptr, &pool.pool);
+    if (result != VK_SUCCESS)
     {
-        m_device->printError("Failed to create a Vulkan descriptor pool.");
-        return SLANG_FAIL;
+        reportVulkanError(result, "vkCreateDescriptorPool", SLANG_RHI_SOURCE_LOCATION(), m_device);
+        return result == VK_ERROR_OUT_OF_HOST_MEMORY || result == VK_ERROR_OUT_OF_DEVICE_MEMORY
+                   ? SLANG_E_OUT_OF_MEMORY : SLANG_FAIL;
     }
     *outPool = pool.pool;
     m_pools.emplace_back(std::move(pool));
@@ -112,6 +120,13 @@ Result BindingSetDescriptorPool::allocate(
 )
 {
     std::lock_guard<std::mutex> lock(m_mutex);
+    *outDescriptorSet = VK_NULL_HANDLE;
+    *outPool = VK_NULL_HANDLE;
+    if (m_liveSets == UINT64_MAX || (m_maxSets && m_liveSets >= m_maxSets))
+    {
+        m_device->printError("Vulkan maxBindingSets quota exhausted.");
+        return SLANG_E_OUT_OF_MEMORY;
+    }
     auto& api = m_device->m_api;
     VkDescriptorSetAllocateInfo allocateInfo = {VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
     allocateInfo.descriptorSetCount = 1;
@@ -122,19 +137,34 @@ Result BindingSetDescriptorPool::allocate(
         if (!poolCovers(it->sizes, poolSizes))
             continue;
         allocateInfo.descriptorPool = it->pool;
-        if (api.vkAllocateDescriptorSets(api.m_device, &allocateInfo, &descriptorSet) == VK_SUCCESS)
+        const VkResult result = api.vkAllocateDescriptorSets(api.m_device, &allocateInfo, &descriptorSet);
+        if (result == VK_SUCCESS)
         {
+            ++m_liveSets;
             *outDescriptorSet = descriptorSet;
             *outPool = it->pool;
             return SLANG_OK;
         }
+        if (result != VK_ERROR_OUT_OF_POOL_MEMORY && result != VK_ERROR_FRAGMENTED_POOL)
+        {
+            reportVulkanError(result, "vkAllocateDescriptorSets", SLANG_RHI_SOURCE_LOCATION(), m_device);
+            return result == VK_ERROR_OUT_OF_HOST_MEMORY || result == VK_ERROR_OUT_OF_DEVICE_MEMORY
+                       ? SLANG_E_OUT_OF_MEMORY : SLANG_FAIL;
+        }
     }
     SLANG_RETURN_ON_FAIL(createPool(poolSizes, &allocateInfo.descriptorPool));
-    if (api.vkAllocateDescriptorSets(api.m_device, &allocateInfo, &descriptorSet) != VK_SUCCESS)
+    const VkResult result = api.vkAllocateDescriptorSets(api.m_device, &allocateInfo, &descriptorSet);
+    if (result != VK_SUCCESS)
     {
-        m_device->printError("Failed to allocate a Vulkan descriptor set for a binding set.");
-        return SLANG_E_OUT_OF_MEMORY;
+        // This pool is new and owns no successful allocation. Keep all earlier pools intact.
+        api.vkDestroyDescriptorPool(api.m_device, allocateInfo.descriptorPool, nullptr);
+        m_pools.pop_back();
+        reportVulkanError(result, "vkAllocateDescriptorSets", SLANG_RHI_SOURCE_LOCATION(), m_device);
+        return result == VK_ERROR_OUT_OF_HOST_MEMORY || result == VK_ERROR_OUT_OF_DEVICE_MEMORY ||
+                       result == VK_ERROR_OUT_OF_POOL_MEMORY || result == VK_ERROR_FRAGMENTED_POOL
+                   ? SLANG_E_OUT_OF_MEMORY : SLANG_FAIL;
     }
+    ++m_liveSets;
     *outDescriptorSet = descriptorSet;
     *outPool = allocateInfo.descriptorPool;
     return SLANG_OK;
@@ -144,7 +174,13 @@ void BindingSetDescriptorPool::free(VkDescriptorSet descriptorSet, VkDescriptorP
 {
     std::lock_guard<std::mutex> lock(m_mutex);
     if (descriptorSet != VK_NULL_HANDLE && pool != VK_NULL_HANDLE)
-        m_device->m_api.vkFreeDescriptorSets(m_device->m_api.m_device, pool, 1, &descriptorSet);
+    {
+        const VkResult result = m_device->m_api.vkFreeDescriptorSets(m_device->m_api.m_device, pool, 1, &descriptorSet);
+        if (result == VK_SUCCESS)
+            --m_liveSets;
+        else
+            reportVulkanError(result, "vkFreeDescriptorSets", SLANG_RHI_SOURCE_LOCATION(), m_device);
+    }
 }
 
 BindingSetLayoutImpl::BindingSetLayoutImpl(Device* device, const BindingSetLayoutDesc& desc)

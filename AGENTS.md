@@ -81,6 +81,7 @@ Backends are conditionally compiled based on platform:
 
 ## Development Guidelines
 
+- Follow this repository's existing C++ style and `.clang-format`, not the parent April project's style rules. Do not impose April-specific member ordering, column alignment, trailing returns, or container append conventions here.
 - Use existing backend implementations as reference when adding new features
 - Follow the established naming conventions (e.g., `DeviceImpl`, `BufferImpl` for backend implementations)
 - Tests should cover all enabled backends using the device capabilities system
