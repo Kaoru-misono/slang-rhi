@@ -180,13 +180,6 @@ public:
         IComputePipeline* pipeline,
         IShaderObject* rootObject
     ) override;
-    virtual SLANG_NO_THROW Result SLANG_MCALL bindPipelineWithData(
-        IComputePipeline* pipeline,
-        const void* data,
-        size_t size,
-        const ComputeBufferAccess* buffers,
-        uint32_t bufferCount
-    ) override;
     virtual SLANG_NO_THROW void SLANG_MCALL dispatchCompute(uint32_t x, uint32_t y, uint32_t z) override;
     virtual SLANG_NO_THROW void SLANG_MCALL dispatchComputeIndirect(BufferOffsetPair argBuffer) override;
 
@@ -290,11 +283,6 @@ public:
     }
 
     virtual Result getBindingData(RootShaderObject* rootObject, BindingData*& outBindingData) = 0;
-    virtual Result getComputeBindingData(
-        ShaderProgram* program, const void* data, size_t size,
-        const ComputeBufferAccess* buffers, uint32_t bufferCount, BindingData*& outBindingData
-    ) = 0;
-
     /// Produces the backend binding data for a pipeline bound with a flat binding desc. The shared
     /// layer has already checked `bindings` against the pipeline's layout, and `accesses` is the
     /// assembled list of every resource the bind must keep alive and transition, in recording order.

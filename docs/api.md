@@ -259,6 +259,11 @@
 | `dispatchCompute`         | yes   | yes    |
 | `dispatchComputeIndirect` | yes   | yes    |
 
+Compute binding supports the general shader-object overloads and the `FlatBindingDesc` overload.
+Flat bindings use an `IPipelineLayout`, copy constant bytes immediately, and retain and transition
+resources declared by binding sets and explicit accesses. The earlier entry-point-data-only
+compute binding API has been removed.
+
 ## `IRayTracingPassEncoder` interface
 
 | API                   | D3D12 | Vulkan |
