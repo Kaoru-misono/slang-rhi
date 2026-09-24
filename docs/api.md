@@ -252,6 +252,15 @@ Entry-point-scoped descriptors return `SLANG_E_NOT_IMPLEMENTED` at program creat
 | `drawIndexedIndirect` | :x: | :x:  | yes   | yes   | yes    | :x:   | yes  |
 | `drawMeshTasks`       | :x: | :x:  | :x:   | yes   | yes    | :x:   | :x:  |
 
+`RenderState::stencilRef` is dynamic and initially zero. Both backends apply it
+at draw time, independently of pipeline changes.
+
+`InputElementDesc::shaderLocation` selects the Vulkan vertex shader location.
+The default `UINT32_MAX` selects the element's index. Vulkan rejects duplicate
+resolved locations and locations outside `maxVertexInputElements`, including
+large values that would otherwise overflow location calculations. D3D12 continues
+to match inputs using `semanticName` and `semanticIndex`.
+
 WebGPU single indirect draws without a count buffer use the core WebGPU API.
 Other indirect-draw forms currently use Dawn's native multi-draw extension and
 require that optional feature to be enabled; they are unavailable in the Wasm path.

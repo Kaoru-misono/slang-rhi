@@ -699,6 +699,9 @@ struct InputElementDesc
     uint32_t offset;
     /// The index of the vertex stream to fetch this element's data from.
     uint32_t bufferSlotIndex;
+    /// Vulkan shader location. UINT32_MAX uses this element's index in the input layout.
+    /// D3D12 uses semanticName and semanticIndex instead.
+    uint32_t shaderLocation = UINT32_MAX;
 };
 
 struct VertexStreamDesc
