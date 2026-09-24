@@ -1911,3 +1911,229 @@ GPU_TEST_CASE("flat-binding-state-transition-read-union", D3D12 | Vulkan | DontC
     REQUIRE(sink.transitions.size() == 1);
     CHECK(sink.transitions[0].find("buffer 'flat-read-union-arguments', target=ShaderResource") != std::string::npos);
 }
+
+
+namespace {
+constexpr uint32_t kIdentitySamplerCount = 4;
+
+auto samplerIdentityColor(uint32_t setIndex, uint32_t samplerIndex) -> std::array<uint32_t, 4>
+{
+    return {setIndex + 1, samplerIndex + 1, setIndex + samplerIndex + 2, 1};
+}
+
+auto createSamplerIdentitySet(IDevice* device, IBindingSetLayout* layout, const FlatSamplerScene& scene, uint32_t setIndex)
+    -> ComPtr<IBindingSet>
+{
+    std::array<ComPtr<ISampler>, kIdentitySamplerCount> samplers;
+    std::vector<BindingSetEntry> entries{{.slot = 0, .resource = scene.textureView}};
+    for (uint32_t i = 0; i < kIdentitySamplerCount; ++i)
+    {
+        SamplerDesc desc{};
+        desc.addressU = desc.addressV = desc.addressW = TextureAddressingMode::ClampToBorder;
+        const auto color = samplerIdentityColor(setIndex, i);
+        for (uint32_t channel = 0; channel < 4; ++channel)
+            desc.borderColor[channel] = static_cast<float>(color[channel]);
+        REQUIRE_CALL(device->createSampler(desc, samplers[i].writeRef()));
+        entries.emplace_back(BindingSetEntry{.slot = 1, .arrayIndex = i, .resource = samplers[i]});
+    }
+    entries.emplace_back(BindingSetEntry{.slot = 2, .resource = scene.output});
+    const BindingSetDesc desc{
+        .layout = layout,
+        .entries = entries.data(),
+        .entryCount = static_cast<uint32_t>(entries.size()),
+        .label = "sampler-identity",
+    };
+    ComPtr<IBindingSet> set;
+    REQUIRE_CALL(device->createBindingSet(desc, set.writeRef()));
+    // Only the immutable set retains the samplers after this helper returns.
+    return set;
+}
+
+auto writeSamplerIdentityExpected(std::span<uint32_t> expected, uint32_t setIndex, const FlatConstants& constants)
+    -> void
+{
+    for (uint32_t channel = 0; channel < 4; ++channel)
+    {
+        uint32_t sum = 0;
+        for (uint32_t i = 0; i < kIdentitySamplerCount; ++i)
+            sum += samplerIdentityColor(setIndex, i)[channel] * (i + 1);
+        expected[constants.offset + channel] = sum * constants.multiplier + constants.bias;
+    }
+}
+} // namespace
+
+GPU_TEST_CASE("flat-binding-d3d12-sampler-cache-16-17-sets", D3D12 | DontCreateDevice)
+{
+    uint32_t setCount = 16;
+    SUBCASE("16 distinct immutable sets") {}
+    SUBCASE("17 distinct immutable sets") { setCount = 17; }
+    constexpr uint32_t rounds = 8;
+    constexpr uint32_t bindlessSamplerCount = 8;
+    FlatTransitionMessageSink sink;
+    D3D12DeviceExtendedDesc extendedDesc{};
+    // Exactly one sampler table per set fits; even one uncached rebind must fail.
+    extendedDesc.samplerHeapSize = bindlessSamplerCount + setCount * kIdentitySamplerCount;
+    DeviceDesc deviceDesc{.deviceType = ctx->deviceType, .adapter = getSelectedDeviceAdapter(ctx->deviceType)};
+    deviceDesc.next = &extendedDesc;
+    deviceDesc.bindless.samplerCount = bindlessSamplerCount;
+    deviceDesc.debugCallback = &sink;
+    ComPtr<IDevice> local;
+    REQUIRE_CALL(getRHI()->createDevice(deviceDesc, local.writeRef()));
+    const FlatDeviceDrain drain{local};
+    auto session = createFlatSession(local, {.samplerCount = kIdentitySamplerCount});
+    ComPtr<IShaderProgram> program;
+    REQUIRE_CALL(loadAndLinkProgram(local, session, "test-flat-binding-cases", "csSamplerColors", program.writeRef()));
+    auto setLayout = createFlatSamplerSetLayout(local, kIdentitySamplerCount);
+    auto layout = createFlatPipelineLayout(local, program, setLayout, sizeof(FlatConstants), "sampler-identities");
+    const uint32_t outputCount = rounds * setCount * 4;
+    auto scene = createFlatSamplerScene(local, setLayout, kIdentitySamplerCount, outputCount);
+    std::vector<ComPtr<IBindingSet>> sets;
+    for (uint32_t i = 0; i < setCount; ++i)
+        sets.emplace_back(createSamplerIdentitySet(local, setLayout, scene, i));
+    ComPtr<IComputePipeline> pipeline;
+    REQUIRE_CALL(local->createComputePipeline({.program = program, .layout = layout}, pipeline.writeRef()));
+    auto queue = local->getQueue(QueueType::Graphics);
+    auto encoder = queue->createCommandEncoder();
+    auto pass = encoder->beginComputePass();
+    std::vector<uint32_t> expected(outputCount, 0);
+    for (uint32_t round = 0; round < rounds; ++round)
+    {
+        for (uint32_t slot = 0; slot < setCount; ++slot)
+        {
+            // Reverse every other round so a stale or slot-indexed cache cannot mimic identity lookup.
+            const uint32_t setIndex = (round & 1) ? setCount - 1 - slot : slot;
+            const FlatConstants constants{
+                .offset = (round * setCount + slot) * 4,
+                .multiplier = round + 2,
+                .bias = slot + 5,
+                .tag = 0,
+            };
+            IBindingSet* const boundSets[]{sets[setIndex]};
+            REQUIRE_CALL(pass->bindPipeline(pipeline, flatBindings(&constants, sizeof(constants), boundSets)));
+            pass->dispatchCompute(1, 1, 1);
+            writeSamplerIdentityExpected(expected, setIndex, constants);
+        }
+    }
+    pass->end();
+    // The recorded command buffer must retain all sets and their sampler identities.
+    sets.clear();
+    auto commands = encoder->finish();
+    REQUIRE(commands != nullptr);
+    REQUIRE_CALL(queue->submit(commands));
+    REQUIRE_CALL(queue->waitOnHost());
+    compareComputeResult(local, scene.output, std::span(expected));
+    const std::lock_guard lock(sink.mutex);
+    INFO(sink.errors);
+    CHECK(sink.errors.empty());
+}
+
+GPU_TEST_CASE("flat-binding-d3d12-sampler-cache-exhaustion-recovery", D3D12 | DontCreateDevice)
+{
+    constexpr uint32_t capacity = 16;
+    constexpr uint32_t bindlessSamplerCount = 8;
+    FlatTransitionMessageSink sink;
+    D3D12DeviceExtendedDesc extendedDesc{};
+    extendedDesc.samplerHeapSize = bindlessSamplerCount + capacity * kIdentitySamplerCount;
+    DeviceDesc deviceDesc{.deviceType = ctx->deviceType, .adapter = getSelectedDeviceAdapter(ctx->deviceType)};
+    deviceDesc.next = &extendedDesc;
+    deviceDesc.bindless.samplerCount = bindlessSamplerCount;
+    deviceDesc.debugCallback = &sink;
+    ComPtr<IDevice> local;
+    REQUIRE_CALL(getRHI()->createDevice(deviceDesc, local.writeRef()));
+    const FlatDeviceDrain drain{local};
+    auto session = createFlatSession(local, {.samplerCount = kIdentitySamplerCount});
+    ComPtr<IShaderProgram> program;
+    REQUIRE_CALL(loadAndLinkProgram(local, session, "test-flat-binding-cases", "csSamplerColors", program.writeRef()));
+    auto setLayout = createFlatSamplerSetLayout(local, kIdentitySamplerCount);
+    auto layout = createFlatPipelineLayout(local, program, setLayout, sizeof(FlatConstants), "sampler-capacity");
+    // One extra result after the successful rebind stays zero as a canary.
+    auto scene = createFlatSamplerScene(local, setLayout, kIdentitySamplerCount, (capacity + 2) * 4);
+    std::vector<ComPtr<IBindingSet>> sets;
+    for (uint32_t i = 0; i <= capacity; ++i)
+        sets.emplace_back(createSamplerIdentitySet(local, setLayout, scene, i));
+    ComPtr<IComputePipeline> pipeline;
+    REQUIRE_CALL(local->createComputePipeline({.program = program, .layout = layout}, pipeline.writeRef()));
+    auto queue = local->getQueue(QueueType::Graphics);
+    std::vector<uint32_t> expected((capacity + 2) * 4, 0);
+    {
+        auto encoder = queue->createCommandEncoder();
+        auto pass = encoder->beginComputePass();
+        for (uint32_t i = 0; i < capacity; ++i)
+        {
+            const FlatConstants constants{.offset = i * 4, .multiplier = 3, .bias = i + 7, .tag = 0};
+            IBindingSet* const boundSets[]{sets[i]};
+            REQUIRE_CALL(pass->bindPipeline(pipeline, flatBindings(&constants, sizeof(constants), boundSets)));
+            pass->dispatchCompute(1, 1, 1);
+            writeSamplerIdentityExpected(expected, i, constants);
+        }
+        const FlatConstants constants{.offset = capacity * 4, .multiplier = 5, .bias = 19, .tag = 0};
+        IBindingSet* const rejectedSets[]{sets[capacity]};
+        const auto rejected = flatBindings(&constants, sizeof(constants), rejectedSets);
+        {
+            const std::lock_guard lock(sink.mutex);
+            INFO(sink.errors);
+            CHECK(sink.errors.empty());
+        }
+        const Result result = pass->bindPipeline(pipeline, rejected);
+        CHECK((result == SLANG_E_OUT_OF_MEMORY));
+        {
+            const std::lock_guard lock(sink.mutex);
+            CHECK(sink.errors.find("no room for the 4 sampler descriptors") != std::string::npos);
+            // Consume only the two expected allocation errors, not unrelated driver/validation failures.
+            std::string_view remaining = sink.errors;
+            uint32_t errorCount = 0;
+            while (!remaining.empty())
+            {
+                const size_t end = remaining.find('\n');
+                const auto line = remaining.substr(0, end);
+                if (!line.empty())
+                {
+                    CHECK((line.starts_with("GPU descriptor heap allocation failed (requested 4 descriptors,") ||
+                           line == "Flat binding: no room for the 4 sampler descriptors of binding set 0."));
+                    ++errorCount;
+                }
+                if (end == std::string_view::npos)
+                    break;
+                remaining.remove_prefix(end + 1);
+            }
+            CHECK(errorCount == 2);
+            sink.errors.clear();
+        }
+        // Exhaustion must not evict earlier tables: reusing set zero still succeeds at full capacity.
+        IBindingSet* const reusedSets[]{sets[0]};
+        REQUIRE_CALL(pass->bindPipeline(pipeline, flatBindings(&constants, sizeof(constants), reusedSets)));
+        pass->dispatchCompute(1, 1, 1);
+        writeSamplerIdentityExpected(expected, 0, constants);
+        pass->end();
+        auto commands = encoder->finish();
+        REQUIRE(commands != nullptr);
+        REQUIRE_CALL(queue->submit(commands));
+        REQUIRE_CALL(queue->waitOnHost());
+        compareComputeResult(local, scene.output, std::span(expected));
+    }
+    // Completion plus release allows pool reuse/reset. Allocate the previously rejected identity first,
+    // then old identities: stale cache entries would reference overwritten sampler descriptors.
+    {
+        auto encoder = queue->createCommandEncoder();
+        auto pass = encoder->beginComputePass();
+        for (uint32_t i = 0; i < capacity; ++i)
+        {
+            const uint32_t setIndex = i == 0 ? capacity : i - 1;
+            const FlatConstants constants{.offset = i * 4, .multiplier = 7, .bias = i + 23, .tag = 0};
+            IBindingSet* const boundSets[]{sets[setIndex]};
+            REQUIRE_CALL(pass->bindPipeline(pipeline, flatBindings(&constants, sizeof(constants), boundSets)));
+            pass->dispatchCompute(1, 1, 1);
+            writeSamplerIdentityExpected(expected, setIndex, constants);
+        }
+        pass->end();
+        auto commands = encoder->finish();
+        REQUIRE(commands != nullptr);
+        REQUIRE_CALL(queue->submit(commands));
+        REQUIRE_CALL(queue->waitOnHost());
+        // Includes the unchanged successful-rebind result and all four zero canary words.
+        compareComputeResult(local, scene.output, std::span(expected));
+    }
+    const std::lock_guard lock(sink.mutex);
+    INFO(sink.errors);
+    CHECK(sink.errors.empty());
+}

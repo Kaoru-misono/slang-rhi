@@ -273,6 +273,12 @@ failure handling. Without the debug wrapper it is disabled, and general shader-o
 copy/clear commands, attachments, and default-state restoration do not produce this diagnostic.
 This applies to flat render, compute, and ray-tracing bindings on D3D12 and Vulkan.
 
+D3D12 caches flat sampler tables by immutable binding-set identity for the command buffer's
+lifetime, including workloads using more than 16 distinct sets. Rebinding an existing set does
+not allocate another sampler table. Command-buffer reset clears the cache along with its
+descriptor arenas. Distinct sets still consume the configured shader-visible sampler heap;
+exhaustion returns an allocation failure and does not overwrite tables used by earlier commands.
+
 ## `IRayTracingPassEncoder` interface
 
 | API                   | D3D12 | Vulkan |
