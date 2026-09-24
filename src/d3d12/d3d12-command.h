@@ -87,6 +87,8 @@ public:
     BindingCache m_bindingCache;
     // Nonzero consumes this recording, including a submission that lost the device.
     uint64_t m_submissionID = 0;
+    // A failed retirement is terminal for this object, even if a caller still holds it.
+    Result m_resetResult = SLANG_OK;
 
 #if SLANG_RHI_ENABLE_AFTERMATH
     GFSDK_Aftermath_ContextHandle m_aftermathContext;

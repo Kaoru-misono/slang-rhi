@@ -2003,7 +2003,9 @@ void CommandRecorder::requireBindingStates(BindingDataImpl* bindingData)
     for (uint32_t i = 0; i < bindingData->bufferStateCount; ++i)
     {
         const auto& bufferState = bindingData->bufferStates[i];
-        requireBufferState(bufferState.buffer, bufferState.state);
+        m_stateTracking.requireBufferState(
+            bufferState.buffer, bufferState.state, getBufferReadStatePolicy(m_queueType)
+        );
     }
     for (uint32_t i = 0; i < bindingData->textureStateCount; ++i)
     {
@@ -2321,7 +2323,18 @@ Result CommandQueueImpl::getOrCreateCommandBuffer(CommandBufferImpl** outCommand
 
 void CommandQueueImpl::retireCommandBuffer(CommandBufferImpl* commandBuffer)
 {
-    commandBuffer->reset();
+    const Result result = commandBuffer->reset();
+    if (SLANG_FAILED(result))
+    {
+        commandBuffer->m_resetResult = result;
+        // There will be no pool reference. An external handle pins the device, and with it the queue
+        // and backing heap, until the failed command buffer and any retained chunks are destroyed.
+        getDevice<DeviceImpl>()->printError(
+            "Vulkan command buffer retirement reset failed (0x%08x); discarding from reuse.",
+            uint32_t(result)
+        );
+        return;
+    }
     {
         std::lock_guard<std::mutex> lock(m_mutex);
         m_commandBuffersPool.push_back(commandBuffer);
@@ -2408,6 +2421,7 @@ Result CommandQueueImpl::submit(const SubmitDesc& desc)
         auto* commandBuffer = checked_cast<CommandBufferImpl*>(desc.commandBuffers[i]);
         if (commandBuffer->m_submissionID != 0)
             return SLANG_E_INVALID_ARG;
+        SLANG_RETURN_ON_FAIL(commandBuffer->m_resetResult);
         vkCommandBuffers.push_back(commandBuffer->m_commandBuffer);
     }
 
@@ -2609,11 +2623,12 @@ Result CommandEncoderImpl::getBindingData(RootShaderObject* rootObject, BindingD
     builder.m_descriptorSetAllocator = &m_commandBuffer->m_descriptorSetAllocator;
     ShaderObjectLayout* specializedLayout = nullptr;
     SLANG_RETURN_ON_FAIL(rootObject->getSpecializedLayout(specializedLayout));
-    return builder.bindAsRoot(
+    SLANG_RETURN_ON_FAIL(builder.bindAsRoot(
         rootObject,
         checked_cast<RootShaderObjectLayoutImpl*>(specializedLayout),
         (BindingDataImpl*&)outBindingData
-    );
+    ));
+    return SLANG_OK;
 }
 
 Result CommandEncoderImpl::finish(const CommandBufferDesc& desc, ICommandBuffer** outCommandBuffer)
@@ -2700,6 +2715,7 @@ Result CommandBufferImpl::init()
 
 Result CommandBufferImpl::reset()
 {
+    SLANG_RETURN_ON_FAIL(m_resetResult);
     DeviceImpl* device = getDevice<DeviceImpl>();
     m_commandList.reset();
     if (!device->m_deviceLost)
@@ -2707,7 +2723,7 @@ Result CommandBufferImpl::reset()
         SLANG_VK_RETURN_ON_FAIL_REPORT(device->m_api.vkResetCommandPool(device->m_device, m_commandPool, 0), device);
     }
     m_constantBufferArena.reset();
-    m_descriptorSetAllocator.reset();
+    SLANG_RETURN_ON_FAIL(m_descriptorSetAllocator.reset());
     m_bindingCache.reset();
     return CommandBuffer::reset();
 }

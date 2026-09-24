@@ -1760,7 +1760,9 @@ void CommandRecorder::setBindings(BindingDataImpl* bindingData, BindMode bindMod
     for (uint32_t i = 0; i < bindingData->bufferStateCount; ++i)
     {
         const auto& bufferState = bindingData->bufferStates[i];
-        requireBufferState(bufferState.buffer, bufferState.state);
+        m_stateTracking.requireBufferState(
+            bufferState.buffer, bufferState.state, getBufferReadStatePolicy(m_queueType)
+        );
     }
     for (uint32_t i = 0; i < bindingData->textureStateCount; ++i)
     {
@@ -2116,7 +2118,18 @@ Result CommandQueueImpl::getOrCreateCommandBuffer(CommandBufferImpl** outCommand
 
 void CommandQueueImpl::retireCommandBuffer(CommandBufferImpl* commandBuffer)
 {
-    commandBuffer->reset();
+    const Result result = commandBuffer->reset();
+    if (SLANG_FAILED(result))
+    {
+        commandBuffer->m_resetResult = result;
+        // There will be no pool reference. An external handle pins the device, and with it the queue
+        // and backing heap, until the failed command buffer and any retained chunks are destroyed.
+        getDevice<DeviceImpl>()->printError(
+            "D3D12 command buffer retirement reset failed (0x%08x); discarding from reuse.",
+            uint32_t(result)
+        );
+        return;
+    }
     {
         std::lock_guard<std::mutex> lock(m_mutex);
         m_commandBuffersPool.push_back(commandBuffer);
@@ -2202,8 +2215,12 @@ Result CommandQueueImpl::submit(const SubmitDesc& desc)
 
     std::unique_lock<std::mutex> submitLock(m_submitMutex);
     for (uint32_t i = 0; i < desc.commandBufferCount; ++i)
-        if (checked_cast<CommandBufferImpl*>(desc.commandBuffers[i])->m_submissionID != 0)
+    {
+        auto* commandBuffer = checked_cast<CommandBufferImpl*>(desc.commandBuffers[i]);
+        if (commandBuffer->m_submissionID != 0)
             return SLANG_E_INVALID_ARG;
+        SLANG_RETURN_ON_FAIL(commandBuffer->m_resetResult);
+    }
     uint64_t sequence = m_lastSubmittedID.load() + 1;
     HRESULT result = S_OK;
     for (uint32_t i = 0; i < desc.waitFenceCount && SUCCEEDED(result); ++i)
@@ -2379,11 +2396,12 @@ Result CommandEncoderImpl::getBindingData(RootShaderObject* rootObject, BindingD
     builder.m_samplerArena = &m_commandBuffer->m_samplerArena;
     ShaderObjectLayout* specializedLayout = nullptr;
     SLANG_RETURN_ON_FAIL(rootObject->getSpecializedLayout(specializedLayout));
-    return builder.bindAsRoot(
+    SLANG_RETURN_ON_FAIL(builder.bindAsRoot(
         rootObject,
         checked_cast<RootShaderObjectLayoutImpl*>(specializedLayout),
         (BindingDataImpl*&)outBindingData
-    );
+    ));
+    return SLANG_OK;
 }
 
 Result CommandEncoderImpl::finish(const CommandBufferDesc& desc, ICommandBuffer** outCommandBuffer)
@@ -2485,6 +2503,7 @@ Result CommandBufferImpl::init()
 
 Result CommandBufferImpl::reset()
 {
+    SLANG_RETURN_ON_FAIL(m_resetResult);
     DeviceImpl* device = getDevice<DeviceImpl>();
     if (!device->m_deviceLost)
     {

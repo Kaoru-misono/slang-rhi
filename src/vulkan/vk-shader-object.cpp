@@ -732,7 +732,9 @@ Result BindingDataBuilder::allocateDescriptorSets(
     // synthetic resources whose compiler metadata reports a non-zero set.
     for (auto descriptorSetInfo : specializedLayout->getOwnDescriptorSets())
     {
-        auto descriptorSetHandle = m_descriptorSetAllocator->allocate(descriptorSetInfo.descriptorSetLayout).handle;
+        VulkanDescriptorSet descriptorSet;
+        SLANG_RETURN_ON_FAIL(m_descriptorSetAllocator->allocate(descriptorSetInfo.descriptorSetLayout, &descriptorSet));
+        auto descriptorSetHandle = descriptorSet.handle;
 
         // For each set, we need to write it into the set of descriptor sets
         // being used for binding. This is done both so that other steps
