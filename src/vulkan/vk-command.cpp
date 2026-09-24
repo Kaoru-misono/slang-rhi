@@ -2292,7 +2292,22 @@ Result CommandQueueImpl::getOrCreateCommandBuffer(CommandBufferImpl** outCommand
 
 void CommandQueueImpl::retireCommandBuffer(CommandBufferImpl* commandBuffer)
 {
-    commandBuffer->reset();
+    const Result result = commandBuffer->reset();
+    if (SLANG_FAILED(result))
+    {
+        commandBuffer->m_resetResult = result;
+        // There will be no pool reference. External handles must keep the device, queue and
+        // backing heap alive until the failed command buffer and any retained chunks are destroyed.
+        DeviceImpl* device = getDevice<DeviceImpl>();
+        // During device teardown only internal references remain; do not resurrect the device.
+        if (!device->m_isShuttingDown)
+            commandBuffer->setInternalReferenceCount(0);
+        device->printError(
+            "Vulkan command buffer retirement reset failed (0x%08x); discarding from reuse.",
+            uint32_t(result)
+        );
+        return;
+    }
     {
         std::lock_guard<std::mutex> lock(m_mutex);
         m_commandBuffersPool.push_back(commandBuffer);
@@ -2380,6 +2395,7 @@ Result CommandQueueImpl::submit(const SubmitDesc& desc)
         auto* commandBuffer = checked_cast<CommandBufferImpl*>(desc.commandBuffers[i]);
         if (commandBuffer->m_submissionID != 0)
             return SLANG_E_INVALID_ARG;
+        SLANG_RETURN_ON_FAIL(commandBuffer->m_resetResult);
         vkCommandBuffers.push_back(commandBuffer->m_commandBuffer);
     }
 
@@ -2784,6 +2800,7 @@ Result CommandBufferImpl::init()
 
 Result CommandBufferImpl::reset()
 {
+    SLANG_RETURN_ON_FAIL(m_resetResult);
     DeviceImpl* device = getDevice<DeviceImpl>();
     m_commandList.reset();
     if (!device->m_deviceLost)

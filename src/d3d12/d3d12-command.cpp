@@ -2116,7 +2116,22 @@ Result CommandQueueImpl::getOrCreateCommandBuffer(CommandBufferImpl** outCommand
 
 void CommandQueueImpl::retireCommandBuffer(CommandBufferImpl* commandBuffer)
 {
-    commandBuffer->reset();
+    const Result result = commandBuffer->reset();
+    if (SLANG_FAILED(result))
+    {
+        commandBuffer->m_resetResult = result;
+        // There will be no pool reference. External handles must keep the device, queue and
+        // backing heap alive until the failed command buffer and any retained chunks are destroyed.
+        DeviceImpl* device = getDevice<DeviceImpl>();
+        // During device teardown only internal references remain; do not resurrect the device.
+        if (!device->m_isShuttingDown)
+            commandBuffer->setInternalReferenceCount(0);
+        device->printError(
+            "D3D12 command buffer retirement reset failed (0x%08x); discarding from reuse.",
+            uint32_t(result)
+        );
+        return;
+    }
     {
         std::lock_guard<std::mutex> lock(m_mutex);
         m_commandBuffersPool.push_back(commandBuffer);
@@ -2203,8 +2218,12 @@ Result CommandQueueImpl::submit(const SubmitDesc& desc)
 
     std::unique_lock<std::mutex> submitLock(m_submitMutex);
     for (uint32_t i = 0; i < desc.commandBufferCount; ++i)
-        if (checked_cast<CommandBufferImpl*>(desc.commandBuffers[i])->m_submissionID != 0)
+    {
+        auto* commandBuffer = checked_cast<CommandBufferImpl*>(desc.commandBuffers[i]);
+        if (commandBuffer->m_submissionID != 0)
             return SLANG_E_INVALID_ARG;
+        SLANG_RETURN_ON_FAIL(commandBuffer->m_resetResult);
+    }
     uint64_t sequence = m_lastSubmittedID.load() + 1;
     HRESULT result = S_OK;
     for (uint32_t i = 0; i < desc.waitFenceCount && SUCCEEDED(result); ++i)
@@ -2622,6 +2641,7 @@ Result CommandBufferImpl::init()
 
 Result CommandBufferImpl::reset()
 {
+    SLANG_RETURN_ON_FAIL(m_resetResult);
     DeviceImpl* device = getDevice<DeviceImpl>();
     if (!device->m_deviceLost)
     {
