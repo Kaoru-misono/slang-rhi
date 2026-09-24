@@ -250,6 +250,17 @@
 | `drawIndexedIndirect` | :x: | :x:  | yes   | yes   | yes    | :x:   | yes  |
 | `drawMeshTasks`       | :x: | :x:  | :x:   | yes   | yes    | :x:   | :x:  |
 
+`RenderState::blendFactor` contains four dynamic blend constants, initially zero;
+`stencilRef` is also dynamic and initially zero. Both backends apply these values
+at draw time, independently of pipeline changes. Supply a default `RenderState`
+for a new pass to start with zero constants/reference.
+
+`InputElementDesc::shaderLocation` selects the Vulkan vertex shader location.
+The default `UINT32_MAX` selects the element's index. Vulkan rejects duplicate
+resolved locations and locations outside `maxVertexInputElements`, including
+large values that would otherwise overflow location calculations. D3D12 continues
+to match inputs using `semanticName` and `semanticIndex`.
+
 ## `IComputePassEncoder` interface
 
 | API                       | CPU | CUDA | D3D11 | D3D12 | Vulkan | Metal | WGPU |

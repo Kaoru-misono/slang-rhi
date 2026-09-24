@@ -869,7 +869,9 @@ void CommandRecorder::cmdSetRenderState(const commands::SetRenderState& cmd)
     bool updatePipeline = !m_renderStateValid || cmd.pipeline != m_renderPipeline;
     bool updateBindings = updatePipeline || cmd.bindingData != m_bindingData;
     bool updateStencilRef = !m_renderStateValid || state.stencilRef != m_renderState.stencilRef;
-    bool updateVertexBuffers = !m_renderStateValid || !arraysEqual(
+    bool updateBlendFactor =
+        !m_renderStateValid || std::memcmp(state.blendFactor, m_renderState.blendFactor, sizeof(state.blendFactor)) != 0;
+    bool updateVertexBuffers = updatePipeline || !arraysEqual(
                                                           state.vertexBufferCount,
                                                           m_renderState.vertexBufferCount,
                                                           state.vertexBuffers,
@@ -913,6 +915,11 @@ void CommandRecorder::cmdSetRenderState(const commands::SetRenderState& cmd)
     }
 #endif
 
+    if (updateBlendFactor)
+    {
+        m_cmdList->OMSetBlendFactor(state.blendFactor);
+    }
+
     if (updateStencilRef)
     {
         m_cmdList->OMSetStencilRef((UINT)state.stencilRef);
@@ -930,7 +937,10 @@ void CommandRecorder::cmdSetRenderState(const commands::SetRenderState& cmd)
             D3D12_VERTEX_BUFFER_VIEW& vertexView = vertexViews[i];
             vertexView.BufferLocation = buffer->m_resource.getResource()->GetGPUVirtualAddress() + offset;
             vertexView.SizeInBytes = UINT(buffer->m_desc.size - offset);
-            vertexView.StrideInBytes = m_renderPipeline->m_inputLayout->m_vertexStreamStrides[i];
+            const auto* inputLayout = m_renderPipeline->m_inputLayout.get();
+            vertexView.StrideInBytes = inputLayout && i < inputLayout->m_vertexStreamStrides.size()
+                                          ? inputLayout->m_vertexStreamStrides[i]
+                                          : 0;
         }
         m_cmdList->IASetVertexBuffers(0, state.vertexBufferCount, vertexViews);
     }
@@ -1011,7 +1021,7 @@ void CommandRecorder::cmdDraw(const commands::Draw& cmd)
     m_cmdList->DrawInstanced(
         cmd.args.vertexCount,
         cmd.args.instanceCount,
-        cmd.args.startIndexLocation,
+        cmd.args.startVertexLocation,
         cmd.args.startInstanceLocation
     );
 }

@@ -1,4 +1,6 @@
 #include "testing.h"
+#include <array>
+#include <cstring>
 
 using namespace rhi;
 using namespace rhi::testing;
@@ -94,6 +96,110 @@ static ComPtr<ITexture> createColorBuffer(IDevice* device)
     ComPtr<ITexture> colorBuffer = device->createTexture(colorBufferDesc, nullptr);
     REQUIRE(colorBuffer != nullptr);
     return colorBuffer;
+}
+
+GPU_TEST_CASE("cmd-draw-pipeline-switch-vertex-stride", D3D12 | Vulkan)
+{
+    // Stride 16 visits rows 0,1,2; stride 32 visits rows 0,2,4.
+    // These triangles cover complementary halves of the same render target.
+    const float vertices[5][4] = {
+        {-1.f, -1.f, 0.5f, 0.f},
+        { 1.f, -1.f, 0.5f, 0.f},
+        { 1.f,  1.f, 0.5f, 0.f},
+        { 0.f,  0.f, 0.5f, 0.f},
+        {-1.f,  1.f, 0.5f, 0.f},
+    };
+    BufferDesc bufferDesc{};
+    bufferDesc.size = sizeof(vertices);
+    bufferDesc.usage = BufferUsage::VertexBuffer;
+    bufferDesc.defaultState = ResourceState::VertexBuffer;
+    auto vertexBuffer = device->createBuffer(bufferDesc, vertices);
+    REQUIRE(vertexBuffer != nullptr);
+    auto instanceBuffer = createInstanceBuffer(device);
+    auto target = createColorBuffer(device);
+    ComPtr<IShaderProgram> program;
+    REQUIRE_CALL(loadProgram(device, "test-cmd-draw", {"vertexMain", "fragmentMain"}, program.writeRef()));
+
+    ComPtr<IRenderPipeline> pipelines[2];
+    for (uint32_t i = 0; i < 2; ++i)
+    {
+        VertexStreamDesc streams[] = {
+            {i == 0 ? 16u : 32u, InputSlotClass::PerVertex, 0},
+            {sizeof(Instance), InputSlotClass::PerInstance, 1},
+        };
+        InputElementDesc elements[] = {
+            {"POSITIONA", 0, Format::RGB32Float, 0, 0},
+            {"POSITIONB", 0, Format::RGB32Float, offsetof(Instance, position), 1},
+            {"COLOR", 0, Format::RGB32Float, offsetof(Instance, color), 1},
+        };
+        InputLayoutDesc inputDesc{};
+        inputDesc.inputElements = elements;
+        inputDesc.inputElementCount = SLANG_COUNT_OF(elements);
+        inputDesc.vertexStreams = streams;
+        inputDesc.vertexStreamCount = SLANG_COUNT_OF(streams);
+        auto inputLayout = device->createInputLayout(inputDesc);
+        REQUIRE(inputLayout != nullptr);
+        ColorTargetDesc colorTarget{};
+        colorTarget.format = format;
+        RenderPipelineDesc desc{};
+        desc.program = program;
+        desc.inputLayout = inputLayout;
+        desc.targets = &colorTarget;
+        desc.targetCount = 1;
+        desc.rasterizer.cullMode = CullMode::None;
+        desc.depthStencil.depthTestEnable = false;
+        desc.depthStencil.depthWriteEnable = false;
+        REQUIRE_CALL(device->createRenderPipeline(desc, pipelines[i].writeRef()));
+    }
+
+    auto queue = device->getQueue(QueueType::Graphics);
+    auto encoder = queue->createCommandEncoder();
+    RenderPassColorAttachment color{};
+    color.view = target->getDefaultView();
+    color.loadOp = LoadOp::Clear;
+    color.storeOp = StoreOp::Store;
+    RenderPassDesc passDesc{};
+    passDesc.colorAttachments = &color;
+    passDesc.colorAttachmentCount = 1;
+    auto pass = encoder->beginRenderPass(passDesc);
+    REQUIRE(pass != nullptr);
+    RenderState state{};
+    state.viewports[0] = Viewport::fromSize(kWidth, kHeight);
+    state.viewportCount = 1;
+    state.scissorRects[0] = ScissorRect::fromSize(kWidth, kHeight);
+    state.scissorRectCount = 1;
+    state.vertexBuffers[0] = vertexBuffer;
+    state.vertexBuffers[1] = instanceBuffer;
+    state.vertexBufferCount = 2;
+    pass->setRenderState(state);
+    DrawArguments draw{};
+    draw.vertexCount = 3;
+    draw.instanceCount = 1;
+    REQUIRE(pass->bindPipeline(pipelines[0]) != nullptr);
+    pass->draw(draw);
+    // No render-state setter between draws: only the pipeline changes.
+    REQUIRE(pass->bindPipeline(pipelines[1]) != nullptr);
+    pass->draw(draw);
+    pass->end();
+    auto commands = encoder->finish();
+    REQUIRE(commands != nullptr);
+    REQUIRE_CALL(queue->submit(commands));
+    REQUIRE_CALL(queue->waitOnHost());
+
+    ComPtr<ISlangBlob> result;
+    SubresourceLayout layout{};
+    REQUIRE_CALL(device->readTexture(target, 0, 0, result.writeRef(), &layout));
+    const auto* bytes = static_cast<const uint8_t*>(result->getBufferPointer());
+    const float expected[4] = {1.f, 0.f, 0.f, 1.f};
+    for (uint32_t y = 0; y < kHeight; ++y)
+    {
+        for (uint32_t x = 0; x < kWidth; ++x)
+        {
+            CAPTURE(x);
+            CAPTURE(y);
+            CHECK(std::memcmp(bytes + y * layout.rowPitch + x * sizeof(expected), expected, sizeof(expected)) == 0);
+        }
+    }
 }
 
 class BaseDrawTest
@@ -498,3 +604,318 @@ GPU_TEST_CASE("cmd-draw-indexed-indirect", D3D11 | D3D12 | Vulkan)
 {
     testDraw<DrawIndexedIndirectTest>(device);
 }
+
+namespace dynamicDrawStateTests {
+ComPtr<ITexture> makeTarget(IDevice* device, bool depth = false)
+{
+    TextureDesc desc{};
+    desc.size = {5, 1, 1};
+    desc.format = depth ? Format::D32FloatS8Uint : Format::RGBA32Float;
+    desc.usage = depth ? TextureUsage::DepthStencil : TextureUsage::RenderTarget | TextureUsage::CopySource;
+    desc.defaultState = depth ? ResourceState::DepthWrite : ResourceState::RenderTarget;
+    auto texture = device->createTexture(desc);
+    REQUIRE(texture != nullptr);
+    return texture;
+}
+
+ComPtr<IRenderPipeline> makePipeline(IDevice* device, const char* fragment, bool stencil, bool blend = false)
+{
+    ComPtr<IShaderProgram> program;
+    REQUIRE_CALL(loadAndLinkProgram(device, "test-dynamic-draw-state", {"vsMain", fragment}, program.writeRef()));
+    ColorTargetDesc target{};
+    target.format = Format::RGBA32Float;
+    target.enableBlend = blend;
+    if (blend)
+    {
+        target.color.srcFactor = BlendFactor::BlendColor;
+        target.alpha.srcFactor = BlendFactor::BlendColor;
+    }
+    RenderPipelineDesc desc{};
+    desc.program = program;
+    desc.targets = &target;
+    desc.targetCount = 1;
+    desc.rasterizer.cullMode = CullMode::None;
+    desc.depthStencil.depthTestEnable = false;
+    desc.depthStencil.depthWriteEnable = false;
+    desc.depthStencil.stencilEnable = stencil;
+    if (stencil)
+    {
+        desc.depthStencil.format = Format::D32FloatS8Uint;
+        desc.depthStencil.stencilWriteMask = 0;
+        desc.depthStencil.frontFace.stencilFunc = ComparisonFunc::Equal;
+        desc.depthStencil.backFace.stencilFunc = ComparisonFunc::Equal;
+    }
+    ComPtr<IRenderPipeline> pipeline;
+    REQUIRE_CALL(device->createRenderPipeline(desc, pipeline.writeRef()));
+    return pipeline;
+}
+
+RenderState fullState()
+{
+    RenderState state{};
+    state.viewports[0] = Viewport::fromSize(5, 1);
+    state.viewportCount = 1;
+    state.scissorRects[0] = ScissorRect::fromSize(5, 1);
+    state.scissorRectCount = 1;
+    return state;
+}
+
+void checkPixels(IDevice* device, ITexture* texture, const std::array<float, 20>& expected)
+{
+    ComPtr<ISlangBlob> bytes;
+    SubresourceLayout layout{};
+    REQUIRE_CALL(device->readTexture(texture, 0, 0, bytes.writeRef(), &layout));
+    REQUIRE(layout.size.width == 5);
+    REQUIRE(layout.size.height == 1);
+    REQUIRE(layout.colPitch == 4 * sizeof(float));
+    REQUIRE(bytes->getBufferSize() >= sizeof(expected));
+    for (size_t i = 0; i < expected.size(); ++i)
+    {
+        float actual = 0;
+        std::memcpy(&actual, static_cast<const uint8_t*>(bytes->getBufferPointer()) + i * sizeof(float), sizeof(float));
+        CAPTURE(i);
+        CHECK(actual == expected[i]);
+    }
+}
+
+GPU_TEST_CASE("dynamic-stencil-reference-draw-pipeline-pass", D3D12 | Vulkan)
+{
+    auto first = makeTarget(device);
+    auto second = makeTarget(device);
+    auto depth = makeTarget(device, true);
+    auto white = makePipeline(device, "psWhite", true);
+    auto red = makePipeline(device, "psRed", true);
+    auto queue = device->getQueue(QueueType::Graphics);
+    auto encoder = queue->createCommandEncoder();
+    RenderPassColorAttachment color{};
+    color.view = first->getDefaultView();
+    color.loadOp = LoadOp::Clear;
+    color.storeOp = StoreOp::Store;
+    RenderPassDepthStencilAttachment ds{};
+    ds.view = depth->getDefaultView();
+    ds.stencilClearValue = 7;
+    RenderPassDesc passDesc{.colorAttachments = &color, .colorAttachmentCount = 1, .depthStencilAttachment = &ds};
+    auto pass = encoder->beginRenderPass(passDesc);
+    auto state = fullState();
+    DrawArguments draw{};
+    draw.vertexCount = 3;
+    auto drawPixel = [&](uint32_t x, uint32_t ref)
+    {
+        state.stencilRef = ref;
+        state.scissorRects[0] = {x, 0, x + 1, 1};
+        pass->setRenderState(state);
+        pass->draw(draw);
+    };
+    REQUIRE(pass->bindPipeline(white) != nullptr);
+    drawPixel(0, 7);
+    REQUIRE(pass->bindPipeline(red) != nullptr);
+    pass->draw(draw);
+    REQUIRE(pass->bindPipeline(white) != nullptr);
+    drawPixel(1, 3);
+    REQUIRE(pass->bindPipeline(red) != nullptr);
+    drawPixel(2, 3);
+    drawPixel(3, 7);
+    REQUIRE(pass->bindPipeline(white) != nullptr);
+    drawPixel(4, 7);
+    pass->end();
+    color.view = second->getDefaultView();
+    ds.stencilClearValue = 0;
+    pass = encoder->beginRenderPass(passDesc);
+    REQUIRE(pass->bindPipeline(white) != nullptr);
+    pass->setRenderState(fullState());
+    pass->draw(draw);
+    pass->end();
+    auto commands = encoder->finish();
+    REQUIRE(commands != nullptr);
+    REQUIRE_CALL(queue->submit(commands));
+    REQUIRE_CALL(queue->waitOnHost());
+    checkPixels(device, first, {1,0,0,1, 0,0,0,0, 0,0,0,0, 1,0,0,1, 1,1,1,1});
+    checkPixels(device, second, {1,1,1,1, 1,1,1,1, 1,1,1,1, 1,1,1,1, 1,1,1,1});
+}
+
+GPU_TEST_CASE("dynamic-blend-factor-default-zero", D3D12 | Vulkan)
+{
+    auto target = makeTarget(device);
+    auto pipeline = makePipeline(device, "psWhite", false, true);
+    auto queue = device->getQueue(QueueType::Graphics);
+    auto encoder = queue->createCommandEncoder();
+    RenderPassColorAttachment color{};
+    color.view = target->getDefaultView();
+    color.loadOp = LoadOp::Clear;
+    for (float& channel : color.clearValue)
+        channel = 0.5f;
+    RenderPassDesc desc{.colorAttachments = &color, .colorAttachmentCount = 1};
+    auto pass = encoder->beginRenderPass(desc);
+    REQUIRE(pass->bindPipeline(pipeline) != nullptr);
+    pass->setRenderState(fullState());
+    DrawArguments draw{};
+    draw.vertexCount = 3;
+    pass->draw(draw);
+    pass->end();
+    auto commands = encoder->finish();
+    REQUIRE(commands != nullptr);
+    REQUIRE_CALL(queue->submit(commands));
+    REQUIRE_CALL(queue->waitOnHost());
+    checkPixels(device, target, {});
+}
+
+GPU_TEST_CASE("dynamic-blend-factor-draw-pipeline-pass", D3D12 | Vulkan)
+{
+    auto first = makeTarget(device);
+    auto second = makeTarget(device);
+    auto white = makePipeline(device, "psWhite", false, true);
+    auto red = makePipeline(device, "psRed", false, true);
+    auto queue = device->getQueue(QueueType::Graphics);
+    auto encoder = queue->createCommandEncoder();
+    RenderPassColorAttachment color{};
+    color.view = first->getDefaultView();
+    for (float& channel : color.clearValue)
+        channel = 0.5f;
+    RenderPassDesc desc{.colorAttachments = &color, .colorAttachmentCount = 1};
+    auto pass = encoder->beginRenderPass(desc);
+    auto state = fullState();
+    DrawArguments draw{};
+    draw.vertexCount = 3;
+    const float a[4] = {0.25f, 0.5f, 0.75f, 0.125f};
+    const float b[4] = {0.75f, 0.25f, 0.5f, 0.875f};
+    auto drawPixel = [&](uint32_t x)
+    {
+        state.scissorRects[0] = {x, 0, x + 1, 1};
+        pass->setRenderState(state);
+        pass->draw(draw);
+    };
+    REQUIRE(pass->bindPipeline(white) != nullptr);
+    std::memcpy(state.blendFactor, a, sizeof(a));
+    drawPixel(0);
+    REQUIRE(pass->bindPipeline(red) != nullptr);
+    pass->draw(draw);
+    REQUIRE(pass->bindPipeline(white) != nullptr);
+    std::memcpy(state.blendFactor, b, sizeof(b));
+    drawPixel(1);
+    REQUIRE(pass->bindPipeline(red) != nullptr);
+    drawPixel(2);
+    std::memcpy(state.blendFactor, a, sizeof(a));
+    drawPixel(3);
+    REQUIRE(pass->bindPipeline(white) != nullptr);
+    drawPixel(4);
+    pass->end();
+    color.view = second->getDefaultView();
+    pass = encoder->beginRenderPass(desc);
+    REQUIRE(pass->bindPipeline(white) != nullptr);
+    pass->setRenderState(fullState());
+    pass->draw(draw);
+    pass->end();
+    auto commands = encoder->finish();
+    REQUIRE(commands != nullptr);
+    REQUIRE_CALL(queue->submit(commands));
+    REQUIRE_CALL(queue->waitOnHost());
+    checkPixels(device, first, {
+        .25f,0,0,.125f, .75f,.25f,.5f,.875f, .75f,0,0,.875f,
+        .25f,0,0,.125f, .25f,.5f,.75f,.125f
+    });
+    checkPixels(device, second, {});
+}
+
+GPU_TEST_CASE("input-layout-explicit-location-validation", Vulkan)
+{
+    VertexStreamDesc stream{};
+    stream.stride = 16;
+    InputElementDesc elements[2] = {
+        {"POSITION", 0, Format::RG32Float, 0, 0},
+        {"TEXCOORD", 0, Format::RG32Float, 8, 0},
+    };
+    InputLayoutDesc desc{};
+    desc.inputElements = elements;
+    desc.inputElementCount = 2;
+    desc.vertexStreams = &stream;
+    desc.vertexStreamCount = 1;
+    ComPtr<IInputLayout> layout;
+    REQUIRE_CALL(device->createInputLayout(desc, layout.writeRef()));
+    layout.setNull();
+    elements[0].shaderLocation = 3;
+    elements[1].shaderLocation = 7;
+    REQUIRE_CALL(device->createInputLayout(desc, layout.writeRef()));
+    layout.setNull();
+    elements[1].shaderLocation = 3;
+    CHECK(device->createInputLayout(desc, layout.writeRef()) == SLANG_E_INVALID_ARG);
+    CHECK(layout == nullptr);
+    elements[0].shaderLocation = 1;
+    elements[1].shaderLocation = UINT32_MAX;
+    CHECK(device->createInputLayout(desc, layout.writeRef()) == SLANG_E_INVALID_ARG);
+    CHECK(layout == nullptr);
+    elements[0].shaderLocation = UINT32_MAX - 1;
+    CHECK(device->createInputLayout(desc, layout.writeRef()) == SLANG_E_INVALID_ARG);
+    CHECK(layout == nullptr);
+    elements[0].shaderLocation = device->getInfo().limits.maxVertexInputElements;
+    CHECK(device->createInputLayout(desc, layout.writeRef()) == SLANG_E_INVALID_ARG);
+    CHECK(layout == nullptr);
+}
+
+GPU_TEST_CASE("cmd-draw-pipeline-switch-unused-vertex-streams", D3D12 | Vulkan)
+{
+    auto target = makeTarget(device);
+    auto vertexBuffer = createVertexBuffer(device);
+    auto instanceBuffer = createInstanceBuffer(device);
+    ComPtr<IShaderProgram> program;
+    REQUIRE_CALL(loadAndLinkProgram(device, "test-dynamic-draw-state", {"vsMain", "psRed"}, program.writeRef()));
+    ComPtr<IRenderPipeline> pipelines[3];
+    for (uint32_t i = 0; i < 3; ++i)
+    {
+        ComPtr<IInputLayout> inputLayout;
+        if (i < 2)
+        {
+            VertexStreamDesc streams[] = {
+                {sizeof(Vertex), InputSlotClass::PerVertex, 0},
+                {sizeof(Instance), InputSlotClass::PerInstance, 1},
+            };
+            InputLayoutDesc inputDesc{};
+            inputDesc.vertexStreams = streams;
+            inputDesc.vertexStreamCount = 2 - i;
+            REQUIRE_CALL(device->createInputLayout(inputDesc, inputLayout.writeRef()));
+        }
+        ColorTargetDesc colorTarget{};
+        colorTarget.format = Format::RGBA32Float;
+        colorTarget.enableBlend = true;
+        colorTarget.color.srcFactor = BlendFactor::One;
+        colorTarget.color.dstFactor = BlendFactor::One;
+        colorTarget.alpha.srcFactor = BlendFactor::One;
+        colorTarget.alpha.dstFactor = BlendFactor::One;
+        RenderPipelineDesc desc{};
+        desc.program = program;
+        desc.inputLayout = inputLayout;
+        desc.targets = &colorTarget;
+        desc.targetCount = 1;
+        desc.rasterizer.cullMode = CullMode::None;
+        desc.depthStencil.depthTestEnable = false;
+        desc.depthStencil.depthWriteEnable = false;
+        REQUIRE_CALL(device->createRenderPipeline(desc, pipelines[i].writeRef()));
+    }
+    auto queue = device->getQueue(QueueType::Graphics);
+    auto encoder = queue->createCommandEncoder();
+    RenderPassColorAttachment color{};
+    color.view = target->getDefaultView();
+    color.loadOp = LoadOp::Clear;
+    color.storeOp = StoreOp::Store;
+    RenderPassDesc desc{.colorAttachments = &color, .colorAttachmentCount = 1};
+    auto pass = encoder->beginRenderPass(desc);
+    auto state = fullState();
+    state.vertexBuffers[0] = vertexBuffer;
+    state.vertexBuffers[1] = instanceBuffer;
+    state.vertexBufferCount = 2;
+    pass->setRenderState(state);
+    DrawArguments draw{};
+    draw.vertexCount = 3;
+    for (const auto& pipeline : pipelines)
+    {
+        REQUIRE(pass->bindPipeline(pipeline) != nullptr);
+        pass->draw(draw);
+    }
+    pass->end();
+    auto commands = encoder->finish();
+    REQUIRE(commands != nullptr);
+    REQUIRE_CALL(queue->submit(commands));
+    REQUIRE_CALL(queue->waitOnHost());
+    checkPixels(device, target, {3,0,0,3, 3,0,0,3, 3,0,0,3, 3,0,0,3, 3,0,0,3});
+}
+
+} // namespace dynamicDrawStateTests

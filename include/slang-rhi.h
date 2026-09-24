@@ -694,6 +694,9 @@ struct InputElementDesc
     uint32_t offset;
     /// The index of the vertex stream to fetch this element's data from.
     uint32_t bufferSlotIndex;
+    /// Vulkan shader location. UINT32_MAX uses this element's index in the input layout.
+    /// D3D12 uses semanticName and semanticIndex instead.
+    uint32_t shaderLocation = UINT32_MAX;
 };
 
 struct VertexStreamDesc
@@ -2657,6 +2660,7 @@ struct SamplePosition
 struct RenderState
 {
     uint32_t stencilRef = 0;
+    float blendFactor[4] = {0.f, 0.f, 0.f, 0.f};
     Viewport viewports[16];
     uint32_t viewportCount = 0;
     ScissorRect scissorRects[16];
