@@ -165,6 +165,7 @@ protected:
     x(vkCmdResolveImage) \
     x(vkCmdPushConstants) \
     x(vkCmdSetStencilReference) \
+    x(vkCmdSetBlendConstants) \
     x(vkCmdWriteTimestamp) \
     x(vkCmdBeginQuery) \
     x(vkCmdEndQuery) \

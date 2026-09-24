@@ -2657,6 +2657,7 @@ struct SamplePosition
 struct RenderState
 {
     uint32_t stencilRef = 0;
+    float blendFactor[4] = {0.f, 0.f, 0.f, 0.f};
     Viewport viewports[16];
     uint32_t viewportCount = 0;
     ScissorRect scissorRects[16];

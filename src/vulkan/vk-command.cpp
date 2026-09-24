@@ -867,6 +867,8 @@ void CommandRecorder::cmdSetRenderState(const commands::SetRenderState& cmd)
     bool updatePipeline = !m_renderStateValid || cmd.pipeline != m_renderPipeline;
     bool updateBindings = updatePipeline || cmd.bindingData != m_bindingData;
     bool updateStencilRef = !m_renderStateValid || state.stencilRef != m_renderState.stencilRef;
+    bool updateBlendFactor =
+        !m_renderStateValid || std::memcmp(state.blendFactor, m_renderState.blendFactor, sizeof(state.blendFactor)) != 0;
     bool updateVertexBuffers = !m_renderStateValid || !arraysEqual(
                                                           state.vertexBufferCount,
                                                           m_renderState.vertexBufferCount,
@@ -913,6 +915,11 @@ void CommandRecorder::cmdSetRenderState(const commands::SetRenderState& cmd)
         }
     }
 #endif
+
+    if (updateBlendFactor)
+    {
+        api.vkCmdSetBlendConstants(m_cmdBuffer, state.blendFactor);
+    }
 
     if (updateStencilRef)
     {

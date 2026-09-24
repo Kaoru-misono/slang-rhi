@@ -1,4 +1,6 @@
 #include "testing.h"
+#include <array>
+#include <cstring>
 
 using namespace rhi;
 using namespace rhi::testing;
@@ -498,3 +500,216 @@ GPU_TEST_CASE("cmd-draw-indexed-indirect", D3D11 | D3D12 | Vulkan)
 {
     testDraw<DrawIndexedIndirectTest>(device);
 }
+
+namespace dynamicDrawStateTests {
+ComPtr<ITexture> makeTarget(IDevice* device, bool depth = false)
+{
+    TextureDesc desc{};
+    desc.size = {5, 1, 1};
+    desc.format = depth ? Format::D32FloatS8Uint : Format::RGBA32Float;
+    desc.usage = depth ? TextureUsage::DepthStencil : TextureUsage::RenderTarget | TextureUsage::CopySource;
+    desc.defaultState = depth ? ResourceState::DepthWrite : ResourceState::RenderTarget;
+    auto texture = device->createTexture(desc);
+    REQUIRE(texture != nullptr);
+    return texture;
+}
+
+ComPtr<IRenderPipeline> makePipeline(IDevice* device, const char* fragment, bool stencil, bool blend = false)
+{
+    ComPtr<IShaderProgram> program;
+    REQUIRE_CALL(loadAndLinkProgram(device, "test-dynamic-draw-state", {"vsMain", fragment}, program.writeRef()));
+    ColorTargetDesc target{};
+    target.format = Format::RGBA32Float;
+    target.enableBlend = blend;
+    if (blend)
+    {
+        target.color.srcFactor = BlendFactor::BlendColor;
+        target.alpha.srcFactor = BlendFactor::BlendColor;
+    }
+    RenderPipelineDesc desc{};
+    desc.program = program;
+    desc.targets = &target;
+    desc.targetCount = 1;
+    desc.rasterizer.cullMode = CullMode::None;
+    desc.depthStencil.depthTestEnable = false;
+    desc.depthStencil.depthWriteEnable = false;
+    desc.depthStencil.stencilEnable = stencil;
+    if (stencil)
+    {
+        desc.depthStencil.format = Format::D32FloatS8Uint;
+        desc.depthStencil.stencilWriteMask = 0;
+        desc.depthStencil.frontFace.stencilFunc = ComparisonFunc::Equal;
+        desc.depthStencil.backFace.stencilFunc = ComparisonFunc::Equal;
+    }
+    ComPtr<IRenderPipeline> pipeline;
+    REQUIRE_CALL(device->createRenderPipeline(desc, pipeline.writeRef()));
+    return pipeline;
+}
+
+RenderState fullState()
+{
+    RenderState state{};
+    state.viewports[0] = Viewport::fromSize(5, 1);
+    state.viewportCount = 1;
+    state.scissorRects[0] = ScissorRect::fromSize(5, 1);
+    state.scissorRectCount = 1;
+    return state;
+}
+
+void checkPixels(IDevice* device, ITexture* texture, const std::array<float, 20>& expected)
+{
+    ComPtr<ISlangBlob> bytes;
+    SubresourceLayout layout{};
+    REQUIRE_CALL(device->readTexture(texture, 0, 0, bytes.writeRef(), &layout));
+    REQUIRE(layout.size.width == 5);
+    REQUIRE(layout.size.height == 1);
+    REQUIRE(layout.colPitch == 4 * sizeof(float));
+    REQUIRE(bytes->getBufferSize() >= sizeof(expected));
+    for (size_t i = 0; i < expected.size(); ++i)
+    {
+        float actual = 0;
+        std::memcpy(&actual, static_cast<const uint8_t*>(bytes->getBufferPointer()) + i * sizeof(float), sizeof(float));
+        CAPTURE(i);
+        CHECK(actual == expected[i]);
+    }
+}
+
+GPU_TEST_CASE("dynamic-stencil-reference-draw-pipeline-pass", D3D12 | Vulkan)
+{
+    auto first = makeTarget(device);
+    auto second = makeTarget(device);
+    auto depth = makeTarget(device, true);
+    auto white = makePipeline(device, "psWhite", true);
+    auto red = makePipeline(device, "psRed", true);
+    auto queue = device->getQueue(QueueType::Graphics);
+    auto encoder = queue->createCommandEncoder();
+    RenderPassColorAttachment color{};
+    color.view = first->getDefaultView();
+    color.loadOp = LoadOp::Clear;
+    color.storeOp = StoreOp::Store;
+    RenderPassDepthStencilAttachment ds{};
+    ds.view = depth->getDefaultView();
+    ds.stencilClearValue = 7;
+    RenderPassDesc passDesc{.colorAttachments = &color, .colorAttachmentCount = 1, .depthStencilAttachment = &ds};
+    auto pass = encoder->beginRenderPass(passDesc);
+    auto state = fullState();
+    DrawArguments draw{};
+    draw.vertexCount = 3;
+    auto drawPixel = [&](uint32_t x, uint32_t ref)
+    {
+        state.stencilRef = ref;
+        state.scissorRects[0] = {x, 0, x + 1, 1};
+        pass->setRenderState(state);
+        pass->draw(draw);
+    };
+    REQUIRE(pass->bindPipeline(white) != nullptr);
+    drawPixel(0, 7);
+    REQUIRE(pass->bindPipeline(red) != nullptr);
+    pass->draw(draw);
+    REQUIRE(pass->bindPipeline(white) != nullptr);
+    drawPixel(1, 3);
+    REQUIRE(pass->bindPipeline(red) != nullptr);
+    drawPixel(2, 3);
+    drawPixel(3, 7);
+    REQUIRE(pass->bindPipeline(white) != nullptr);
+    drawPixel(4, 7);
+    pass->end();
+    color.view = second->getDefaultView();
+    ds.stencilClearValue = 0;
+    pass = encoder->beginRenderPass(passDesc);
+    REQUIRE(pass->bindPipeline(white) != nullptr);
+    pass->setRenderState(fullState());
+    pass->draw(draw);
+    pass->end();
+    auto commands = encoder->finish();
+    REQUIRE(commands != nullptr);
+    REQUIRE_CALL(queue->submit(commands));
+    REQUIRE_CALL(queue->waitOnHost());
+    checkPixels(device, first, {1,0,0,1, 0,0,0,0, 0,0,0,0, 1,0,0,1, 1,1,1,1});
+    checkPixels(device, second, {1,1,1,1, 1,1,1,1, 1,1,1,1, 1,1,1,1, 1,1,1,1});
+}
+
+GPU_TEST_CASE("dynamic-blend-factor-default-zero", D3D12 | Vulkan)
+{
+    auto target = makeTarget(device);
+    auto pipeline = makePipeline(device, "psWhite", false, true);
+    auto queue = device->getQueue(QueueType::Graphics);
+    auto encoder = queue->createCommandEncoder();
+    RenderPassColorAttachment color{};
+    color.view = target->getDefaultView();
+    color.loadOp = LoadOp::Clear;
+    for (float& channel : color.clearValue)
+        channel = 0.5f;
+    RenderPassDesc desc{.colorAttachments = &color, .colorAttachmentCount = 1};
+    auto pass = encoder->beginRenderPass(desc);
+    REQUIRE(pass->bindPipeline(pipeline) != nullptr);
+    pass->setRenderState(fullState());
+    DrawArguments draw{};
+    draw.vertexCount = 3;
+    pass->draw(draw);
+    pass->end();
+    auto commands = encoder->finish();
+    REQUIRE(commands != nullptr);
+    REQUIRE_CALL(queue->submit(commands));
+    REQUIRE_CALL(queue->waitOnHost());
+    checkPixels(device, target, {});
+}
+
+GPU_TEST_CASE("dynamic-blend-factor-draw-pipeline-pass", D3D12 | Vulkan)
+{
+    auto first = makeTarget(device);
+    auto second = makeTarget(device);
+    auto white = makePipeline(device, "psWhite", false, true);
+    auto red = makePipeline(device, "psRed", false, true);
+    auto queue = device->getQueue(QueueType::Graphics);
+    auto encoder = queue->createCommandEncoder();
+    RenderPassColorAttachment color{};
+    color.view = first->getDefaultView();
+    for (float& channel : color.clearValue)
+        channel = 0.5f;
+    RenderPassDesc desc{.colorAttachments = &color, .colorAttachmentCount = 1};
+    auto pass = encoder->beginRenderPass(desc);
+    auto state = fullState();
+    DrawArguments draw{};
+    draw.vertexCount = 3;
+    const float a[4] = {0.25f, 0.5f, 0.75f, 0.125f};
+    const float b[4] = {0.75f, 0.25f, 0.5f, 0.875f};
+    auto drawPixel = [&](uint32_t x)
+    {
+        state.scissorRects[0] = {x, 0, x + 1, 1};
+        pass->setRenderState(state);
+        pass->draw(draw);
+    };
+    REQUIRE(pass->bindPipeline(white) != nullptr);
+    std::memcpy(state.blendFactor, a, sizeof(a));
+    drawPixel(0);
+    REQUIRE(pass->bindPipeline(red) != nullptr);
+    pass->draw(draw);
+    REQUIRE(pass->bindPipeline(white) != nullptr);
+    std::memcpy(state.blendFactor, b, sizeof(b));
+    drawPixel(1);
+    REQUIRE(pass->bindPipeline(red) != nullptr);
+    drawPixel(2);
+    std::memcpy(state.blendFactor, a, sizeof(a));
+    drawPixel(3);
+    REQUIRE(pass->bindPipeline(white) != nullptr);
+    drawPixel(4);
+    pass->end();
+    color.view = second->getDefaultView();
+    pass = encoder->beginRenderPass(desc);
+    REQUIRE(pass->bindPipeline(white) != nullptr);
+    pass->setRenderState(fullState());
+    pass->draw(draw);
+    pass->end();
+    auto commands = encoder->finish();
+    REQUIRE(commands != nullptr);
+    REQUIRE_CALL(queue->submit(commands));
+    REQUIRE_CALL(queue->waitOnHost());
+    checkPixels(device, first, {
+        .25f,0,0,.125f, .75f,.25f,.5f,.875f, .75f,0,0,.875f,
+        .25f,0,0,.125f, .25f,.5f,.75f,.125f
+    });
+    checkPixels(device, second, {});
+}
+
+} // namespace dynamicDrawStateTests
