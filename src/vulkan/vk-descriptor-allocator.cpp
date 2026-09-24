@@ -4,8 +4,17 @@
 #include "core/static_vector.h"
 
 namespace rhi::vk {
+namespace {
+Result descriptorAllocationResult(VkResult result)
+{
+    return result == VK_ERROR_OUT_OF_HOST_MEMORY || result == VK_ERROR_OUT_OF_DEVICE_MEMORY ||
+                   result == VK_ERROR_OUT_OF_POOL_MEMORY || result == VK_ERROR_FRAGMENTED_POOL
+               ? SLANG_E_OUT_OF_MEMORY
+               : SLANG_FAIL;
+}
+} // namespace
 
-VkDescriptorPool DescriptorSetAllocator::newPool()
+Result DescriptorSetAllocator::newPool(VkDescriptorPool* outPool)
 {
     VkDescriptorPoolCreateInfo descriptorPoolInfo = {VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
     static_vector<VkDescriptorPoolSize, 32> poolSizes;
@@ -39,48 +48,86 @@ VkDescriptorPool DescriptorSetAllocator::newPool()
     inlineUniformBlockInfo.maxInlineUniformBlockBindings = 16;
     descriptorPoolInfo.pNext = &inlineUniformBlockInfo;
 
+    *outPool = VK_NULL_HANDLE;
+    // Reserve host ownership before creating the native pool.
+    pools.reserve(pools.size() + 1);
     VkDescriptorPool descriptorPool = VK_NULL_HANDLE;
-    SLANG_VK_ASSERT_ON_FAIL(
-        m_api->vkCreateDescriptorPool(m_api->m_device, &descriptorPoolInfo, nullptr, &descriptorPool)
-    );
+    const VkResult result = m_api->vkCreateDescriptorPool(m_api->m_device, &descriptorPoolInfo, nullptr, &descriptorPool);
+    if (result != VK_SUCCESS)
+        return descriptorAllocationResult(result);
     pools.push_back(descriptorPool);
-    return descriptorPool;
+    *outPool = descriptorPool;
+    return SLANG_OK;
 }
 
-VulkanDescriptorSet DescriptorSetAllocator::allocate(VkDescriptorSetLayout layout)
+Result DescriptorSetAllocator::allocate(VkDescriptorSetLayout layout, VulkanDescriptorSet* outSet)
 {
-    VulkanDescriptorSet rs = {};
-    VkDescriptorSetAllocateInfo allocInfo = {};
-    allocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
-    allocInfo.descriptorPool = getPool();
-    allocInfo.descriptorSetCount = 1;
-    allocInfo.pSetLayouts = &layout;
-    if (m_api->vkAllocateDescriptorSets(m_api->m_device, &allocInfo, &rs.handle) == VK_SUCCESS)
+    *outSet = {};
+    SLANG_RETURN_ON_FAIL(m_resetResult);
+    if (m_liveSets == UINT64_MAX || (m_maxSets && m_liveSets >= m_maxSets))
+        return SLANG_E_OUT_OF_MEMORY;
+    VkDescriptorSetAllocateInfo info = {VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
+    info.descriptorSetCount = 1;
+    info.pSetLayouts = &layout;
+    // Pool exhaustion permits trying another pool; native device/host errors must propagate.
+    for (auto it = pools.rbegin(); it != pools.rend(); ++it)
     {
-        rs.pool = allocInfo.descriptorPool;
-        return rs;
-    }
-    // If allocation from last pool fails, try all existing pools.
-    for (size_t i = 0; i < pools.size() - 1; i++)
-    {
-        allocInfo.descriptorPool = pools[i];
-        if (m_api->vkAllocateDescriptorSets(m_api->m_device, &allocInfo, &rs.handle) == VK_SUCCESS)
+        info.descriptorPool = *it;
+        VkDescriptorSet handle = VK_NULL_HANDLE;
+        const VkResult result = m_api->vkAllocateDescriptorSets(m_api->m_device, &info, &handle);
+        if (result == VK_SUCCESS)
         {
-            rs.pool = allocInfo.descriptorPool;
-            return rs;
+            ++m_liveSets;
+            *outSet = {handle, *it};
+            return SLANG_OK;
+        }
+        if (result != VK_ERROR_OUT_OF_POOL_MEMORY && result != VK_ERROR_FRAGMENTED_POOL)
+            return descriptorAllocationResult(result);
+    }
+    SLANG_RETURN_ON_FAIL(newPool(&info.descriptorPool));
+    VkDescriptorSet handle = VK_NULL_HANDLE;
+    const VkResult result = m_api->vkAllocateDescriptorSets(m_api->m_device, &info, &handle);
+    if (result != VK_SUCCESS)
+    {
+        // No set has ever used this new pool; do not retain it across failed retries.
+        m_api->vkDestroyDescriptorPool(m_api->m_device, info.descriptorPool, nullptr);
+        pools.pop_back();
+        return descriptorAllocationResult(result);
+    }
+    ++m_liveSets;
+    *outSet = {handle, info.descriptorPool};
+    return SLANG_OK;
+}
+
+void DescriptorSetAllocator::free(VulkanDescriptorSet set)
+{
+    if (set.handle && m_api->vkFreeDescriptorSets(m_api->m_device, set.pool, 1, &set.handle) == VK_SUCCESS)
+        --m_liveSets;
+}
+
+Result DescriptorSetAllocator::reset()
+{
+    for (auto pool : pools)
+    {
+        const VkResult result = m_api->vkResetDescriptorPool(m_api->m_device, pool, 0);
+        if (result != VK_SUCCESS)
+        {
+            m_resetResult = descriptorAllocationResult(result);
+            return m_resetResult;
         }
     }
-    // If we still cannot allocate the descriptor set, add a new pool.
-    auto pool = newPool();
-    allocInfo.descriptorPool = pool;
-    if (m_api->vkAllocateDescriptorSets(m_api->m_device, &allocInfo, &rs.handle) == VK_SUCCESS)
-    {
-        rs.pool = allocInfo.descriptorPool;
-        return rs;
-    }
-    // Failed to allocate from a new pool, we are in trouble.
-    SLANG_RHI_ASSERT_FAILURE("Descriptor set allocation failed.");
-    return rs;
+    m_liveSets = 0;
+    m_resetResult = SLANG_OK;
+    return SLANG_OK;
+}
+
+void DescriptorSetAllocator::close()
+{
+    for (auto pool : pools)
+        m_api->vkDestroyDescriptorPool(m_api->m_device, pool, nullptr);
+    pools.clear();
+    m_liveSets = 0;
+    m_resetResult = SLANG_OK;
 }
 
 } // namespace rhi::vk

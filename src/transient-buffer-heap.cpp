@@ -4,6 +4,7 @@
 #include "rhi-shared.h"
 
 #include <algorithm>
+#include <limits>
 
 namespace rhi {
 
@@ -313,9 +314,16 @@ Result TransientBufferArena::allocate(Size size, Allocation* outAllocation)
     if (!m_heap || size > m_heap->getMaxPageSize())
         return SLANG_FAIL;
 
+    const Size granularity = m_heap->getAllocationGranularity();
+    if (size > std::numeric_limits<Size>::max() - (granularity - 1))
+        return SLANG_E_OUT_OF_MEMORY;
     const Size alignedSize = m_heap->alignAllocationSize(size);
     if (alignedSize > m_heap->getMaxPageSize())
         return SLANG_FAIL;
+    if (alignedSize > std::numeric_limits<Size>::max() - m_used ||
+        (m_desc.maxAllocationBytes &&
+         (m_used > m_desc.maxAllocationBytes || alignedSize > m_desc.maxAllocationBytes - m_used)))
+        return SLANG_E_OUT_OF_MEMORY;
 
     Size allocationOffset = m_chunks.empty() ? 0 : math::calcAligned(m_currentChunkOffset, m_heap->getAlignment());
     if (m_chunks.empty() || allocationOffset > m_chunks.back().size ||

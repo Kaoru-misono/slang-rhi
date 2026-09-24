@@ -2633,9 +2633,10 @@ Result CommandEncoderImpl::getFlatBindingData(
         TransientBufferArena::Allocation allocation;
         SLANG_RETURN_ON_FAIL(m_commandBuffer->m_constantBufferArena.allocate(bindings.constantsSize, &allocation));
         std::memcpy(allocation.mappedData, bindings.constants, bindings.constantsSize);
-        auto descriptorSet = m_commandBuffer->m_descriptorSetAllocator.allocate(layout->m_constantsSetLayout);
-        if (!descriptorSet.handle)
-            return SLANG_E_OUT_OF_MEMORY;
+        VulkanDescriptorSet descriptorSet;
+        SLANG_RETURN_ON_FAIL(m_commandBuffer->m_descriptorSetAllocator.allocate(
+            layout->m_constantsSetLayout, &descriptorSet
+        ));
 
         VkDescriptorBufferInfo bufferInfo = {};
         bufferInfo.buffer = checked_cast<BufferImpl*>(allocation.buffer)->m_buffer.m_buffer;
@@ -2660,9 +2661,10 @@ Result CommandEncoderImpl::getFlatBindingData(
     {
         if (data->descriptorSets[i] == VK_NULL_HANDLE)
         {
-            auto descriptorSet = m_commandBuffer->m_descriptorSetAllocator.allocate(layout->m_emptySetLayout);
-            if (!descriptorSet.handle)
-                return SLANG_E_OUT_OF_MEMORY;
+            VulkanDescriptorSet descriptorSet;
+            SLANG_RETURN_ON_FAIL(m_commandBuffer->m_descriptorSetAllocator.allocate(
+                layout->m_emptySetLayout, &descriptorSet
+            ));
             data->descriptorSets[i] = descriptorSet.handle;
         }
     }
@@ -2775,8 +2777,10 @@ CommandBufferImpl::~CommandBufferImpl()
 Result CommandBufferImpl::init()
 {
     DeviceImpl* device = getDevice<DeviceImpl>();
-    m_constantBufferArena.initialize(&m_queue->m_constantBufferHeap);
-    m_descriptorSetAllocator.init(&device->m_api);
+    TransientBufferArenaDesc constantArenaDesc;
+    constantArenaDesc.maxAllocationBytes = device->m_maxCommandBufferConstantBytes;
+    m_constantBufferArena.initialize(&m_queue->m_constantBufferHeap, constantArenaDesc);
+    m_descriptorSetAllocator.init(&device->m_api, device->m_maxCommandBufferDescriptorSets);
 
     VkCommandPoolCreateInfo createInfo = {VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};
     createInfo.flags = VK_COMMAND_POOL_CREATE_TRANSIENT_BIT;
@@ -2808,7 +2812,7 @@ Result CommandBufferImpl::reset()
         SLANG_VK_RETURN_ON_FAIL_REPORT(device->m_api.vkResetCommandPool(device->m_device, m_commandPool, 0), device);
     }
     m_constantBufferArena.reset();
-    m_descriptorSetAllocator.reset();
+    SLANG_RETURN_ON_FAIL(m_descriptorSetAllocator.reset());
     m_bindingCache.reset();
     return CommandBuffer::reset();
 }
