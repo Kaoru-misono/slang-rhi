@@ -1,7 +1,6 @@
 #pragma once
 
 #include "vk-api.h"
-
 #include "core/common.h"
 
 #include <vector>
@@ -10,34 +9,29 @@ namespace rhi::vk {
 
 struct VulkanDescriptorSet
 {
-    VkDescriptorSet handle;
-    VkDescriptorPool pool;
+    VkDescriptorSet handle = VK_NULL_HANDLE;
+    VkDescriptorPool pool = VK_NULL_HANDLE;
 };
+
 class DescriptorSetAllocator
 {
 public:
     std::vector<VkDescriptorPool> pools;
-    const VulkanApi* m_api;
-    void init(VulkanApi* api) { m_api = api; }
-    VkDescriptorPool newPool();
-    VkDescriptorPool getPool()
+    const VulkanApi* m_api = nullptr;
+
+    void init(VulkanApi* api)
     {
-        if (!pools.empty())
-            return pools.back();
-        return newPool();
+        m_api = api;
     }
-    VulkanDescriptorSet allocate(VkDescriptorSetLayout layout);
-    void free(VulkanDescriptorSet set) { m_api->vkFreeDescriptorSets(m_api->m_device, set.pool, 1, &set.handle); }
-    void reset()
-    {
-        for (auto pool : pools)
-            m_api->vkResetDescriptorPool(m_api->m_device, pool, 0);
-    }
-    void close()
-    {
-        for (auto pool : pools)
-            m_api->vkDestroyDescriptorPool(m_api->m_device, pool, nullptr);
-    }
+    Result allocate(VkDescriptorSetLayout layout, VulkanDescriptorSet* outSet);
+    void free(VulkanDescriptorSet set);
+    Result reset();
+    void close();
+
+private:
+    Result newPool(VkDescriptorPool* outPool);
+
+    Result m_resetResult = SLANG_OK;
 };
 
 } // namespace rhi::vk
