@@ -157,8 +157,7 @@ struct BindingCache
 
     SamplerEntry samplerEntries[kMaxSamplerEntries] = {};
     uint32_t samplerEntryCount = 0;
-    FlatSamplerEntry flatSamplerEntries[kMaxSamplerEntries] = {};
-    uint32_t flatSamplerEntryCount = 0;
+    std::vector<FlatSamplerEntry> flatSamplerEntries;
 
     GPUDescriptorRange lookupSamplers(uint32_t objectUid, ShaderObjectLayoutImpl* layout)
     {
@@ -180,26 +179,25 @@ struct BindingCache
 
     GPUDescriptorRange lookupFlatSamplers(const BindingSet* set) const
     {
-        for (uint32_t i = 0; i < flatSamplerEntryCount; ++i)
+        for (const FlatSamplerEntry& entry : flatSamplerEntries)
         {
-            if (flatSamplerEntries[i].set == set)
-                return flatSamplerEntries[i].samplers;
+            if (entry.set == set)
+                return entry.samplers;
         }
         return {};
     }
 
     void storeFlatSamplers(const BindingSet* set, GPUDescriptorRange samplers)
     {
-        if (flatSamplerEntryCount < kMaxSamplerEntries)
-        {
-            flatSamplerEntries[flatSamplerEntryCount++] = {set, samplers};
-        }
+        // The command buffer retains each immutable set until reset; its identity cannot be recycled.
+        // Descriptor capacity remains bounded by the real shader-visible sampler heap.
+        flatSamplerEntries.emplace_back(FlatSamplerEntry{set, samplers});
     }
 
     void reset()
     {
         samplerEntryCount = 0;
-        flatSamplerEntryCount = 0;
+        flatSamplerEntries.clear();
     }
 };
 
