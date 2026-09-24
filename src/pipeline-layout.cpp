@@ -238,7 +238,17 @@ struct PipelineLayoutReflectionValidator
             return fail(path, "parameter block nesting exceeds 64");
         if (!elementTypeLayout || elementTypeLayout->getKind() != Kind::Struct)
             return fail(path, "parameter block element type must be a struct");
-        sets.emplace_back(ReflectedSet{path, elementTypeLayout});
+        // Only blocks with direct fields consume a resource set. Unsupported direct fields
+        // still enter validateSet so skipping structural parents cannot bypass profile checks.
+        for (unsigned i = 0; i < elementTypeLayout->getFieldCount(); ++i)
+        {
+            auto* fieldTypeLayout = elementTypeLayout->getFieldByIndex(i)->getTypeLayout();
+            if (!fieldTypeLayout || fieldTypeLayout->getKind() != Kind::ParameterBlock)
+            {
+                sets.emplace_back(ReflectedSet{path, elementTypeLayout});
+                break;
+            }
+        }
         for (unsigned i = 0; i < elementTypeLayout->getFieldCount(); ++i)
         {
             auto* field = elementTypeLayout->getFieldByIndex(i);
