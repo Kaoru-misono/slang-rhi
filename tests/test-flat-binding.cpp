@@ -1,4 +1,5 @@
 #include "testing.h"
+#include "../src/state-tracking.h"
 
 #include <array>
 #include <cstddef>
@@ -1654,4 +1655,57 @@ GPU_TEST_CASE("flat-binding-d3d12-sampler-dedup-and-exhaustion", D3D12 | DontCre
         }
         pass->end();
     }
+}
+
+// Independent regression for the partial-layer tracker fix: transitions must stop at layerCount.
+GPU_TEST_CASE("texture-state-requested-layers", D3D12 | Vulkan)
+{
+    TextureDesc desc{};
+    desc.type = TextureType::Texture2DArray;
+    desc.size = {8, 8, 1};
+    desc.arrayLength = 4;
+    desc.mipCount = 3;
+    desc.format = Format::RGBA8Unorm;
+    desc.usage = TextureUsage::ShaderResource | TextureUsage::CopyDestination;
+    desc.defaultState = ResourceState::ShaderResource;
+    auto texture = device->createTexture(desc);
+    REQUIRE(texture != nullptr);
+    auto* native = checked_cast<Texture*>(texture.get());
+    StateTracking tracking;
+    tracking.setTextureState(native, {1, 1, 1, 1}, ResourceState::CopyDestination);
+    REQUIRE(tracking.getTextureBarriers().size() == 1);
+    CHECK_FALSE(tracking.getTextureBarriers()[0].entireTexture);
+    CHECK(tracking.getTextureBarriers()[0].layer == 1);
+    CHECK(tracking.getTextureBarriers()[0].mip == 1);
+    tracking.clearBarriers();
+    // Checking every unrequested subresource catches both leading and trailing over-transition.
+    for (uint32_t layer = 0; layer < 4; ++layer)
+    {
+        for (uint32_t mip = 0; mip < 3; ++mip)
+        {
+            if (layer == 1 && mip == 1)
+                continue;
+            tracking.setTextureState(native, {layer, 1, mip, 1}, ResourceState::ShaderResource);
+        }
+    }
+    CHECK(tracking.getTextureBarriers().empty());
+    tracking.setTextureState(native, {1, 1, 1, 1}, ResourceState::ShaderResource);
+    REQUIRE(tracking.getTextureBarriers().size() == 1);
+    CHECK(tracking.getTextureBarriers()[0].stateBefore == ResourceState::CopyDestination);
+    tracking.clearBarriers();
+    // Remaining-layer/mip sentinels normalize to exactly the requested suffix.
+    tracking.setTextureState(native, {2, kAllLayers, 1, kAllMips}, ResourceState::CopyDestination);
+    REQUIRE(tracking.getTextureBarriers().size() == 4);
+    for (const auto& barrier : tracking.getTextureBarriers())
+    {
+        CHECK_FALSE(barrier.entireTexture);
+        CHECK(barrier.layer >= 2);
+        CHECK(barrier.layer < 4);
+        CHECK(barrier.mip >= 1);
+        CHECK(barrier.mip < 3);
+    }
+    tracking.clearBarriers();
+    tracking.setTextureState(native, {0, 2, 0, kAllMips}, ResourceState::ShaderResource);
+    tracking.setTextureState(native, {2, kAllLayers, 0, 1}, ResourceState::ShaderResource);
+    CHECK(tracking.getTextureBarriers().empty());
 }
