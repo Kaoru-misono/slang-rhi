@@ -140,16 +140,6 @@
             "name": "msvc-RelWithDebInfo",
             "configurePreset": "msvc",
             "configuration": "RelWithDebInfo"
-        },
-        {
-            "name": "emscripten-Release",
-            "configurePreset": "emscripten",
-            "configuration": "Release"
-        },
-        {
-            "name": "emscripten-Debug",
-            "configurePreset": "emscripten",
-            "configuration": "Debug"
         }
     ]
 }
