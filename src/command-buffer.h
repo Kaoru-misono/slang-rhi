@@ -23,7 +23,13 @@
 namespace rhi {
 
 struct BindingData
-{};
+{
+    // Enabled only by the debug wrapper, and only for formal flat bindings.
+    bool diagnoseStateTransitions = false;
+};
+
+void reportFlatBindingTransition(Device* device, Buffer* buffer, ResourceState state);
+void reportFlatBindingTransition(Device* device, Texture* texture, SubresourceRange range, ResourceState state);
 
 /// Upper bound on the inline constant block a pipeline can be bound with, matching the smallest
 /// push-constant budget the supported backends guarantee.
@@ -253,20 +259,21 @@ public:
     ICommandEncoder* getInterface(const Guid& guid);
 
 public:
-    CommandEncoderDesc m_desc;
-    StructHolder m_descHolder;
+    CommandEncoderDesc                                      m_desc;
+    StructHolder                                            m_descHolder;
+    bool                                                    m_diagnoseFlatBindingTransitions = false;
 
     // Current command list to write to. Must be set by the derived class.
-    CommandList* m_commandList = nullptr;
+    CommandList*                                            m_commandList = nullptr;
 
     /// Scratch list reused by every flat bind: the accesses of the bound sets followed by the
     /// caller's bindless accesses. The next bind overwrites it, so getFlatBindingData must copy
     /// whatever it needs to keep.
-    std::vector<ResourceAccess> m_flatAccesses;
+    std::vector<ResourceAccess>                             m_flatAccesses;
 
-    RenderPassEncoder m_renderPassEncoder;
-    ComputePassEncoder m_computePassEncoder;
-    RayTracingPassEncoder m_rayTracingPassEncoder;
+    RenderPassEncoder                                       m_renderPassEncoder;
+    ComputePassEncoder                                      m_computePassEncoder;
+    RayTracingPassEncoder                                   m_rayTracingPassEncoder;
 
     // List of persisted pipeline specialization data.
     // This is populated during command encoding and later used when asynchronously resolving pipelines.

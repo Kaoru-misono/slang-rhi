@@ -264,6 +264,15 @@ Flat bindings use an `IPipelineLayout`, copy constant bytes immediately, and ret
 resources declared by binding sets and explicit accesses. The earlier entry-point-data-only
 compute binding API has been removed.
 
+With `DeviceDesc::enableValidation`, replay of a flat binding reports `Warning` / `Layer` when
+its declared accesses require an effective resource-state change. Messages identify the resource
+label and target state, and include resolved layer/mip ranges for textures. Read-state unions are
+compared against the tracked effective state; repeated accesses already covered by that union and
+same-state UAV ordering barriers do not warn. The diagnostic does not suppress barriers or alter
+failure handling. Without the debug wrapper it is disabled, and general shader-object bindings,
+copy/clear commands, attachments, and default-state restoration do not produce this diagnostic.
+This applies to flat render, compute, and ray-tracing bindings on D3D12 and Vulkan.
+
 ## `IRayTracingPassEncoder` interface
 
 | API                   | D3D12 | Vulkan |

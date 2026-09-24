@@ -1970,12 +1970,24 @@ void CommandRecorder::requireBindingStates(BindingDataImpl* bindingData)
     for (uint32_t i = 0; i < bindingData->bufferStateCount; ++i)
     {
         const auto& bufferState = bindingData->bufferStates[i];
-        requireBufferState(bufferState.buffer, bufferState.state);
+        const bool changed = m_stateTracking.requireBufferState(
+            bufferState.buffer, bufferState.state, getBufferReadStatePolicy(m_queueType)
+        );
+        if (changed && bindingData->diagnoseStateTransitions)
+        {
+            reportFlatBindingTransition(m_device, bufferState.buffer, bufferState.state);
+        }
     }
     for (uint32_t i = 0; i < bindingData->textureStateCount; ++i)
     {
         const auto& textureState = bindingData->textureStates[i];
-        requireTextureState(textureState.texture, textureState.subresourceRange, textureState.state);
+        const bool changed = m_stateTracking.setTextureState(
+            textureState.texture, textureState.subresourceRange, textureState.state
+        );
+        if (changed && bindingData->diagnoseStateTransitions)
+        {
+            reportFlatBindingTransition(m_device, textureState.texture, textureState.subresourceRange, textureState.state);
+        }
     }
 }
 
@@ -2677,11 +2689,14 @@ Result CommandEncoderImpl::getBindingData(RootShaderObject* rootObject, BindingD
     builder.m_descriptorSetAllocator = &m_commandBuffer->m_descriptorSetAllocator;
     ShaderObjectLayout* specializedLayout = nullptr;
     SLANG_RETURN_ON_FAIL(rootObject->getSpecializedLayout(specializedLayout));
-    return builder.bindAsRoot(
+    SLANG_RETURN_ON_FAIL(builder.bindAsRoot(
         rootObject,
         checked_cast<RootShaderObjectLayoutImpl*>(specializedLayout),
         (BindingDataImpl*&)outBindingData
-    );
+    ));
+    // Arena allocations do not run BindingData's default member initializers.
+    outBindingData->diagnoseStateTransitions = false;
+    return SLANG_OK;
 }
 
 Result CommandEncoderImpl::finish(const CommandBufferDesc& desc, ICommandBuffer** outCommandBuffer)
