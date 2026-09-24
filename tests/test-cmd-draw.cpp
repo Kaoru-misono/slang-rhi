@@ -98,6 +98,110 @@ static ComPtr<ITexture> createColorBuffer(IDevice* device)
     return colorBuffer;
 }
 
+GPU_TEST_CASE("cmd-draw-pipeline-switch-vertex-stride", D3D12 | Vulkan)
+{
+    // Stride 16 visits rows 0,1,2; stride 32 visits rows 0,2,4.
+    // These triangles cover complementary halves of the same render target.
+    const float vertices[5][4] = {
+        {-1.f, -1.f, 0.5f, 0.f},
+        { 1.f, -1.f, 0.5f, 0.f},
+        { 1.f,  1.f, 0.5f, 0.f},
+        { 0.f,  0.f, 0.5f, 0.f},
+        {-1.f,  1.f, 0.5f, 0.f},
+    };
+    BufferDesc bufferDesc{};
+    bufferDesc.size = sizeof(vertices);
+    bufferDesc.usage = BufferUsage::VertexBuffer;
+    bufferDesc.defaultState = ResourceState::VertexBuffer;
+    auto vertexBuffer = device->createBuffer(bufferDesc, vertices);
+    REQUIRE(vertexBuffer != nullptr);
+    auto instanceBuffer = createInstanceBuffer(device);
+    auto target = createColorBuffer(device);
+    ComPtr<IShaderProgram> program;
+    REQUIRE_CALL(loadProgram(device, "test-cmd-draw", {"vertexMain", "fragmentMain"}, program.writeRef()));
+
+    ComPtr<IRenderPipeline> pipelines[2];
+    for (uint32_t i = 0; i < 2; ++i)
+    {
+        VertexStreamDesc streams[] = {
+            {i == 0 ? 16u : 32u, InputSlotClass::PerVertex, 0},
+            {sizeof(Instance), InputSlotClass::PerInstance, 1},
+        };
+        InputElementDesc elements[] = {
+            {"POSITIONA", 0, Format::RGB32Float, 0, 0},
+            {"POSITIONB", 0, Format::RGB32Float, offsetof(Instance, position), 1},
+            {"COLOR", 0, Format::RGB32Float, offsetof(Instance, color), 1},
+        };
+        InputLayoutDesc inputDesc{};
+        inputDesc.inputElements = elements;
+        inputDesc.inputElementCount = SLANG_COUNT_OF(elements);
+        inputDesc.vertexStreams = streams;
+        inputDesc.vertexStreamCount = SLANG_COUNT_OF(streams);
+        auto inputLayout = device->createInputLayout(inputDesc);
+        REQUIRE(inputLayout != nullptr);
+        ColorTargetDesc colorTarget{};
+        colorTarget.format = format;
+        RenderPipelineDesc desc{};
+        desc.program = program;
+        desc.inputLayout = inputLayout;
+        desc.targets = &colorTarget;
+        desc.targetCount = 1;
+        desc.rasterizer.cullMode = CullMode::None;
+        desc.depthStencil.depthTestEnable = false;
+        desc.depthStencil.depthWriteEnable = false;
+        REQUIRE_CALL(device->createRenderPipeline(desc, pipelines[i].writeRef()));
+    }
+
+    auto queue = device->getQueue(QueueType::Graphics);
+    auto encoder = queue->createCommandEncoder();
+    RenderPassColorAttachment color{};
+    color.view = target->getDefaultView();
+    color.loadOp = LoadOp::Clear;
+    color.storeOp = StoreOp::Store;
+    RenderPassDesc passDesc{};
+    passDesc.colorAttachments = &color;
+    passDesc.colorAttachmentCount = 1;
+    auto pass = encoder->beginRenderPass(passDesc);
+    REQUIRE(pass != nullptr);
+    RenderState state{};
+    state.viewports[0] = Viewport::fromSize(kWidth, kHeight);
+    state.viewportCount = 1;
+    state.scissorRects[0] = ScissorRect::fromSize(kWidth, kHeight);
+    state.scissorRectCount = 1;
+    state.vertexBuffers[0] = vertexBuffer;
+    state.vertexBuffers[1] = instanceBuffer;
+    state.vertexBufferCount = 2;
+    pass->setRenderState(state);
+    DrawArguments draw{};
+    draw.vertexCount = 3;
+    draw.instanceCount = 1;
+    REQUIRE(pass->bindPipeline(pipelines[0]) != nullptr);
+    pass->draw(draw);
+    // No render-state setter between draws: only the pipeline changes.
+    REQUIRE(pass->bindPipeline(pipelines[1]) != nullptr);
+    pass->draw(draw);
+    pass->end();
+    auto commands = encoder->finish();
+    REQUIRE(commands != nullptr);
+    REQUIRE_CALL(queue->submit(commands));
+    REQUIRE_CALL(queue->waitOnHost());
+
+    ComPtr<ISlangBlob> result;
+    SubresourceLayout layout{};
+    REQUIRE_CALL(device->readTexture(target, 0, 0, result.writeRef(), &layout));
+    const auto* bytes = static_cast<const uint8_t*>(result->getBufferPointer());
+    const float expected[4] = {1.f, 0.f, 0.f, 1.f};
+    for (uint32_t y = 0; y < kHeight; ++y)
+    {
+        for (uint32_t x = 0; x < kWidth; ++x)
+        {
+            CAPTURE(x);
+            CAPTURE(y);
+            CHECK(std::memcmp(bytes + y * layout.rowPitch + x * sizeof(expected), expected, sizeof(expected)) == 0);
+        }
+    }
+}
+
 class BaseDrawTest
 {
 public:
@@ -745,6 +849,73 @@ GPU_TEST_CASE("input-layout-explicit-location-validation", Vulkan)
     elements[0].shaderLocation = device->getInfo().limits.maxVertexInputElements;
     CHECK(device->createInputLayout(desc, layout.writeRef()) == SLANG_E_INVALID_ARG);
     CHECK(layout == nullptr);
+}
+
+GPU_TEST_CASE("cmd-draw-pipeline-switch-unused-vertex-streams", D3D12 | Vulkan)
+{
+    auto target = makeTarget(device);
+    auto vertexBuffer = createVertexBuffer(device);
+    auto instanceBuffer = createInstanceBuffer(device);
+    ComPtr<IShaderProgram> program;
+    REQUIRE_CALL(loadAndLinkProgram(device, "test-dynamic-draw-state", {"vsMain", "psRed"}, program.writeRef()));
+    ComPtr<IRenderPipeline> pipelines[3];
+    for (uint32_t i = 0; i < 3; ++i)
+    {
+        ComPtr<IInputLayout> inputLayout;
+        if (i < 2)
+        {
+            VertexStreamDesc streams[] = {
+                {sizeof(Vertex), InputSlotClass::PerVertex, 0},
+                {sizeof(Instance), InputSlotClass::PerInstance, 1},
+            };
+            InputLayoutDesc inputDesc{};
+            inputDesc.vertexStreams = streams;
+            inputDesc.vertexStreamCount = 2 - i;
+            REQUIRE_CALL(device->createInputLayout(inputDesc, inputLayout.writeRef()));
+        }
+        ColorTargetDesc colorTarget{};
+        colorTarget.format = Format::RGBA32Float;
+        colorTarget.enableBlend = true;
+        colorTarget.color.srcFactor = BlendFactor::One;
+        colorTarget.color.dstFactor = BlendFactor::One;
+        colorTarget.alpha.srcFactor = BlendFactor::One;
+        colorTarget.alpha.dstFactor = BlendFactor::One;
+        RenderPipelineDesc desc{};
+        desc.program = program;
+        desc.inputLayout = inputLayout;
+        desc.targets = &colorTarget;
+        desc.targetCount = 1;
+        desc.rasterizer.cullMode = CullMode::None;
+        desc.depthStencil.depthTestEnable = false;
+        desc.depthStencil.depthWriteEnable = false;
+        REQUIRE_CALL(device->createRenderPipeline(desc, pipelines[i].writeRef()));
+    }
+    auto queue = device->getQueue(QueueType::Graphics);
+    auto encoder = queue->createCommandEncoder();
+    RenderPassColorAttachment color{};
+    color.view = target->getDefaultView();
+    color.loadOp = LoadOp::Clear;
+    color.storeOp = StoreOp::Store;
+    RenderPassDesc desc{.colorAttachments = &color, .colorAttachmentCount = 1};
+    auto pass = encoder->beginRenderPass(desc);
+    auto state = fullState();
+    state.vertexBuffers[0] = vertexBuffer;
+    state.vertexBuffers[1] = instanceBuffer;
+    state.vertexBufferCount = 2;
+    pass->setRenderState(state);
+    DrawArguments draw{};
+    draw.vertexCount = 3;
+    for (const auto& pipeline : pipelines)
+    {
+        REQUIRE(pass->bindPipeline(pipeline) != nullptr);
+        pass->draw(draw);
+    }
+    pass->end();
+    auto commands = encoder->finish();
+    REQUIRE(commands != nullptr);
+    REQUIRE_CALL(queue->submit(commands));
+    REQUIRE_CALL(queue->waitOnHost());
+    checkPixels(device, target, {3,0,0,3, 3,0,0,3, 3,0,0,3, 3,0,0,3, 3,0,0,3});
 }
 
 } // namespace dynamicDrawStateTests
