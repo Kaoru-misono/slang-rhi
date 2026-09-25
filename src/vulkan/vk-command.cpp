@@ -2454,6 +2454,16 @@ Result CommandQueueImpl::submit(const SubmitDesc& desc)
     submitInfo.signalSemaphoreCount = (uint32_t)signalSemaphores.size();
     submitInfo.pSignalSemaphores = signalSemaphores.data();
 
+    if (m_surfaceSync.fence != VK_NULL_HANDLE)
+    {
+        VkResult resetResult = m_api.vkResetFences(m_api.m_device, 1, &m_surfaceSync.fence);
+        if (resetResult != VK_SUCCESS)
+        {
+            queueLock.unlock();
+            reportVulkanError(resetResult, "vkResetFences", SLANG_RHI_SOURCE_LOCATION(), device);
+            return SLANG_FAIL;
+        }
+    }
     VkResult result = m_api.vkQueueSubmit(m_queue, 1, &submitInfo, m_surfaceSync.fence);
     if (result == VK_ERROR_OUT_OF_HOST_MEMORY || result == VK_ERROR_OUT_OF_DEVICE_MEMORY)
     {
