@@ -14,14 +14,6 @@ public:
     std::mutex* m_nativeQueueMutex = nullptr;
     uint32_t m_queueFamilyIndex;
 
-    // Set by the surface for synchronization.
-    struct
-    {
-        VkFence fence = VK_NULL_HANDLE;
-        VkSemaphore imageAvailableSemaphore = VK_NULL_HANDLE;
-        VkSemaphore renderFinishedSemaphore = VK_NULL_HANDLE;
-    } m_surfaceSync;
-
     VkSemaphore m_trackingSemaphore = VK_NULL_HANDLE;
 
     std::mutex m_mutex;
@@ -38,6 +30,9 @@ public:
     void retireCommandBuffer(CommandBufferImpl* commandBuffer);
     /// Marks the submitted recordings as consumed by `sequence` and retains them until it completes.
     void consumeCommandBuffers(const SubmitDesc& desc, uint64_t sequence);
+    /// Submits like `submit` and also signals the binary `semaphore` from the same batch.
+    /// Presentation waits on such a signal, which orders it after every earlier submission.
+    Result submitSignalingBinarySemaphore(const SubmitDesc& desc, VkSemaphore semaphore);
     virtual void shutdown() override;
     virtual void retireCompletedCommandBuffers(uint64_t completed) override;
     virtual void abandonCommandBuffersAfterDeviceLoss() override;

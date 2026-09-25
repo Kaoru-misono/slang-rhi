@@ -9,6 +9,7 @@
 #include "core/reverse-map.h"
 
 #include <algorithm>
+#include <exception>
 #include <vector>
 
 namespace rhi::vk {
@@ -64,7 +65,11 @@ SurfaceImpl::~SurfaceImpl()
 {
     auto& api = m_device->m_api;
 
-    destroySwapchain();
+    if (SLANG_FAILED(destroySwapchain()))
+    {
+        m_device->printError("Vulkan surface destruction could not establish completion.");
+        std::terminate();
+    }
 
     if (m_surface)
     {
@@ -353,73 +358,117 @@ Result SurfaceImpl::createSwapchain()
         m_textures.push_back(texture);
     }
 
-    m_frameData.resize(swapchainImageCount);
-    for (uint32_t i = 0; i < swapchainImageCount; ++i)
+    m_imageLayoutInitialized.resize(swapchainImageCount, false);
+    m_presentSemaphores.resize(swapchainImageCount, VK_NULL_HANDLE);
+    VkSemaphoreCreateInfo semaphoreCreateInfo = {VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
+    for (VkSemaphore& semaphore : m_presentSemaphores)
     {
-        FrameData& frameData = m_frameData[i];
-        // Create fence.
-        {
-            VkFenceCreateInfo createInfo = {VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
-            createInfo.flags = VK_FENCE_CREATE_SIGNALED_BIT;
-            SLANG_VK_RETURN_ON_FAIL_REPORT(
-                api.vkCreateFence(api.m_device, &createInfo, nullptr, &frameData.fence),
-                m_device
-            );
-        }
-
-        // Create semaphores.
-        {
-            VkSemaphoreCreateInfo createInfo = {VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
-            SLANG_VK_RETURN_ON_FAIL_REPORT(
-                api.vkCreateSemaphore(api.m_device, &createInfo, nullptr, &frameData.imageAvailableSemaphore),
-                m_device
-            );
-            SLANG_VK_RETURN_ON_FAIL_REPORT(
-                api.vkCreateSemaphore(api.m_device, &createInfo, nullptr, &frameData.renderFinishedSemaphore),
-                m_device
-            );
-        }
+        SLANG_VK_RETURN_ON_FAIL_REPORT(
+            api.vkCreateSemaphore(api.m_device, &semaphoreCreateInfo, nullptr, &semaphore),
+            m_device
+        );
     }
 
-    m_currentFrameIndex = 0;
+    VkFenceCreateInfo fenceCreateInfo = {VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
+    SLANG_VK_RETURN_ON_FAIL_REPORT(
+        api.vkCreateFence(api.m_device, &fenceCreateInfo, nullptr, &m_acquireFence),
+        m_device
+    );
 
     return SLANG_OK;
 }
 
-void SurfaceImpl::destroySwapchain()
+Result SurfaceImpl::destroySwapchain()
 {
+    m_configured = false;
+    // Every native object below is created after the swapchain.
+    if (m_swapchain == VK_NULL_HANDLE)
+        return SLANG_OK;
+
     auto& api = m_device->m_api;
     VkResult waitResult;
     {
         std::lock_guard<std::mutex> lock(*m_device->m_queue->m_nativeQueueMutex);
         waitResult = api.vkQueueWaitIdle(m_device->m_queue->m_queue);
     }
-    // Teardown proceeds regardless, but VK_ERROR_DEVICE_LOST must still mark the device lost.
     if (waitResult != VK_SUCCESS)
+    {
         reportVulkanError(waitResult, "vkQueueWaitIdle", SLANG_RHI_SOURCE_LOCATION(), m_device);
+        // Match the existing lost-device idle proof: loss permits destruction, not successful work.
+        if (waitResult != VK_ERROR_DEVICE_LOST)
+            return SLANG_FAIL;
+    }
+    if (m_acquireFencePending)
+    {
+        waitResult = api.vkWaitForFences(api.m_device, 1, &m_acquireFence, VK_TRUE, UINT64_MAX);
+        if (waitResult != VK_SUCCESS)
+        {
+            reportVulkanError(waitResult, "vkWaitForFences", SLANG_RHI_SOURCE_LOCATION(), m_device);
+            if (waitResult != VK_ERROR_DEVICE_LOST)
+                return SLANG_FAIL;
+        }
+        m_acquireFencePending = false;
+    }
+    // For vkQueueWaitIdle, a present counts as complete once the presentation engine holds its
+    // wait semaphore payloads, so the idle wait above also retires every present semaphore.
     m_textures.clear();
-    for (FrameData& frameData : m_frameData)
+    for (VkSemaphore semaphore : m_presentSemaphores)
     {
-        if (frameData.fence != VK_NULL_HANDLE)
-        {
-            api.vkDestroyFence(api.m_device, frameData.fence, nullptr);
-        }
-        if (frameData.imageAvailableSemaphore != VK_NULL_HANDLE)
-        {
-            api.vkDestroySemaphore(api.m_device, frameData.imageAvailableSemaphore, nullptr);
-        }
-        if (frameData.renderFinishedSemaphore != VK_NULL_HANDLE)
-        {
-            api.vkDestroySemaphore(api.m_device, frameData.renderFinishedSemaphore, nullptr);
-        }
+        if (semaphore != VK_NULL_HANDLE)
+            api.vkDestroySemaphore(api.m_device, semaphore, nullptr);
     }
-    m_frameData.clear();
-    m_currentTextureIndex = -1;
-    if (m_swapchain != VK_NULL_HANDLE)
+    m_presentSemaphores.clear();
+    m_imageLayoutInitialized.clear();
+    if (m_acquireFence != VK_NULL_HANDLE)
     {
-        api.vkDestroySwapchainKHR(api.m_device, m_swapchain, nullptr);
-        m_swapchain = VK_NULL_HANDLE;
+        api.vkDestroyFence(api.m_device, m_acquireFence, nullptr);
+        m_acquireFence = VK_NULL_HANDLE;
     }
+    m_presentSemaphoreSignaled = false;
+    m_currentTextureIndex = kNoImage;
+    api.vkDestroySwapchainKHR(api.m_device, m_swapchain, nullptr);
+    m_swapchain = VK_NULL_HANDLE;
+    return SLANG_OK;
+}
+
+Result SurfaceImpl::initializeImageLayout(TextureImpl* texture)
+{
+    auto& api = m_device->m_api;
+    CommandQueueImpl* queue = m_device->m_queue.get();
+    RefPtr<CommandBufferImpl> commandBuffer;
+    SLANG_RETURN_ON_FAIL(queue->getOrCreateCommandBuffer(commandBuffer.writeRef()));
+
+    VkCommandBufferBeginInfo beginInfo = {VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+    beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    SLANG_VK_RETURN_ON_FAIL_REPORT(api.vkBeginCommandBuffer(commandBuffer->m_commandBuffer, &beginInfo), m_device);
+
+    VkImageMemoryBarrier barrier = {VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
+    barrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    barrier.newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+    barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    barrier.image = texture->m_image;
+    barrier.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+    // Recordings leave the present state from ALL_COMMANDS, which chains after this transition.
+    api.vkCmdPipelineBarrier(
+        commandBuffer->m_commandBuffer,
+        VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+        VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+        0,
+        0,
+        nullptr,
+        0,
+        nullptr,
+        1,
+        &barrier
+    );
+    SLANG_VK_RETURN_ON_FAIL_REPORT(api.vkEndCommandBuffer(commandBuffer->m_commandBuffer), m_device);
+
+    ICommandBuffer* commandBuffers[] = {commandBuffer.get()};
+    SubmitDesc submitDesc = {};
+    submitDesc.commandBuffers = commandBuffers;
+    submitDesc.commandBufferCount = 1;
+    return queue->submit(submitDesc);
 }
 
 Result SurfaceImpl::configure(const SurfaceConfig& config)
@@ -477,9 +526,10 @@ Result SurfaceImpl::configure(const SurfaceConfig& config)
         return SLANG_E_INVALID_ARG;
     }
 
+    SLANG_RETURN_ON_FAIL(destroySwapchain());
+    if (m_device->m_deviceLost)
+        return SLANG_FAIL;
     setConfig(resolvedConfig);
-    m_configured = false;
-    destroySwapchain();
     SLANG_RETURN_ON_FAIL(createSwapchain());
     m_configured = true;
 
@@ -488,63 +538,64 @@ Result SurfaceImpl::configure(const SurfaceConfig& config)
 
 Result SurfaceImpl::unconfigure()
 {
-    if (!m_configured)
-    {
-        return SLANG_OK;
-    }
-
-    m_configured = false;
-    destroySwapchain();
-
-    return SLANG_OK;
+    return destroySwapchain();
 }
 
 Result SurfaceImpl::acquireNextImage(ITexture** outTexture)
 {
     *outTexture = nullptr;
 
-    if (!m_configured)
+    if (!m_configured || m_device->m_deviceLost)
     {
         return SLANG_FAIL;
     }
+    if (m_currentTextureIndex != kNoImage)
+        return SLANG_E_INVALID_ARG;
 
     auto& api = m_device->m_api;
 
-    FrameData& frameData = m_frameData[m_currentFrameIndex];
-    SLANG_VK_RETURN_ON_FAIL_REPORT(
-        api.vkWaitForFences(api.m_device, 1, &frameData.fence, VK_TRUE, UINT64_MAX),
-        m_device
-    );
-    SLANG_VK_RETURN_ON_FAIL_REPORT(api.vkResetFences(api.m_device, 1, &frameData.fence), m_device);
-
-    m_currentTextureIndex = -1;
-    VkResult result = api.vkAcquireNextImageKHR(
-        api.m_device,
-        m_swapchain,
-        UINT64_MAX,
-        frameData.imageAvailableSemaphore,
-        VK_NULL_HANDLE,
-        (uint32_t*)&m_currentTextureIndex
-    );
-
+    uint32_t imageIndex = 0;
+    VkResult result =
+        api.vkAcquireNextImageKHR(api.m_device, m_swapchain, UINT64_MAX, VK_NULL_HANDLE, m_acquireFence, &imageIndex);
     if (result != VK_SUCCESS && result != VK_SUBOPTIMAL_KHR)
     {
+        reportVulkanError(result, "vkAcquireNextImageKHR", SLANG_RHI_SOURCE_LOCATION(), m_device);
+        return SLANG_FAIL;
+    }
+    m_currentTextureIndex = imageIndex;
+    m_acquireFencePending = true;
+
+    // Waiting on the host until the presentation engine releases the image lets any later submission
+    // write it without an acquire semaphore. From here on, a failure leaves the image held and the
+    // surface unconfigured; teardown releases it.
+    result = api.vkWaitForFences(api.m_device, 1, &m_acquireFence, VK_TRUE, UINT64_MAX);
+    if (result != VK_SUCCESS)
+    {
+        reportVulkanError(result, "vkWaitForFences", SLANG_RHI_SOURCE_LOCATION(), m_device);
+        m_configured = false;
+        return SLANG_FAIL;
+    }
+    m_acquireFencePending = false;
+    result = api.vkResetFences(api.m_device, 1, &m_acquireFence);
+    if (result != VK_SUCCESS)
+    {
+        reportVulkanError(result, "vkResetFences", SLANG_RHI_SOURCE_LOCATION(), m_device);
+        m_configured = false;
         return SLANG_FAIL;
     }
 
-    // Setup queue's next submit for synchronization with the swapchain.
-    m_device->m_queue->m_surfaceSync.fence = frameData.fence;
-    m_device->m_queue->m_surfaceSync.imageAvailableSemaphore = frameData.imageAvailableSemaphore;
-    // Present consumes this semaphore outside the submitted command buffer's fence.
-    // Reuse it only when the same swapchain image is acquired again.
-    m_device->m_queue->m_surfaceSync.renderFinishedSemaphore =
-        m_frameData[m_currentTextureIndex].renderFinishedSemaphore;
+    TextureImpl* texture = m_textures[imageIndex];
+    if (!m_imageLayoutInitialized[imageIndex])
+    {
+        if (SLANG_FAILED(initializeImageLayout(texture)))
+        {
+            m_configured = false;
+            return SLANG_FAIL;
+        }
+        m_imageLayoutInitialized[imageIndex] = true;
+    }
 
-    // Mark texture to be in swapchain initial state.
-    // This is used by the first image barrier to transition the texture from the correct state.
-    m_textures[m_currentTextureIndex]->m_isSwapchainInitialState = true;
-
-    returnComPtr(outTexture, m_textures[m_currentTextureIndex]);
+    returnComPtr(outTexture, texture);
     return SLANG_OK;
 }
 
@@ -552,27 +603,24 @@ Result SurfaceImpl::present()
 {
     auto& api = m_device->m_api;
 
-    if (!m_configured)
+    if (!m_configured || m_device->m_deviceLost)
     {
         return SLANG_FAIL;
     }
-    if (m_currentTextureIndex == -1)
+    if (m_currentTextureIndex == kNoImage)
     {
         return SLANG_FAIL;
     }
 
-    m_currentFrameIndex = (m_currentFrameIndex + 1) % m_frameData.size();
-    VkSemaphore renderFinishedSemaphore = m_frameData[m_currentTextureIndex].renderFinishedSemaphore;
+    VkSemaphore presentSemaphore = m_presentSemaphores[m_currentTextureIndex];
 
-    // If no submit has taken place yet, then we need to submit a dummy command buffer to transition the texture to the
-    // correct state.
-    if (m_device->m_queue->m_surfaceSync.fence != VK_NULL_HANDLE)
+    // The surface issues the last submission before presenting. Its signal covers every earlier
+    // submission on the queue, however many of them wrote the image. A present that enqueued nothing
+    // leaves the semaphore signaled, so a retry must not signal it again.
+    if (!m_presentSemaphoreSignaled)
     {
-        ICommandQueue* queue = m_device->m_queue.get();
-        ComPtr<ICommandEncoder> encoder;
-        SLANG_RETURN_ON_FAIL(queue->createCommandEncoder(encoder.writeRef()));
-        encoder->setTextureState(m_textures[m_currentTextureIndex], ResourceState::General);
-        SLANG_RETURN_ON_FAIL(queue->submit(encoder->finish()));
+        SLANG_RETURN_ON_FAIL(m_device->m_queue->submitSignalingBinarySemaphore(SubmitDesc{}, presentSemaphore));
+        m_presentSemaphoreSignaled = true;
     }
 
     VkPresentInfoKHR presentInfo = {};
@@ -581,7 +629,7 @@ Result SurfaceImpl::present()
     presentInfo.pSwapchains = &m_swapchain;
     presentInfo.pImageIndices = &m_currentTextureIndex;
     presentInfo.waitSemaphoreCount = 1;
-    presentInfo.pWaitSemaphores = &renderFinishedSemaphore;
+    presentInfo.pWaitSemaphores = &presentSemaphore;
     VkResult result;
     {
         std::lock_guard<std::mutex> lock(*m_device->m_queue->m_nativeQueueMutex);
@@ -590,8 +638,12 @@ Result SurfaceImpl::present()
     if (result != VK_SUCCESS && result != VK_SUBOPTIMAL_KHR)
     {
         reportVulkanError(result, "vkQueuePresentKHR", SLANG_RHI_SOURCE_LOCATION(), m_device);
+        if (result != VK_ERROR_OUT_OF_HOST_MEMORY && result != VK_ERROR_OUT_OF_DEVICE_MEMORY)
+            m_configured = false;
         return SLANG_FAIL;
     }
+    m_presentSemaphoreSignaled = false;
+    m_currentTextureIndex = kNoImage;
     return SLANG_OK;
 }
 

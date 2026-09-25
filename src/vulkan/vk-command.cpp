@@ -2131,15 +2131,6 @@ void CommandRecorder::commitBarriers()
         barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
         barrier.image = texture->m_image;
         barrier.oldLayout = translateImageLayout(textureBarrier.stateBefore);
-        // This is a bit of a hack.
-        // When we first transition a swapchain image, it starts in VK_IMAGE_LAYOUT_UNDEFINED.
-        // The default state for swapchain images (automatically transitioned to at the end of a command encoding is
-        // VK_IMAGE_LAYOUT_PRESENT_SRC_KHR).
-        if (texture->m_isSwapchainInitialState)
-        {
-            barrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-            texture->m_isSwapchainInitialState = false;
-        }
         barrier.newLayout = translateImageLayout(textureBarrier.stateAfter);
         barrier.subresourceRange.aspectMask = getAspectMaskFromFormat(getVkFormat(texture->m_desc.format));
         barrier.subresourceRange.baseArrayLayer = textureBarrier.entireTexture ? 0 : textureBarrier.layer;
@@ -2391,6 +2382,11 @@ void CommandQueueImpl::consumeCommandBuffers(const SubmitDesc& desc, uint64_t se
 
 Result CommandQueueImpl::submit(const SubmitDesc& desc)
 {
+    return submitSignalingBinarySemaphore(desc, VK_NULL_HANDLE);
+}
+
+Result CommandQueueImpl::submitSignalingBinarySemaphore(const SubmitDesc& desc, VkSemaphore semaphore)
+{
     DeviceImpl* device = getDevice<DeviceImpl>();
     if (device->m_deviceLost)
         return SLANG_FAIL;
@@ -2415,8 +2411,6 @@ Result CommandQueueImpl::submit(const SubmitDesc& desc)
         waitValues.push_back(value);
         waitStages.push_back(stage);
     };
-    if (m_surfaceSync.imageAvailableSemaphore != VK_NULL_HANDLE)
-        addWait(m_surfaceSync.imageAvailableSemaphore, 0, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT);
     for (uint32_t i = 0; i < desc.waitFenceCount; ++i)
     {
         // ALL_COMMANDS_BIT establishes the full memory dependency cross-queue synchronization needs;
@@ -2433,8 +2427,8 @@ Result CommandQueueImpl::submit(const SubmitDesc& desc)
         signalValues.push_back(value);
     };
     uint64_t sequence = m_lastSubmittedID.load() + 1;
-    if (m_surfaceSync.renderFinishedSemaphore != VK_NULL_HANDLE)
-        addSignal(m_surfaceSync.renderFinishedSemaphore, 0);
+    if (semaphore != VK_NULL_HANDLE)
+        addSignal(semaphore, 0);
     addSignal(m_trackingSemaphore, sequence);
     for (uint32_t i = 0; i < desc.signalFenceCount; ++i)
         addSignal(checked_cast<FenceImpl*>(desc.signalFences[i])->m_semaphore, desc.signalFenceValues[i]);
@@ -2454,16 +2448,15 @@ Result CommandQueueImpl::submit(const SubmitDesc& desc)
     submitInfo.signalSemaphoreCount = (uint32_t)signalSemaphores.size();
     submitInfo.pSignalSemaphores = signalSemaphores.data();
 
-    VkResult result = m_api.vkQueueSubmit(m_queue, 1, &submitInfo, m_surfaceSync.fence);
+    VkResult result = m_api.vkQueueSubmit(m_queue, 1, &submitInfo, VK_NULL_HANDLE);
     if (result == VK_ERROR_OUT_OF_HOST_MEMORY || result == VK_ERROR_OUT_OF_DEVICE_MEMORY)
     {
         // The specification guarantees such a failure enqueued nothing, so the recordings and the
-        // surface semaphores stay untouched and the caller may retry on a still-usable device.
+        // binary semaphore stay untouched and the caller may retry on a still-usable device.
         queueLock.unlock();
         reportVulkanError(result, "vkQueueSubmit", SLANG_RHI_SOURCE_LOCATION(), device);
         return SLANG_FAIL;
     }
-    m_surfaceSync = {};
     consumeCommandBuffers(desc, sequence);
     if (result != VK_SUCCESS)
     {

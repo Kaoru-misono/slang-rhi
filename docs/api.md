@@ -364,6 +364,21 @@ as resource state barriers. On Vulkan, they use queue family ownership transfer 
 
 Note: CUDA's surface is implemented using a Vulkan swapchain.
 
+Frame contract:
+
+- Calls on one surface are externally serialized. At most one image is held: a second `acquireNextImage`
+  before `present` fails with `SLANG_E_INVALID_ARG` instead of blocking.
+- `acquireNextImage` returns once the image is free, waiting on the host if necessary. The image is in
+  `ResourceState::Present`; recordings that write it transition from and back to that state.
+- `present` orders presentation after every submission made earlier on the device's graphics queue, however many
+  there are and whichever thread made them. Recordings that write the image must be submitted before `present`.
+- A failed `present` keeps the image held. `configure`, `unconfigure`, and releasing the surface cancel a held
+  image; discard recordings that reference it first.
+- Vulkan: after an out-of-memory `present` nothing was enqueued and `present` may be retried; any other failure
+  leaves the surface unconfigured (`getConfig()` returns null) until `configure` succeeds. Cancellation waits for
+  the queue to go idle and fails without releasing native objects if completion cannot be established; releasing
+  the surface terminates the process in that case.
+
 ## `IAccelerationStructure` interface
 
 | API                   | CPU | CUDA | D3D11 | D3D12 | Vulkan | Metal | WGPU |

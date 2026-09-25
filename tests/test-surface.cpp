@@ -1,5 +1,6 @@
 #if SLANG_RHI_BUILD_TESTS_WITH_GLFW
 #include "testing.h"
+#include <cstring>
 
 #if SLANG_WINDOWS_FAMILY
 #define GLFW_EXPOSE_NATIVE_WIN32
@@ -394,5 +395,237 @@ GPU_TEST_CASE("surface-no-render", D3D11 | D3D12 | Vulkan | Metal | CUDA)
     }
     CHECK(device->hasFeature(Feature::Surface));
     testSurface<NoRenderSurfaceTest>(device);
+}
+
+struct ManualFrameSurfaceTest : NoRenderSurfaceTest
+{
+    SurfaceConfig config = {};
+
+    TextureUsage getSurfaceUsage() override { return TextureUsage::Present | TextureUsage::RenderTarget; }
+
+    void configureToWindow()
+    {
+        int width = 0;
+        int height = 0;
+        glfwGetFramebufferSize(window, &width, &height);
+        REQUIRE(width > 0);
+        REQUIRE(height > 0);
+
+        config.format = getSurfaceFormat();
+        config.usage = getSurfaceUsage();
+        config.width = static_cast<uint32_t>(width);
+        config.height = static_cast<uint32_t>(height);
+        config.vsync = false;
+        REQUIRE_CALL(surface->configure(config));
+    }
+
+    ComPtr<ITexture> acquire()
+    {
+        glfwPollEvents();
+        ComPtr<ITexture> texture;
+        REQUIRE_CALL(surface->acquireNextImage(texture.writeRef()));
+        REQUIRE(texture);
+        return texture;
+    }
+
+    void recordAndDiscard(ITexture* texture)
+    {
+        ComPtr<ICommandEncoder> encoder;
+        REQUIRE_CALL(queue->createCommandEncoder(encoder.writeRef()));
+        REQUIRE(encoder);
+        encoder->setTextureState(texture, ResourceState::RenderTarget);
+        ComPtr<ICommandBuffer> commandBuffer;
+        REQUIRE_CALL(encoder->finish(commandBuffer.writeRef()));
+        REQUIRE(commandBuffer);
+    }
+
+    void submitClear(ITexture* texture, float value)
+    {
+        ComPtr<ITextureView> view;
+        REQUIRE_CALL(device->createTextureView(texture, {}, view.writeRef()));
+
+        RenderPassColorAttachment colorAttachment = {};
+        colorAttachment.view = view;
+        colorAttachment.loadOp = LoadOp::Clear;
+        colorAttachment.clearValue[0] = value;
+        colorAttachment.clearValue[3] = 1.f;
+        RenderPassDesc renderPass = {};
+        renderPass.colorAttachments = &colorAttachment;
+        renderPass.colorAttachmentCount = 1;
+
+        ComPtr<ICommandEncoder> encoder;
+        REQUIRE_CALL(queue->createCommandEncoder(encoder.writeRef()));
+        encoder->beginRenderPass(renderPass)->end();
+        ComPtr<ICommandBuffer> commandBuffer;
+        REQUIRE_CALL(encoder->finish(commandBuffer.writeRef()));
+        REQUIRE_CALL(queue->submit(commandBuffer));
+    }
+
+    ComPtr<IBuffer> createBuffer(uint32_t value, BufferUsage usage, ResourceState defaultState)
+    {
+        BufferDesc desc = {};
+        desc.size = sizeof(value);
+        desc.usage = usage;
+        desc.defaultState = defaultState;
+        ComPtr<IBuffer> buffer;
+        REQUIRE_CALL(device->createBuffer(desc, &value, buffer.writeRef()));
+        REQUIRE(buffer);
+        return buffer;
+    }
+
+    void submitCopy(IBuffer* dst, IBuffer* src)
+    {
+        ComPtr<ICommandEncoder> encoder;
+        REQUIRE_CALL(queue->createCommandEncoder(encoder.writeRef()));
+        encoder->copyBuffer(dst, 0, src, 0, sizeof(uint32_t));
+        ComPtr<ICommandBuffer> commandBuffer;
+        REQUIRE_CALL(encoder->finish(commandBuffer.writeRef()));
+        REQUIRE_CALL(queue->submit(commandBuffer));
+    }
+
+    void checkBuffer(IBuffer* buffer, uint32_t expected)
+    {
+        ComPtr<ISlangBlob> blob;
+        REQUIRE_CALL(device->readBuffer(buffer, 0, sizeof(expected), blob.writeRef()));
+        REQUIRE(blob);
+        REQUIRE(blob->getBufferSize() == sizeof(expected));
+        CHECK(std::memcmp(blob->getBufferPointer(), &expected, sizeof(expected)) == 0);
+    }
+
+    void verifyPublicQueue(uint32_t pattern)
+    {
+        ComPtr<IBuffer> src = createBuffer(pattern, BufferUsage::CopySource, ResourceState::CopySource);
+        ComPtr<IBuffer> dst =
+            createBuffer(0, BufferUsage::CopyDestination | BufferUsage::CopySource, ResourceState::CopyDestination);
+        submitCopy(dst, src);
+        REQUIRE_CALL(queue->waitOnHost());
+        checkBuffer(dst, pattern);
+    }
+};
+
+struct AbandonAcquiredImageSurfaceTest : ManualFrameSurfaceTest
+{
+    void run()
+    {
+        configureToWindow();
+
+        // No unconfigure or queue wait before destroying the acquired surface.
+        acquire();
+        surface = nullptr;
+        verifyPublicQueue(0xA1B2C3D4u);
+
+        REQUIRE_CALL(device->createSurface(getWindowHandleFromGLFW(window), surface.writeRef()));
+        REQUIRE(surface);
+        REQUIRE_CALL(surface->configure(config));
+
+        recordAndDiscard(acquire());
+        REQUIRE_CALL(surface->unconfigure());
+        verifyPublicQueue(0xB2C3D4E5u);
+        REQUIRE_CALL(surface->configure(config));
+
+        // Reconfiguration itself must cancel the acquired image and discarded recording.
+        recordAndDiscard(acquire());
+        REQUIRE_CALL(surface->configure(config));
+        verifyPublicQueue(0xC3D4E5F6u);
+
+        // Present without any submission, reusing every image after recovery.
+        for (uint32_t i = 0; i < 6; ++i)
+        {
+            ComPtr<ITexture> texture = acquire();
+            CHECK(texture->getDesc().size.width == config.width);
+            CHECK(texture->getDesc().size.height == config.height);
+            REQUIRE_CALL(surface->present());
+        }
+        REQUIRE_CALL(queue->waitOnHost());
+    }
+};
+
+GPU_TEST_CASE("surface-abandon-acquired-image-recovery", D3D12 | Vulkan)
+{
+    CHECK(device->hasFeature(Feature::Surface));
+    testSurface<AbandonAcquiredImageSurfaceTest>(device);
+}
+
+// More frames than any swapchain has images, so every image is reused.
+static const uint32_t kManualFrameCount = 12;
+
+struct LaterSubmitSurfaceTest : ManualFrameSurfaceTest
+{
+    void run()
+    {
+        configureToWindow();
+        ComPtr<IBuffer> src = createBuffer(0xD4E5F6A7u, BufferUsage::CopySource, ResourceState::CopySource);
+        ComPtr<IBuffer> dst =
+            createBuffer(0, BufferUsage::CopyDestination | BufferUsage::CopySource, ResourceState::CopyDestination);
+
+        for (uint32_t i = 0; i < kManualFrameCount; ++i)
+        {
+            ComPtr<ITexture> texture = acquire();
+            // The back buffer is written only after an unrelated submission; presentation must
+            // still wait for that later write.
+            submitCopy(dst, src);
+            submitClear(texture, float(i) / kManualFrameCount);
+            REQUIRE_CALL(surface->present());
+        }
+        REQUIRE_CALL(queue->waitOnHost());
+        checkBuffer(dst, 0xD4E5F6A7u);
+    }
+};
+
+GPU_TEST_CASE("surface-present-follows-later-submits", D3D12 | Vulkan)
+{
+    CHECK(device->hasFeature(Feature::Surface));
+    testSurface<LaterSubmitSurfaceTest>(device);
+}
+
+struct DiscardedRecordingSurfaceTest : ManualFrameSurfaceTest
+{
+    void run()
+    {
+        configureToWindow();
+        for (uint32_t i = 0; i < kManualFrameCount; ++i)
+        {
+            ComPtr<ITexture> texture = acquire();
+            recordAndDiscard(texture);
+            REQUIRE_CALL(surface->present());
+        }
+        REQUIRE_CALL(queue->waitOnHost());
+    }
+};
+
+GPU_TEST_CASE("surface-present-after-discarded-recording", D3D12 | Vulkan)
+{
+    CHECK(device->hasFeature(Feature::Surface));
+    testSurface<DiscardedRecordingSurfaceTest>(device);
+}
+
+struct SecondAcquireSurfaceTest : ManualFrameSurfaceTest
+{
+    void run()
+    {
+        configureToWindow();
+        ComPtr<ITexture> texture = acquire();
+        {
+            // Debug builds reject this in the debug layer; the backends return SLANG_E_INVALID_ARG.
+            ExpectedErrorScope expectedErrors;
+            ComPtr<ITexture> second;
+            CHECK(SLANG_FAILED(surface->acquireNextImage(second.writeRef())));
+            CHECK(!second);
+        }
+        REQUIRE_CALL(surface->present());
+
+        for (uint32_t i = 0; i < kManualFrameCount; ++i)
+        {
+            acquire();
+            REQUIRE_CALL(surface->present());
+        }
+        REQUIRE_CALL(queue->waitOnHost());
+    }
+};
+
+GPU_TEST_CASE("surface-second-acquire-fails", D3D12 | Vulkan)
+{
+    CHECK(device->hasFeature(Feature::Surface));
+    testSurface<SecondAcquireSurfaceTest>(device);
 }
 #endif // SLANG_RHI_BUILD_TESTS_WITH_GLFW
