@@ -327,6 +327,18 @@ as resource state barriers. On Vulkan, they use queue family ownership transfer 
 
 Note: CUDA's surface is implemented using a Vulkan swapchain.
 
+Frame contract:
+
+- Serialize calls on one surface; at most one acquired image is held.
+- On Vulkan, acquisition synchronizes with the next graphics-queue submit.
+  Only one acquisition may await that submit on the graphics queue.
+  Submit the final image-writing command buffer once, then call `present`.
+  Do not discard that submission or write the image in later submissions.
+- `present` supplies a transition-only submission when none was submitted.
+- Failure closure must consume the acquisition before destroying synchronization
+  objects. Discard unsubmitted image recordings before `configure` / `unconfigure`.
+- A failed present requires reconfiguration; typed out-of-date status reports resizing.
+
 ## `IAccelerationStructure` interface
 
 | API                   | CPU | CUDA | D3D11 | D3D12 | Vulkan | Metal | WGPU |

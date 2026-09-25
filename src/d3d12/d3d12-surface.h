@@ -15,6 +15,9 @@ public:
     ComPtr<ID3D12Fence> m_fence;
     short_vector<HANDLE> m_frameEvents;
     uint64_t fenceValue = 0;
+    bool m_imageAcquired = false;
+
+    ~SurfaceImpl();
 
     Result init(DeviceImpl* device, WindowHandle windowHandle);
 

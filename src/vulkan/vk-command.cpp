@@ -2435,7 +2435,7 @@ Result CommandQueueImpl::submit(const SubmitDesc& desc)
         waitStages.push_back(stage);
     };
     if (m_surfaceSync.imageAvailableSemaphore != VK_NULL_HANDLE)
-        addWait(m_surfaceSync.imageAvailableSemaphore, 0, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT);
+        addWait(m_surfaceSync.imageAvailableSemaphore, 0, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
     for (uint32_t i = 0; i < desc.waitFenceCount; ++i)
     {
         // ALL_COMMANDS_BIT establishes the full memory dependency cross-queue synchronization needs;

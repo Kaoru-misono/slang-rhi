@@ -9,6 +9,7 @@
 #include "core/reverse-map.h"
 
 #include <algorithm>
+#include <exception>
 #include <vector>
 
 namespace rhi::vk {
@@ -64,7 +65,11 @@ SurfaceImpl::~SurfaceImpl()
 {
     auto& api = m_device->m_api;
 
-    destroySwapchain();
+    if (SLANG_FAILED(destroySwapchain()))
+    {
+        m_device->printError("Vulkan surface destruction could not establish completion.");
+        std::terminate();
+    }
 
     if (m_surface)
     {
@@ -386,40 +391,48 @@ Result SurfaceImpl::createSwapchain()
     return SLANG_OK;
 }
 
-void SurfaceImpl::destroySwapchain()
+Result SurfaceImpl::destroySwapchain()
 {
+    m_configured = false;
+    if (m_swapchain == VK_NULL_HANDLE)
+        return SLANG_OK;
+
     auto& api = m_device->m_api;
+    if (m_currentTextureIndex != uint32_t(-1) &&
+        m_device->m_queue->m_surfaceSync.imageAvailableSemaphore ==
+            m_frameData[m_currentFrameIndex].imageAvailableSemaphore)
+    {
+        if (!m_device->m_deviceLost && SLANG_FAILED(m_device->m_queue->submit(SubmitDesc{})) &&
+            !m_device->m_deviceLost)
+            return SLANG_FAIL;
+        m_device->m_queue->m_surfaceSync = {};
+    }
     VkResult waitResult;
     {
         std::lock_guard<std::mutex> lock(*m_device->m_queue->m_nativeQueueMutex);
         waitResult = api.vkQueueWaitIdle(m_device->m_queue->m_queue);
     }
-    // Teardown proceeds regardless, but VK_ERROR_DEVICE_LOST must still mark the device lost.
     if (waitResult != VK_SUCCESS)
+    {
         reportVulkanError(waitResult, "vkQueueWaitIdle", SLANG_RHI_SOURCE_LOCATION(), m_device);
+        if (waitResult != VK_ERROR_DEVICE_LOST)
+            return SLANG_FAIL;
+    }
     m_textures.clear();
     for (FrameData& frameData : m_frameData)
     {
         if (frameData.fence != VK_NULL_HANDLE)
-        {
             api.vkDestroyFence(api.m_device, frameData.fence, nullptr);
-        }
         if (frameData.imageAvailableSemaphore != VK_NULL_HANDLE)
-        {
             api.vkDestroySemaphore(api.m_device, frameData.imageAvailableSemaphore, nullptr);
-        }
         if (frameData.renderFinishedSemaphore != VK_NULL_HANDLE)
-        {
             api.vkDestroySemaphore(api.m_device, frameData.renderFinishedSemaphore, nullptr);
-        }
     }
     m_frameData.clear();
     m_currentTextureIndex = -1;
-    if (m_swapchain != VK_NULL_HANDLE)
-    {
-        api.vkDestroySwapchainKHR(api.m_device, m_swapchain, nullptr);
-        m_swapchain = VK_NULL_HANDLE;
-    }
+    api.vkDestroySwapchainKHR(api.m_device, m_swapchain, nullptr);
+    m_swapchain = VK_NULL_HANDLE;
+    return SLANG_OK;
 }
 
 Result SurfaceImpl::configure(const SurfaceConfig& config)
@@ -477,9 +490,10 @@ Result SurfaceImpl::configure(const SurfaceConfig& config)
         return SLANG_E_INVALID_ARG;
     }
 
+    SLANG_RETURN_ON_FAIL(destroySwapchain());
+    if (m_device->m_deviceLost)
+        return SLANG_FAIL;
     setConfig(resolvedConfig);
-    m_configured = false;
-    destroySwapchain();
     SLANG_RETURN_ON_FAIL(createSwapchain());
     m_configured = true;
 
@@ -488,27 +502,23 @@ Result SurfaceImpl::configure(const SurfaceConfig& config)
 
 Result SurfaceImpl::unconfigure()
 {
-    if (!m_configured)
-    {
-        return SLANG_OK;
-    }
-
-    m_configured = false;
-    destroySwapchain();
-
-    return SLANG_OK;
+    return destroySwapchain();
 }
 
 Result SurfaceImpl::acquireNextImage(ITexture** outTexture)
 {
     *outTexture = nullptr;
 
-    if (!m_configured)
+    if (!m_configured || m_device->m_deviceLost)
     {
         return SLANG_FAIL;
     }
 
     auto& api = m_device->m_api;
+
+    if (m_currentTextureIndex != uint32_t(-1) ||
+        m_device->m_queue->m_surfaceSync.imageAvailableSemaphore != VK_NULL_HANDLE)
+        return SLANG_E_INVALID_ARG;
 
     FrameData& frameData = m_frameData[m_currentFrameIndex];
     SLANG_VK_RETURN_ON_FAIL_REPORT(
@@ -532,15 +542,15 @@ Result SurfaceImpl::acquireNextImage(ITexture** outTexture)
 
     // An out-of-date swapchain does not acquire an image or submit work. Keep the fence
     // signaled in that case so another acquisition before reconfiguration cannot hang.
-    SLANG_VK_RETURN_ON_FAIL_REPORT(api.vkResetFences(api.m_device, 1, &frameData.fence), m_device);
-
     // Setup queue's next submit for synchronization with the swapchain.
-    m_device->m_queue->m_surfaceSync.fence = frameData.fence;
     m_device->m_queue->m_surfaceSync.imageAvailableSemaphore = frameData.imageAvailableSemaphore;
     // Present consumes this semaphore outside the submitted command buffer's fence.
     // Reuse it only when the same swapchain image is acquired again.
     m_device->m_queue->m_surfaceSync.renderFinishedSemaphore =
         m_frameData[m_currentTextureIndex].renderFinishedSemaphore;
+
+    SLANG_VK_RETURN_ON_FAIL_REPORT(api.vkResetFences(api.m_device, 1, &frameData.fence), m_device);
+    m_device->m_queue->m_surfaceSync.fence = frameData.fence;
 
     // Mark texture to be in swapchain initial state.
     // This is used by the first image barrier to transition the texture from the correct state.
@@ -554,7 +564,7 @@ Result SurfaceImpl::present()
 {
     auto& api = m_device->m_api;
 
-    if (!m_configured)
+    if (!m_configured || m_device->m_deviceLost)
     {
         return SLANG_FAIL;
     }
@@ -563,7 +573,6 @@ Result SurfaceImpl::present()
         return SLANG_FAIL;
     }
 
-    m_currentFrameIndex = (m_currentFrameIndex + 1) % m_frameData.size();
     VkSemaphore renderFinishedSemaphore = m_frameData[m_currentTextureIndex].renderFinishedSemaphore;
 
     // If no submit has taken place yet, then we need to submit a dummy command buffer to transition the texture to the
@@ -589,12 +598,18 @@ Result SurfaceImpl::present()
         std::lock_guard<std::mutex> lock(*m_device->m_queue->m_nativeQueueMutex);
         result = api.vkQueuePresentKHR(m_device->m_queue->m_queue, &presentInfo);
     }
+    m_currentFrameIndex = (m_currentFrameIndex + 1) % m_frameData.size();
+    m_currentTextureIndex = -1;
     // A window may resize between acquisition and presentation. Drop this frame and let
     // the application reconfigure the surface when it processes the resize event.
     if (result == VK_ERROR_OUT_OF_DATE_KHR)
+    {
+        m_configured = false;
         return SLANG_OK;
+    }
     if (result != VK_SUCCESS && result != VK_SUBOPTIMAL_KHR)
     {
+        m_configured = false;
         reportVulkanError(result, "vkQueuePresentKHR", SLANG_RHI_SOURCE_LOCATION(), m_device);
         return SLANG_FAIL;
     }
