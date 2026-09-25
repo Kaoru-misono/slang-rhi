@@ -54,9 +54,19 @@ void SurfaceImpl::createSwapchainTextures(uint32_t count)
     m_swapChain->QueryInterface(m_swapChain3.writeRef());
 }
 
+SurfaceImpl::~SurfaceImpl()
+{
+    // A present may still have an event registered for this value; the handle must outlive it.
+    if (m_fence && m_fence->GetCompletedValue() < fenceValue)
+        m_fence->SetEventOnCompletion(fenceValue, nullptr);
+    for (HANDLE event : m_frameEvents)
+        CloseHandle(event);
+}
+
 Result SurfaceImpl::configure(const SurfaceConfig& config)
 {
     m_swapChain3.setNull();
+    m_imageAcquired = false;
     for (auto event : m_frameEvents)
         SetEvent(event);
     return D3DSurface::configure(config);
@@ -64,19 +74,26 @@ Result SurfaceImpl::configure(const SurfaceConfig& config)
 
 Result SurfaceImpl::unconfigure()
 {
+    m_imageAcquired = false;
     return D3DSurface::unconfigure();
 }
 
 Result SurfaceImpl::acquireNextImage(ITexture** outTexture)
 {
+    *outTexture = nullptr;
     if (!m_configured)
     {
-        *outTexture = nullptr;
         return SLANG_FAIL;
+    }
+    // Only present or reconfiguration re-arms the frame event, so a second wait would never return.
+    if (m_imageAcquired)
+    {
+        return SLANG_E_INVALID_ARG;
     }
     auto result = (int)m_swapChain3->GetCurrentBackBufferIndex();
     WaitForSingleObject(m_frameEvents[result], INFINITE);
     ResetEvent(m_frameEvents[result]);
+    m_imageAcquired = true;
     returnComPtr(outTexture, m_textures[result]);
     return SLANG_OK;
 }
@@ -92,6 +109,7 @@ Result SurfaceImpl::present()
         m_device
     );
     SLANG_RETURN_ON_FAIL(D3DSurface::present());
+    m_imageAcquired = false;
     fenceValue++;
     m_queue->Signal(m_fence, fenceValue);
     return SLANG_OK;
