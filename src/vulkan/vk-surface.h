@@ -21,11 +21,11 @@ public:
     struct FrameData
     {
         // Fence to signal when the rendering to the swapchain image is finished.
-        VkFence fence;
+        VkFence fence = VK_NULL_HANDLE;
         // Semaphore to signal when the swapchain image is available.
-        VkSemaphore imageAvailableSemaphore;
+        VkSemaphore imageAvailableSemaphore = VK_NULL_HANDLE;
         // Semaphore to signal when the rendering to the swapchain image is finished.
-        VkSemaphore renderFinishedSemaphore;
+        VkSemaphore renderFinishedSemaphore = VK_NULL_HANDLE;
     };
     short_vector<FrameData> m_frameData;
 
@@ -40,7 +40,7 @@ public:
 
     Result init(DeviceImpl* device, WindowHandle windowHandle);
     Result createSwapchain();
-    void destroySwapchain();
+    Result destroySwapchain();
 
     virtual SLANG_NO_THROW Result SLANG_MCALL configure(const SurfaceConfig& config) override;
     virtual SLANG_NO_THROW Result SLANG_MCALL unconfigure() override;
