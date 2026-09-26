@@ -63,7 +63,6 @@ DebugRenderPassEncoder::DebugRenderPassEncoder(DebugContext* ctx, DebugCommandEn
     : UnownedDebugObject<IRenderPassEncoder>(ctx)
     , m_commandEncoder(commandEncoder)
 {
-    m_rootObject = new DebugRootShaderObject(ctx);
 }
 
 IShaderObject* DebugRenderPassEncoder::bindPipeline(IRenderPipeline* pipeline)
@@ -79,6 +78,8 @@ IShaderObject* DebugRenderPassEncoder::bindPipeline(IRenderPipeline* pipeline)
         return nullptr;
     }
 
+    if (!m_rootObject)
+        m_rootObject = new DebugRootShaderObject(ctx);
     m_rootObject->reset();
     m_rootObject->baseObject = baseObject->bindPipeline(pipeline);
     m_pipelineBound = true;
@@ -351,7 +352,6 @@ DebugComputePassEncoder::DebugComputePassEncoder(DebugContext* ctx, DebugCommand
     : UnownedDebugObject<IComputePassEncoder>(ctx)
     , m_commandEncoder(commandEncoder)
 {
-    m_rootObject = new DebugRootShaderObject(ctx);
 }
 
 IShaderObject* DebugComputePassEncoder::bindPipeline(IComputePipeline* pipeline)
@@ -367,6 +367,8 @@ IShaderObject* DebugComputePassEncoder::bindPipeline(IComputePipeline* pipeline)
         return nullptr;
     }
 
+    if (!m_rootObject)
+        m_rootObject = new DebugRootShaderObject(ctx);
     m_rootObject->reset();
     m_rootObject->baseObject = baseObject->bindPipeline(pipeline);
     m_pipelineBound = true;
@@ -502,7 +504,6 @@ DebugRayTracingPassEncoder::DebugRayTracingPassEncoder(DebugContext* ctx, DebugC
     : UnownedDebugObject<IRayTracingPassEncoder>(ctx)
     , m_commandEncoder(commandEncoder)
 {
-    m_rootObject = new DebugRootShaderObject(ctx);
 }
 
 IShaderObject* DebugRayTracingPassEncoder::bindPipeline(IRayTracingPipeline* pipeline, IShaderTable* shaderTable)
@@ -523,6 +524,8 @@ IShaderObject* DebugRayTracingPassEncoder::bindPipeline(IRayTracingPipeline* pip
         return nullptr;
     }
 
+    if (!m_rootObject)
+        m_rootObject = new DebugRootShaderObject(ctx);
     m_rootObject->reset();
     m_rootObject->baseObject = baseObject->bindPipeline(pipeline, shaderTable);
     m_pipelineBound = true;

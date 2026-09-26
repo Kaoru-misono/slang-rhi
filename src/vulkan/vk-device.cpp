@@ -2296,6 +2296,7 @@ Result DeviceImpl::createAccelerationStructure(
     IAccelerationStructure** outAccelerationStructure
 )
 {
+    SLANG_RETURN_ON_FAIL(AccelerationStructure::validateDependencies(this, desc));
     if (!m_api.vkCreateAccelerationStructureKHR)
     {
         return SLANG_E_NOT_AVAILABLE;
