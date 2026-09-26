@@ -25,6 +25,7 @@ AccelerationStructureImpl::~AccelerationStructureImpl()
 void AccelerationStructureImpl::deleteThis()
 {
     m_buffer.setNull();
+    releaseDependencies();
     getDevice<DeviceImpl>()->deferDelete(this);
 }
 

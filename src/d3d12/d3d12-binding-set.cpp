@@ -76,7 +76,11 @@ BindingSetImpl::~BindingSetImpl()
 
 void BindingSetImpl::deleteThis()
 {
-    // A set bound by an in-flight command buffer must outlive the submission.
+    // Command buffers track the set until they retire, so no pending submission reads it here. A deferred
+    // set must not keep the device alive through its layout and resources; each defers its own destruction.
+    m_accesses.clear();
+    m_bindings.clear();
+    m_layout.setNull();
     getDevice<DeviceImpl>()->deferDelete(this);
 }
 

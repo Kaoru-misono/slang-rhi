@@ -1,4 +1,4 @@
-#include "testing.h"
+#include "test-compute-trivial.h"
 
 using namespace rhi;
 using namespace rhi::testing;
@@ -23,13 +23,7 @@ GPU_TEST_CASE("compute-queue-dispatch", D3D12 | Vulkan)
     auto queue = device->getQueue(QueueType::Compute);
     REQUIRE(queue != nullptr);
 
-    ComPtr<IShaderProgram> shaderProgram;
-    REQUIRE_CALL(loadProgram(device, "test-compute-trivial", "computeMain", shaderProgram.writeRef()));
-
-    ComputePipelineDesc pipelineDesc = {};
-    pipelineDesc.program = shaderProgram.get();
-    ComPtr<IComputePipeline> pipeline;
-    REQUIRE_CALL(device->createComputePipeline(pipelineDesc, pipeline.writeRef()));
+    auto pipeline = trivialCompute::createPipeline(device);
 
     const int numberCount = 4;
     float initialData[] = {0.0f, 1.0f, 2.0f, 3.0f};
@@ -66,11 +60,8 @@ GPU_TEST_CASE("compute-queue-dispatch", D3D12 | Vulkan)
         commandEncoder->copyBuffer(buffer, 0, uploadBuffer, 0, bufferDesc.size);
 
         auto passEncoder = commandEncoder->beginComputePass();
-        auto rootObject = passEncoder->bindPipeline(pipeline);
-        ShaderCursor shaderCursor(rootObject);
-        shaderCursor["buffer"].setBinding(buffer);
         float value = 10.f;
-        shaderCursor["value"].setData(value);
+        trivialCompute::bindBuffer(device, passEncoder, pipeline, buffer, value);
         passEncoder->dispatchCompute(1, 1, 1);
         passEncoder->end();
 
@@ -95,13 +86,7 @@ GPU_TEST_CASE("compute-queue-both-queues", D3D12 | Vulkan)
     REQUIRE(graphicsQueue != nullptr);
     REQUIRE(computeQueue != nullptr);
 
-    ComPtr<IShaderProgram> shaderProgram;
-    REQUIRE_CALL(loadProgram(device, "test-compute-trivial", "computeMain", shaderProgram.writeRef()));
-
-    ComputePipelineDesc pipelineDesc = {};
-    pipelineDesc.program = shaderProgram.get();
-    ComPtr<IComputePipeline> pipeline;
-    REQUIRE_CALL(device->createComputePipeline(pipelineDesc, pipeline.writeRef()));
+    auto pipeline = trivialCompute::createPipeline(device);
 
     const int numberCount = 4;
     float initialDataA[] = {0.0f, 1.0f, 2.0f, 3.0f};
@@ -141,11 +126,8 @@ GPU_TEST_CASE("compute-queue-both-queues", D3D12 | Vulkan)
     {
         auto commandEncoder = graphicsQueue->createCommandEncoder();
         auto passEncoder = commandEncoder->beginComputePass();
-        auto rootObject = passEncoder->bindPipeline(pipeline);
-        ShaderCursor shaderCursor(rootObject);
-        shaderCursor["buffer"].setBinding(bufferA);
         float value = 10.f;
-        shaderCursor["value"].setData(value);
+        trivialCompute::bindBuffer(device, passEncoder, pipeline, bufferA, value);
         passEncoder->dispatchCompute(1, 1, 1);
         passEncoder->end();
         graphicsQueue->submit(commandEncoder->finish());
@@ -156,11 +138,8 @@ GPU_TEST_CASE("compute-queue-both-queues", D3D12 | Vulkan)
         auto commandEncoder = computeQueue->createCommandEncoder();
         commandEncoder->copyBuffer(bufferB, 0, bufferBUpload, 0, bufferDesc.size);
         auto passEncoder = commandEncoder->beginComputePass();
-        auto rootObject = passEncoder->bindPipeline(pipeline);
-        ShaderCursor shaderCursor(rootObject);
-        shaderCursor["buffer"].setBinding(bufferB);
         float value = 5.f;
-        shaderCursor["value"].setData(value);
+        trivialCompute::bindBuffer(device, passEncoder, pipeline, bufferB, value);
         passEncoder->dispatchCompute(1, 1, 1);
         passEncoder->end();
         commandEncoder->copyBuffer(bufferBReadback, 0, bufferB, 0, bufferDesc.size);
@@ -185,18 +164,8 @@ GPU_TEST_CASE("compute-queue-texture-read", Vulkan)
     REQUIRE(graphicsQueue != nullptr);
     REQUIRE(queue != nullptr);
 
-    ComPtr<IShaderProgram> writeProgram;
-    REQUIRE_CALL(loadProgram(device, "test-compute-trivial", "writeTexture", writeProgram.writeRef()));
-    ComPtr<IShaderProgram> readProgram;
-    REQUIRE_CALL(loadProgram(device, "test-compute-trivial", "readTexture", readProgram.writeRef()));
-
-    ComputePipelineDesc pipelineDesc = {};
-    pipelineDesc.program = writeProgram.get();
-    ComPtr<IComputePipeline> writePipeline;
-    REQUIRE_CALL(device->createComputePipeline(pipelineDesc, writePipeline.writeRef()));
-    pipelineDesc.program = readProgram.get();
-    ComPtr<IComputePipeline> readPipeline;
-    REQUIRE_CALL(device->createComputePipeline(pipelineDesc, readPipeline.writeRef()));
+    auto writePipeline = trivialCompute::createPipeline(device, "writeTexture");
+    auto readPipeline = trivialCompute::createPipeline(device, "readTexture");
 
     constexpr float textureData = 42.0f;
     TextureDesc textureDesc = {};
@@ -256,16 +225,14 @@ GPU_TEST_CASE("compute-queue-texture-read", Vulkan)
         QueueType::Graphics
     );
     auto writePass = commandEncoder->beginComputePass();
-    auto writeRoot = writePass->bindPipeline(writePipeline);
-    ShaderCursor(writeRoot)["outputTexture"].setBinding(inputTexture);
+    trivialCompute::bind(device, writePass, writePipeline,
+        {{.slot = 0, .resource = inputTexture->getDefaultView()}});
     writePass->dispatchCompute(1, 1, 1);
     writePass->end();
 
     auto readPass = commandEncoder->beginComputePass();
-    auto readRoot = readPass->bindPipeline(readPipeline);
-    ShaderCursor readCursor(readRoot);
-    readCursor["inputTexture"].setBinding(inputTexture);
-    readCursor["outputBuffer"].setBinding(outputBuffer);
+    trivialCompute::bind(device, readPass, readPipeline,
+        {{.slot = 0, .resource = inputTexture->getDefaultView()}, {.slot = 1, .resource = outputBuffer}});
     readPass->dispatchCompute(1, 1, 1);
     readPass->end();
     commandEncoder->copyBuffer(outputReadback, 0, outputBuffer, 0, sizeof(float));

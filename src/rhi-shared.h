@@ -256,6 +256,11 @@ public:
     AccelerationStructureDesc m_desc;
     StructHolder m_descHolder;
 
+protected:
+    /// Drops the retained bottom-level structures before a deferred delete: they hold the device
+    /// strongly, and each defers its own destruction past the submissions pending at this point.
+    void releaseDependencies() { m_dependencies.clear(); }
+
 private:
     std::vector<RefPtr<AccelerationStructure>> m_dependencies;
 };
