@@ -206,6 +206,7 @@ ShaderTableImpl::PipelineData* ShaderTableImpl::getPipelineData(RayTracingPipeli
     pipelineData->missTableSize = missTableSize;
     pipelineData->hitTableSize = hitTableSize;
     pipelineData->callableTableSize = callableTableSize;
+    pipelineData->pipeline = pipeline;
 
     m_pipelineData.emplace(pipeline, pipelineData);
     return pipelineData.get();

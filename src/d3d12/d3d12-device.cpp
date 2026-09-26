@@ -2156,6 +2156,7 @@ Result DeviceImpl::createAccelerationStructure(
     IAccelerationStructure** outAccelerationStructure
 )
 {
+    SLANG_RETURN_ON_FAIL(AccelerationStructure::validateDependencies(this, desc));
     RefPtr<AccelerationStructureImpl> result = new AccelerationStructureImpl(this, desc);
     BufferDesc bufferDesc = {};
     bufferDesc.size = desc.size;

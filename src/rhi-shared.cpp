@@ -381,11 +381,37 @@ IAccelerationStructure* AccelerationStructure::getInterface(const Guid& guid)
     return nullptr;
 }
 
+Result AccelerationStructure::validateDependencies(Device* device, const AccelerationStructureDesc& desc)
+{
+    const auto* dependencies = findStructInChain<AccelerationStructureDependenciesDesc>(desc.next);
+    if (!dependencies)
+        return SLANG_OK;
+    if (desc.kind != AccelerationStructureKind::TopLevel || dependencies->structureCount == 0 ||
+        !dependencies->structures)
+        return SLANG_E_INVALID_ARG;
+    for (uint32_t i = 0; i < dependencies->structureCount; ++i)
+    {
+        if (!dependencies->structures[i])
+            return SLANG_E_INVALID_ARG;
+        auto* dependency = checked_cast<AccelerationStructure*>(dependencies->structures[i]);
+        if (dependency->getDevice() != device || dependency->getDesc().kind != AccelerationStructureKind::BottomLevel)
+            return SLANG_E_INVALID_ARG;
+    }
+    return SLANG_OK;
+}
+
 AccelerationStructure::AccelerationStructure(Device* device, const AccelerationStructureDesc& desc)
     : Resource(device)
     , m_desc(desc)
 {
+    m_desc.next = nullptr;
     m_descHolder.holdString(m_desc.label);
+    if (const auto* dependencies = findStructInChain<AccelerationStructureDependenciesDesc>(desc.next))
+    {
+        m_dependencies.reserve(dependencies->structureCount);
+        for (uint32_t i = 0; i < dependencies->structureCount; ++i)
+            m_dependencies.push_back(checked_cast<AccelerationStructure*>(dependencies->structures[i]));
+    }
 }
 
 AccelerationStructureHandle AccelerationStructure::getHandle()

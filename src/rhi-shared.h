@@ -269,6 +269,7 @@ public:
 
 public:
     AccelerationStructure(Device* device, const AccelerationStructureDesc& desc);
+    static Result validateDependencies(Device* device, const AccelerationStructureDesc& desc);
 
     // IAccelerationStructure interface
     virtual SLANG_NO_THROW const AccelerationStructureDesc& SLANG_MCALL getDesc() override { return m_desc; }
@@ -278,6 +279,14 @@ public:
 public:
     AccelerationStructureDesc m_desc;
     StructHolder m_descHolder;
+
+protected:
+    /// Drops the retained bottom-level structures before a deferred delete: they hold the device
+    /// strongly, and each defers its own destruction past the submissions pending at this point.
+    void releaseDependencies() { m_dependencies.clear(); }
+
+private:
+    std::vector<InternalRefPtr<AccelerationStructure>> m_dependencies;
 };
 
 class Micromap : public IMicromap, public Resource
