@@ -18,12 +18,12 @@ GPU_TEST_CASE("compute-queue-unsupported", CPU | D3D11)
 }
 
 // Test dispatching compute work on a compute queue.
-GPU_TEST_CASE("compute-queue-dispatch", D3D12 | Vulkan)
+static void runComputeQueueDispatch(IDevice* device, trivialCompute::BindingModel model)
 {
     auto queue = device->getQueue(QueueType::Compute);
     REQUIRE(queue != nullptr);
 
-    auto pipeline = trivialCompute::createPipeline(device);
+    auto pipeline = trivialCompute::createPipeline(device, model);
 
     const int numberCount = 4;
     float initialData[] = {0.0f, 1.0f, 2.0f, 3.0f};
@@ -78,15 +78,25 @@ GPU_TEST_CASE("compute-queue-dispatch", D3D12 | Vulkan)
     REQUIRE_CALL(device->unmapBuffer(readbackBuffer));
 }
 
+GPU_TEST_CASE("compute-queue-dispatch", D3D12 | Vulkan)
+{
+    runComputeQueueDispatch(device, trivialCompute::BindingModel::Legacy);
+}
+
+GPU_TEST_CASE("compute-queue-dispatch-flat", D3D12 | Vulkan)
+{
+    runComputeQueueDispatch(device, trivialCompute::BindingModel::Flat);
+}
+
 // Test that both graphics and compute queues can work independently.
-GPU_TEST_CASE("compute-queue-both-queues", D3D12 | Vulkan)
+static void runComputeQueueBothQueues(IDevice* device, trivialCompute::BindingModel model)
 {
     auto graphicsQueue = device->getQueue(QueueType::Graphics);
     auto computeQueue = device->getQueue(QueueType::Compute);
     REQUIRE(graphicsQueue != nullptr);
     REQUIRE(computeQueue != nullptr);
 
-    auto pipeline = trivialCompute::createPipeline(device);
+    auto pipeline = trivialCompute::createPipeline(device, model);
 
     const int numberCount = 4;
     float initialDataA[] = {0.0f, 1.0f, 2.0f, 3.0f};
@@ -157,15 +167,25 @@ GPU_TEST_CASE("compute-queue-both-queues", D3D12 | Vulkan)
     REQUIRE_CALL(device->unmapBuffer(bufferBReadback));
 }
 
-GPU_TEST_CASE("compute-queue-texture-read", Vulkan)
+GPU_TEST_CASE("compute-queue-both-queues", D3D12 | Vulkan)
+{
+    runComputeQueueBothQueues(device, trivialCompute::BindingModel::Legacy);
+}
+
+GPU_TEST_CASE("compute-queue-both-queues-flat", D3D12 | Vulkan)
+{
+    runComputeQueueBothQueues(device, trivialCompute::BindingModel::Flat);
+}
+
+static void runComputeQueueTextureRead(IDevice* device, trivialCompute::BindingModel model)
 {
     auto graphicsQueue = device->getQueue(QueueType::Graphics);
     auto queue = device->getQueue(QueueType::Compute);
     REQUIRE(graphicsQueue != nullptr);
     REQUIRE(queue != nullptr);
 
-    auto writePipeline = trivialCompute::createPipeline(device, "writeTexture");
-    auto readPipeline = trivialCompute::createPipeline(device, "readTexture");
+    auto writePipeline = trivialCompute::createPipeline(device, model, "writeTexture");
+    auto readPipeline = trivialCompute::createPipeline(device, model, "readTexture");
 
     constexpr float textureData = 42.0f;
     TextureDesc textureDesc = {};
@@ -253,4 +273,14 @@ GPU_TEST_CASE("compute-queue-texture-read", Vulkan)
     REQUIRE_CALL(device->mapBuffer(outputReadback, CpuAccessMode::Read, &mappedData));
     compareResultFuzzy(static_cast<float const*>(mappedData), &textureData, 1);
     REQUIRE_CALL(device->unmapBuffer(outputReadback));
+}
+
+GPU_TEST_CASE("compute-queue-texture-read", Vulkan)
+{
+    runComputeQueueTextureRead(device, trivialCompute::BindingModel::Legacy);
+}
+
+GPU_TEST_CASE("compute-queue-texture-read-flat", Vulkan)
+{
+    runComputeQueueTextureRead(device, trivialCompute::BindingModel::Flat);
 }

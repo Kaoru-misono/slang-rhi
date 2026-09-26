@@ -115,8 +115,6 @@ struct TransientBufferArenaDesc
 {
     Size initialChunkSize = 1024;
     Size maxChunkSize = 64 * 1024;
-    /// Maximum cumulative aligned allocation bytes until reset; 0 is unlimited.
-    Size maxAllocationBytes = 0;
 };
 
 /// Command-buffer-local bump allocator backed by coarse TransientBufferHeap chunks.

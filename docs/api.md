@@ -290,24 +290,12 @@ not allocate another sampler table. Command-buffer reset clears the cache along 
 descriptor arenas. Distinct sets still consume the configured shader-visible sampler heap;
 exhaustion returns an allocation failure and does not overwrite tables used by earlier commands.
 
-### Vulkan allocation quotas
+### Vulkan allocation failures
 
-`VulkanDeviceExtendedDesc` provides three independent production allocation budgets (0 means unlimited):
-
-- `maxBindingSets`: live persistent binding sets, excluding bindless sets and command-buffer-internal sets.
-  A recorded/submitted command buffer retains its sets; dropping the caller reference alone does not free quota.
-  Quota returns when the native set is actually freed through the existing retirement/deferred-deletion path.
-- `maxCommandBufferDescriptorSets`: internal descriptor sets allocated by each command buffer, including
-  buffered constants, empty layout slots and general shader-object bindings. Persistent binding sets do not count.
-- `maxCommandBufferConstantBytes`: cumulative aligned uniform-buffer allocation bytes per command buffer.
-  This is a logical allocation budget, not the physical reserved size of the queue-owned backing heap.
-  Inline/push constants do not consume this budget.
-
-Configured budget exhaustion returns `SLANG_E_OUT_OF_MEMORY`; this status does not imply physical
-device-memory exhaustion. It does not evict descriptors or overwrite existing constant data. Partially successful allocations from a failed bind remain owned until normal reset/release.
-Command-local budgets recover on reset, after completion for submitted work or when an unsubmitted encoder
-is discarded. Native allocation failures propagate without allocation-failure assertions. D3D12 descriptors
-and its public extended descriptor are unchanged.
+Native descriptor and constant-buffer allocation failures propagate without allocation-failure assertions.
+Failed allocations do not evict descriptors or overwrite existing constant data. Partially successful
+allocations from a failed bind remain owned until normal reset/release. Command buffers whose native
+reset fails are isolated instead of being returned to the reusable pool.
 
 ## `IRayTracingPassEncoder` interface
 

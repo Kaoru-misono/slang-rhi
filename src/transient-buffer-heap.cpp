@@ -320,9 +320,7 @@ Result TransientBufferArena::allocate(Size size, Allocation* outAllocation)
     const Size alignedSize = m_heap->alignAllocationSize(size);
     if (alignedSize > m_heap->getMaxPageSize())
         return SLANG_FAIL;
-    if (alignedSize > std::numeric_limits<Size>::max() - m_used ||
-        (m_desc.maxAllocationBytes &&
-         (m_used > m_desc.maxAllocationBytes || alignedSize > m_desc.maxAllocationBytes - m_used)))
+    if (alignedSize > std::numeric_limits<Size>::max() - m_used)
         return SLANG_E_OUT_OF_MEMORY;
 
     Size allocationOffset = m_chunks.empty() ? 0 : math::calcAligned(m_currentChunkOffset, m_heap->getAlignment());

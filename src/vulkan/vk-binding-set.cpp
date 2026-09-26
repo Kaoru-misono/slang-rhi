@@ -68,10 +68,9 @@ static bool poolCovers(std::span<const VkDescriptorPoolSize> pool, std::span<con
     return true;
 }
 
-void BindingSetDescriptorPool::initialize(DeviceImpl* device, uint32_t maxSets)
+void BindingSetDescriptorPool::initialize(DeviceImpl* device)
 {
     m_device = device;
-    m_maxSets = maxSets;
 }
 
 void BindingSetDescriptorPool::release()
@@ -80,7 +79,6 @@ void BindingSetDescriptorPool::release()
     for (const Pool& pool : m_pools)
         m_device->m_api.vkDestroyDescriptorPool(m_device->m_api.m_device, pool.pool, nullptr);
     m_pools.clear();
-    m_liveSets = 0;
 }
 
 Result BindingSetDescriptorPool::createPool(std::span<const VkDescriptorPoolSize> poolSizes, VkDescriptorPool* outPool)
@@ -122,11 +120,6 @@ Result BindingSetDescriptorPool::allocate(
     std::lock_guard<std::mutex> lock(m_mutex);
     *outDescriptorSet = VK_NULL_HANDLE;
     *outPool = VK_NULL_HANDLE;
-    if (m_liveSets == UINT64_MAX || (m_maxSets && m_liveSets >= m_maxSets))
-    {
-        m_device->printError("Vulkan maxBindingSets quota exhausted.");
-        return SLANG_E_OUT_OF_MEMORY;
-    }
     auto& api = m_device->m_api;
     VkDescriptorSetAllocateInfo allocateInfo = {VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
     allocateInfo.descriptorSetCount = 1;
@@ -140,7 +133,6 @@ Result BindingSetDescriptorPool::allocate(
         const VkResult result = api.vkAllocateDescriptorSets(api.m_device, &allocateInfo, &descriptorSet);
         if (result == VK_SUCCESS)
         {
-            ++m_liveSets;
             *outDescriptorSet = descriptorSet;
             *outPool = it->pool;
             return SLANG_OK;
@@ -164,7 +156,6 @@ Result BindingSetDescriptorPool::allocate(
                        result == VK_ERROR_OUT_OF_POOL_MEMORY || result == VK_ERROR_FRAGMENTED_POOL
                    ? SLANG_E_OUT_OF_MEMORY : SLANG_FAIL;
     }
-    ++m_liveSets;
     *outDescriptorSet = descriptorSet;
     *outPool = allocateInfo.descriptorPool;
     return SLANG_OK;
@@ -176,9 +167,7 @@ void BindingSetDescriptorPool::free(VkDescriptorSet descriptorSet, VkDescriptorP
     if (descriptorSet != VK_NULL_HANDLE && pool != VK_NULL_HANDLE)
     {
         const VkResult result = m_device->m_api.vkFreeDescriptorSets(m_device->m_api.m_device, pool, 1, &descriptorSet);
-        if (result == VK_SUCCESS)
-            --m_liveSets;
-        else
+        if (result != VK_SUCCESS)
             reportVulkanError(result, "vkFreeDescriptorSets", SLANG_RHI_SOURCE_LOCATION(), m_device);
     }
 }

@@ -319,8 +319,6 @@ public:
     DescriptorSetAllocator descriptorSetAllocator;
     BindingSetDescriptorPool m_bindingSetDescriptorPool;
     RefPtr<BindlessDescriptorSet> m_bindlessDescriptorSet;
-    uint32_t m_maxCommandBufferDescriptorSets = 0;
-    Size m_maxCommandBufferConstantBytes = 0;
 
     VulkanMemoryAllocator m_memoryAllocator;
 
