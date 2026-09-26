@@ -45,7 +45,7 @@ GPU_TEST_CASE("buffer-shared-cuda", D3D12 | Vulkan | DontCreateDevice)
     CHECK_EQ(testDesc.size, numberCount * sizeof(float));
     compareComputeResult(dstDevice, dstBuffer, makeArray<float>(0.0f, 1.0f, 2.0f, 3.0f));
 
-    auto pipeline = trivialCompute::createPipeline(dstDevice);
+    auto pipeline = trivialCompute::createPipeline(dstDevice, trivialCompute::BindingModel::Legacy);
 
     {
         auto queue = dstDevice->getQueue(QueueType::Graphics);

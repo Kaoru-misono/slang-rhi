@@ -4,7 +4,7 @@
 using namespace rhi;
 using namespace rhi::testing;
 
-GPU_TEST_CASE("device-from-handle", D3D12 | Vulkan | CUDA)
+static void runDeviceFromHandle(IDevice* device, trivialCompute::BindingModel model)
 {
     DeviceNativeHandles handles;
     CHECK_CALL(device->getNativeDeviceHandles(&handles));
@@ -24,7 +24,7 @@ GPU_TEST_CASE("device-from-handle", D3D12 | Vulkan | CUDA)
     newDeviceDesc.slang.searchPathCount = searchPaths.size();
     CHECK_CALL(getRHI()->createDevice(newDeviceDesc, newDevice.writeRef()));
 
-    auto pipeline = trivialCompute::createPipeline(newDevice);
+    auto pipeline = trivialCompute::createPipeline(newDevice, model);
 
     const int numberCount = 4;
     float initialData[] = {0.0f, 1.0f, 2.0f, 3.0f};
@@ -58,12 +58,22 @@ GPU_TEST_CASE("device-from-handle", D3D12 | Vulkan | CUDA)
     compareComputeResult(newDevice, buffer, makeArray<float>(1.0f, 2.0f, 3.0f, 4.0f));
 }
 
+GPU_TEST_CASE("device-from-handle", D3D12 | Vulkan | CUDA)
+{
+    runDeviceFromHandle(device, trivialCompute::BindingModel::Legacy);
+}
+
+GPU_TEST_CASE("device-from-handle-flat", D3D12 | Vulkan)
+{
+    runDeviceFromHandle(device, trivialCompute::BindingModel::Flat);
+}
+
 GPU_TEST_CASE("device-final-release-flat-dependencies", D3D12 | Vulkan | DontCreateDevice)
 {
     auto localDevice = createTestingDevice(ctx, ctx->deviceType, false);
     REQUIRE(localDevice != nullptr);
     {
-        auto pipeline = trivialCompute::createPipeline(localDevice);
+        auto pipeline = trivialCompute::createPipeline(localDevice, trivialCompute::BindingModel::Flat);
         BufferDesc bufferDesc{};
         bufferDesc.size = 4 * sizeof(float);
         bufferDesc.elementSize = sizeof(float);

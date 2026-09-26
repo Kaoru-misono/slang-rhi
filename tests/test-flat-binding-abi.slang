@@ -2,6 +2,10 @@
 #define NATIVE_LAYOUT 0
 #endif
 
+#ifndef LEGACY_SHADER_OBJECT
+#define LEGACY_SHADER_OBJECT 0
+#endif
+
 #ifndef NONZERO_CONSTANT_REGISTER
 #define NONZERO_CONSTANT_REGISTER 0
 #endif
@@ -23,13 +27,16 @@ struct Params
 
 #if INLINE_CONSTANTS
 [[vk::push_constant]] ConstantBuffer<Params> parameters;
+#elif !NATIVE_LAYOUT && LEGACY_SHADER_OBJECT
+// Legacy ShaderObject supports one own Vulkan set and drops this CBV's explicit D3D12 space.
+[[vk::binding(1, 0)]] ConstantBuffer<Params> parameters : register(b0, space0);
 #elif !NATIVE_LAYOUT && NONZERO_CONSTANT_REGISTER
 [[vk::binding(3, 2)]] ConstantBuffer<Params> parameters : register(b3, space2);
 #else
 [[vk::binding(0, 1)]] ConstantBuffer<Params> parameters : register(b0, space1);
 #endif
 
-#if NATIVE_LAYOUT
+#if NATIVE_LAYOUT || LEGACY_SHADER_OBJECT
 [[vk::binding(0, 0)]] RWStructuredBuffer<float4> output : register(u0, space0);
 #else
 struct Resources
@@ -50,7 +57,7 @@ float4 evaluate(uint index)
 [numthreads(1, 1, 1)]
 void csMain(uint3 id : SV_DispatchThreadID)
 {
-#if NATIVE_LAYOUT
+#if NATIVE_LAYOUT || LEGACY_SHADER_OBJECT
     output[id.x] = evaluate(id.x);
 #else
     resources.output[id.x] = evaluate(id.x);

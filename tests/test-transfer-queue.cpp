@@ -87,7 +87,7 @@ GPU_TEST_CASE("transfer-queue-copy", D3D12 | Vulkan)
 }
 
 // Test using all three queues simultaneously.
-GPU_TEST_CASE("transfer-queue-all-queues", D3D12 | Vulkan)
+static void runTransferQueueAllQueues(IDevice* device, trivialCompute::BindingModel model)
 {
     auto graphicsQueue = device->getQueue(QueueType::Graphics);
     auto computeQueue = device->getQueue(QueueType::Compute);
@@ -96,7 +96,7 @@ GPU_TEST_CASE("transfer-queue-all-queues", D3D12 | Vulkan)
     REQUIRE(computeQueue != nullptr);
     REQUIRE(transferQueue != nullptr);
 
-    auto pipeline = trivialCompute::createPipeline(device);
+    auto pipeline = trivialCompute::createPipeline(device, model);
 
     const int numberCount = 4;
     float initialDataA[] = {0.0f, 1.0f, 2.0f, 3.0f};
@@ -194,6 +194,16 @@ GPU_TEST_CASE("transfer-queue-all-queues", D3D12 | Vulkan)
     compareComputeResult(device, bufferA, makeArray<float>(11.0f, 12.0f, 13.0f, 14.0f));
     compareComputeResult(device, bufferB, makeArray<float>(16.0f, 26.0f, 36.0f, 46.0f));
     compareComputeResult(device, copyDst, makeArray<float>(100.0f, 200.0f, 300.0f, 400.0f));
+}
+
+GPU_TEST_CASE("transfer-queue-all-queues", D3D12 | Vulkan)
+{
+    runTransferQueueAllQueues(device, trivialCompute::BindingModel::Legacy);
+}
+
+GPU_TEST_CASE("transfer-queue-all-queues-flat", D3D12 | Vulkan)
+{
+    runTransferQueueAllQueues(device, trivialCompute::BindingModel::Flat);
 }
 
 // Test queue family ownership transfer workflow.

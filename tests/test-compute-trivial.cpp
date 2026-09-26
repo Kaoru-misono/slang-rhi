@@ -3,9 +3,9 @@
 using namespace rhi;
 using namespace rhi::testing;
 
-GPU_TEST_CASE("compute-trivial", ALL)
+static void runComputeTrivial(IDevice* device, trivialCompute::BindingModel model)
 {
-    auto pipeline = trivialCompute::createPipeline(device);
+    auto pipeline = trivialCompute::createPipeline(device, model);
 
     const int numberCount = 4;
     float initialData[] = {0.0f, 1.0f, 2.0f, 3.0f};
@@ -38,4 +38,14 @@ GPU_TEST_CASE("compute-trivial", ALL)
     }
 
     compareComputeResult(device, buffer, makeArray<float>(11.0f, 12.0f, 13.0f, 14.0f));
+}
+
+GPU_TEST_CASE("compute-trivial", ALL)
+{
+    runComputeTrivial(device, trivialCompute::BindingModel::Legacy);
+}
+
+GPU_TEST_CASE("compute-trivial-flat", D3D12 | Vulkan)
+{
+    runComputeTrivial(device, trivialCompute::BindingModel::Flat);
 }
