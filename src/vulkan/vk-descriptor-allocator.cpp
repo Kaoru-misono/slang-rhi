@@ -64,8 +64,6 @@ Result DescriptorSetAllocator::allocate(VkDescriptorSetLayout layout, VulkanDesc
 {
     *outSet = {};
     SLANG_RETURN_ON_FAIL(m_resetResult);
-    if (m_liveSets == UINT64_MAX || (m_maxSets && m_liveSets >= m_maxSets))
-        return SLANG_E_OUT_OF_MEMORY;
     VkDescriptorSetAllocateInfo info = {VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
     info.descriptorSetCount = 1;
     info.pSetLayouts = &layout;
@@ -77,7 +75,6 @@ Result DescriptorSetAllocator::allocate(VkDescriptorSetLayout layout, VulkanDesc
         const VkResult result = m_api->vkAllocateDescriptorSets(m_api->m_device, &info, &handle);
         if (result == VK_SUCCESS)
         {
-            ++m_liveSets;
             *outSet = {handle, *it};
             return SLANG_OK;
         }
@@ -94,15 +91,14 @@ Result DescriptorSetAllocator::allocate(VkDescriptorSetLayout layout, VulkanDesc
         pools.pop_back();
         return descriptorAllocationResult(result);
     }
-    ++m_liveSets;
     *outSet = {handle, info.descriptorPool};
     return SLANG_OK;
 }
 
 void DescriptorSetAllocator::free(VulkanDescriptorSet set)
 {
-    if (set.handle && m_api->vkFreeDescriptorSets(m_api->m_device, set.pool, 1, &set.handle) == VK_SUCCESS)
-        --m_liveSets;
+    if (set.handle)
+        m_api->vkFreeDescriptorSets(m_api->m_device, set.pool, 1, &set.handle);
 }
 
 Result DescriptorSetAllocator::reset()
@@ -116,7 +112,6 @@ Result DescriptorSetAllocator::reset()
             return m_resetResult;
         }
     }
-    m_liveSets = 0;
     m_resetResult = SLANG_OK;
     return SLANG_OK;
 }
@@ -126,7 +121,6 @@ void DescriptorSetAllocator::close()
     for (auto pool : pools)
         m_api->vkDestroyDescriptorPool(m_api->m_device, pool, nullptr);
     pools.clear();
-    m_liveSets = 0;
     m_resetResult = SLANG_OK;
 }
 

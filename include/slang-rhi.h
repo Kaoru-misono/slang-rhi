@@ -4580,14 +4580,6 @@ struct VulkanDeviceExtendedDesc
     const char* const* instanceExtensions = nullptr;
     uint32_t deviceExtensionCount = 0;
     const char* const* deviceExtensions = nullptr;
-
-    /// Maximum live persistent binding sets, excluding bindless and command-buffer-local sets. 0 is unlimited.
-    uint32_t maxBindingSets = 0;
-    /// Maximum internal descriptor sets allocated by each command buffer until reset. 0 is unlimited.
-    uint32_t maxCommandBufferDescriptorSets = 0;
-    /// Maximum aligned constant-buffer bytes allocated by each command buffer until reset. 0 is unlimited.
-    /// This limits allocation usage, not the physical capacity of the queue-owned backing heap.
-    Size maxCommandBufferConstantBytes = 0;
 };
 
 } // namespace rhi

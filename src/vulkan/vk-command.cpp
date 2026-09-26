@@ -2777,10 +2777,8 @@ CommandBufferImpl::~CommandBufferImpl()
 Result CommandBufferImpl::init()
 {
     DeviceImpl* device = getDevice<DeviceImpl>();
-    TransientBufferArenaDesc constantArenaDesc;
-    constantArenaDesc.maxAllocationBytes = device->m_maxCommandBufferConstantBytes;
-    m_constantBufferArena.initialize(&m_queue->m_constantBufferHeap, constantArenaDesc);
-    m_descriptorSetAllocator.init(&device->m_api, device->m_maxCommandBufferDescriptorSets);
+    m_constantBufferArena.initialize(&m_queue->m_constantBufferHeap);
+    m_descriptorSetAllocator.init(&device->m_api);
 
     VkCommandPoolCreateInfo createInfo = {VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};
     createInfo.flags = VK_COMMAND_POOL_CREATE_TRANSIENT_BIT;
