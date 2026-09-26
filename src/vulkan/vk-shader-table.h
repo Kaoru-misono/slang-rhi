@@ -28,6 +28,9 @@ public:
     struct PipelineData : public RefObject
     {
         RefPtr<BufferImpl> buffer;
+        /// Keeps the pipeline that keys this entry alive, so a new pipeline can never reuse its
+        /// address and receive the stale shader group handles.
+        RefPtr<RayTracingPipelineImpl> pipeline;
         short_vector<RaygenInfo> raygenInfos;
 
         // Offset from the start of `buffer` to the aligned shader table base address.
