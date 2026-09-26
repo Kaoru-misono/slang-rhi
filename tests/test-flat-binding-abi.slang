@@ -2,6 +2,10 @@
 #define NATIVE_LAYOUT 0
 #endif
 
+#ifndef NONZERO_CONSTANT_REGISTER
+#define NONZERO_CONSTANT_REGISTER 0
+#endif
+
 struct Nested
 {
     float3 weights;
@@ -19,15 +23,21 @@ struct Params
 
 #if INLINE_CONSTANTS
 [[vk::push_constant]] ConstantBuffer<Params> parameters;
-#elif NATIVE_LAYOUT
-[[vk::binding(0, 1)]] ConstantBuffer<Params> parameters : register(b0, space1);
+#elif !NATIVE_LAYOUT && NONZERO_CONSTANT_REGISTER
+[[vk::binding(3, 2)]] ConstantBuffer<Params> parameters : register(b3, space2);
 #else
-// Legacy ShaderObject supports one own Vulkan set and drops this CBV's explicit D3D12 space.
-// The flat-binding implementation must separately validate constants in set/space 1.
-[[vk::binding(1, 0)]] ConstantBuffer<Params> parameters : register(b0, space0);
+[[vk::binding(0, 1)]] ConstantBuffer<Params> parameters : register(b0, space1);
 #endif
 
+#if NATIVE_LAYOUT
 [[vk::binding(0, 0)]] RWStructuredBuffer<float4> output : register(u0, space0);
+#else
+struct Resources
+{
+    RWStructuredBuffer<float4> output;
+};
+ParameterBlock<Resources> resources;
+#endif
 
 float4 evaluate(uint index)
 {
@@ -40,7 +50,11 @@ float4 evaluate(uint index)
 [numthreads(1, 1, 1)]
 void csMain(uint3 id : SV_DispatchThreadID)
 {
+#if NATIVE_LAYOUT
     output[id.x] = evaluate(id.x);
+#else
+    resources.output[id.x] = evaluate(id.x);
+#endif
 }
 
 struct Varying

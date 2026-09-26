@@ -118,7 +118,6 @@ DebugRenderPassEncoder::DebugRenderPassEncoder(DebugContext* ctx, DebugCommandEn
     : UnownedDebugObject<IRenderPassEncoder>(ctx)
     , m_commandEncoder(commandEncoder)
 {
-    m_rootObject = new DebugRootShaderObject(ctx);
 }
 
 Result DebugRenderPassEncoder::bindPipeline(IRenderPipeline* pipeline, const FlatBindingDesc& bindings)
@@ -152,6 +151,8 @@ IShaderObject* DebugRenderPassEncoder::bindPipeline(IRenderPipeline* pipeline)
         return nullptr;
     }
 
+    if (!m_rootObject)
+        m_rootObject = new DebugRootShaderObject(ctx);
     m_rootObject->reset();
     m_rootObject->baseObject = baseObject->bindPipeline(pipeline);
     m_pipelineBound = true;
@@ -424,7 +425,6 @@ DebugComputePassEncoder::DebugComputePassEncoder(DebugContext* ctx, DebugCommand
     : UnownedDebugObject<IComputePassEncoder>(ctx)
     , m_commandEncoder(commandEncoder)
 {
-    m_rootObject = new DebugRootShaderObject(ctx);
 }
 
 Result DebugComputePassEncoder::bindPipeline(IComputePipeline* pipeline, const FlatBindingDesc& bindings)
@@ -458,6 +458,8 @@ IShaderObject* DebugComputePassEncoder::bindPipeline(IComputePipeline* pipeline)
         return nullptr;
     }
 
+    if (!m_rootObject)
+        m_rootObject = new DebugRootShaderObject(ctx);
     m_rootObject->reset();
     m_rootObject->baseObject = baseObject->bindPipeline(pipeline);
     m_pipelineBound = true;
@@ -593,7 +595,6 @@ DebugRayTracingPassEncoder::DebugRayTracingPassEncoder(DebugContext* ctx, DebugC
     : UnownedDebugObject<IRayTracingPassEncoder>(ctx)
     , m_commandEncoder(commandEncoder)
 {
-    m_rootObject = new DebugRootShaderObject(ctx);
 }
 
 Result DebugRayTracingPassEncoder::bindPipeline(
@@ -641,6 +642,8 @@ IShaderObject* DebugRayTracingPassEncoder::bindPipeline(IRayTracingPipeline* pip
         return nullptr;
     }
 
+    if (!m_rootObject)
+        m_rootObject = new DebugRootShaderObject(ctx);
     m_rootObject->reset();
     m_rootObject->baseObject = baseObject->bindPipeline(pipeline, shaderTable);
     m_pipelineBound = true;

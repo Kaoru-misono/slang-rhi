@@ -254,7 +254,11 @@ BindingSetImpl::~BindingSetImpl()
 
 void BindingSetImpl::deleteThis()
 {
-    // A set bound by an in-flight command buffer and its resource references must outlive the submission.
+    // Command buffers track the set until they retire, so no pending submission reads it here. A deferred
+    // set must not keep the device alive through its layout and resources; each defers its own destruction.
+    m_accesses.clear();
+    m_bindings.clear();
+    m_layout.setNull();
     getDevice<DeviceImpl>()->deferDelete(this);
 }
 
@@ -381,7 +385,10 @@ PipelineLayoutImpl::~PipelineLayoutImpl()
 
 void PipelineLayoutImpl::deleteThis()
 {
-    // An in-flight recording binds descriptor sets through this layout.
+    // A deferred layout must not keep the device alive through its program and set layouts; the native
+    // layout does not reference either after creation, and the set layouts defer their own destruction.
+    m_program.setNull();
+    m_setLayouts.clear();
     getDevice<DeviceImpl>()->deferDelete(this);
 }
 

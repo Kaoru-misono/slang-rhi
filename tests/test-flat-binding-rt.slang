@@ -20,7 +20,10 @@ struct Params
     float hitValue;
     float missValue;
 };
-[[vk::push_constant]] ConstantBuffer<Params> params;
+#if !defined(INLINE_CONSTANTS) || INLINE_CONSTANTS
+[[vk::push_constant]]
+#endif
+ConstantBuffer<Params> params;
 
 [shader("raygeneration")]
 void rayGenMain()

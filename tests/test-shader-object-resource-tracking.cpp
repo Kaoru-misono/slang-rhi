@@ -8,8 +8,36 @@ GPU_TEST_CASE("shader-object-resource-tracking", ALL & ~CPU)
     ComPtr<IShaderProgram> shaderProgram;
     REQUIRE_CALL(loadProgram(device, "test-shader-object-resource-tracking", "computeMain", shaderProgram.writeRef()));
 
+    const BindingSetLayoutEntry globalEntries[] = {
+        {BindingKind::StructuredBuffer, 1, "buffer"},
+        {BindingKind::Texture2D, 1, "texture"},
+        {BindingKind::SamplerState, 1, "sampler"},
+    };
+    const BindingSetLayoutEntry entryEntries[] = {
+        {BindingKind::StructuredBuffer, 1, "buffer"},
+        {BindingKind::Texture2D, 1, "texture"},
+        {BindingKind::SamplerState, 1, "sampler"},
+        {BindingKind::RWStructuredBuffer, 1, "resultBuffer"},
+    };
+    ComPtr<IBindingSetLayout> globalLayout;
+    ComPtr<IBindingSetLayout> entryLayout;
+    REQUIRE_CALL(device->createBindingSetLayout(
+        BindingSetLayoutDesc{.entries = globalEntries, .entryCount = SLANG_COUNT_OF(globalEntries)},
+        globalLayout.writeRef()));
+    REQUIRE_CALL(device->createBindingSetLayout(
+        BindingSetLayoutDesc{.entries = entryEntries, .entryCount = SLANG_COUNT_OF(entryEntries)},
+        entryLayout.writeRef()));
+    const PipelineLayoutSetDesc layoutSets[] = {{"globals", globalLayout}, {"entry", entryLayout}};
+    PipelineLayoutDesc layoutDesc{};
+    layoutDesc.program = shaderProgram;
+    layoutDesc.sets = layoutSets;
+    layoutDesc.setCount = SLANG_COUNT_OF(layoutSets);
+    ComPtr<IPipelineLayout> layout;
+    REQUIRE_CALL(device->createPipelineLayout(layoutDesc, layout.writeRef()));
+
     ComputePipelineDesc pipelineDesc = {};
     pipelineDesc.program = shaderProgram.get();
+    pipelineDesc.layout = layout;
     ComPtr<IComputePipeline> pipeline;
     REQUIRE_CALL(device->createComputePipeline(pipelineDesc, pipeline.writeRef()));
 
@@ -17,6 +45,7 @@ GPU_TEST_CASE("shader-object-resource-tracking", ALL & ~CPU)
     {
         BufferDesc bufferDesc = {};
         bufferDesc.size = sizeof(float);
+        bufferDesc.elementSize = sizeof(float);
         bufferDesc.usage = BufferUsage::CopyDestination | BufferUsage::ShaderResource;
         float initialData[] = {10.f};
         REQUIRE_CALL(device->createBuffer(bufferDesc, initialData, globalBuffer.writeRef()));
@@ -45,6 +74,7 @@ GPU_TEST_CASE("shader-object-resource-tracking", ALL & ~CPU)
     {
         BufferDesc bufferDesc = {};
         bufferDesc.size = sizeof(float);
+        bufferDesc.elementSize = sizeof(float);
         bufferDesc.usage = BufferUsage::CopyDestination | BufferUsage::ShaderResource;
         float initialData[] = {20.f};
         REQUIRE_CALL(device->createBuffer(bufferDesc, initialData, buffer.writeRef()));
@@ -73,6 +103,7 @@ GPU_TEST_CASE("shader-object-resource-tracking", ALL & ~CPU)
     {
         BufferDesc bufferDesc = {};
         bufferDesc.size = 4 * sizeof(float);
+        bufferDesc.elementSize = sizeof(float);
         bufferDesc.usage = BufferUsage::CopySource | BufferUsage::UnorderedAccess;
         REQUIRE_CALL(device->createBuffer(bufferDesc, nullptr, resultBuffer.writeRef()));
     }
@@ -82,20 +113,35 @@ GPU_TEST_CASE("shader-object-resource-tracking", ALL & ~CPU)
         auto commandEncoder = queue->createCommandEncoder();
 
         auto passEncoder = commandEncoder->beginComputePass();
-        auto rootObject = passEncoder->bindPipeline(pipeline);
-        ShaderCursor globalsCursor(rootObject);
-        globalsCursor["globalBuffer"].setBinding(globalBuffer);
-        globalsCursor["globalTexture"].setBinding(globalTexture);
-        globalsCursor["globalSampler"].setBinding(globalSampler);
-        ShaderCursor entryPointCursor(rootObject->getEntryPoint(0));
-        entryPointCursor["buffer"].setBinding(buffer);
-        entryPointCursor["texture"].setBinding(texture);
-        entryPointCursor["sampler"].setBinding(sampler);
-        entryPointCursor["resultBuffer"].setBinding(resultBuffer);
+        {
+            const BindingSetEntry globals[] = {
+                {.slot = 0, .resource = globalBuffer},
+                {.slot = 1, .resource = globalTexture->getDefaultView()},
+                {.slot = 2, .resource = globalSampler},
+            };
+            const BindingSetEntry entry[] = {
+                {.slot = 0, .resource = buffer},
+                {.slot = 1, .resource = texture->getDefaultView()},
+                {.slot = 2, .resource = sampler},
+                {.slot = 3, .resource = resultBuffer},
+            };
+            ComPtr<IBindingSet> globalSet;
+            ComPtr<IBindingSet> entrySet;
+            REQUIRE_CALL(device->createBindingSet(
+                BindingSetDesc{.layout = globalLayout, .entries = globals, .entryCount = SLANG_COUNT_OF(globals)},
+                globalSet.writeRef()));
+            REQUIRE_CALL(device->createBindingSet(
+                BindingSetDesc{.layout = entryLayout, .entries = entry, .entryCount = SLANG_COUNT_OF(entry)},
+                entrySet.writeRef()));
+            IBindingSet* sets[] = {globalSet, entrySet};
+            FlatBindingDesc bindings{};
+            bindings.sets = sets;
+            bindings.setCount = SLANG_COUNT_OF(sets);
+            REQUIRE_CALL(passEncoder->bindPipeline(pipeline, bindings));
+        }
 
-        // At this point, the shader object should keep all resources alive.
-        // We can release them and they should not be destroyed until the command
-        // encoder is finished and the command buffer is executed.
+        // Application binding-set references are already gone. Recorded flat bindings must retain
+        // the input resources through encoder finalization and delayed command-buffer submission.
         globalBuffer.setNull();
         globalTexture.setNull();
         globalSampler.setNull();
@@ -110,10 +156,11 @@ GPU_TEST_CASE("shader-object-resource-tracking", ALL & ~CPU)
         // making sure it does not keep any resources alive, but the command buffer
         // still does.
         ComPtr<ICommandBuffer> commandBuffer = commandEncoder->finish();
+        REQUIRE(commandBuffer != nullptr);
         commandEncoder.setNull();
 
-        queue->submit(commandBuffer);
-        queue->waitOnHost();
+        REQUIRE_CALL(queue->submit(commandBuffer));
+        REQUIRE_CALL(queue->waitOnHost());
     }
 
     compareComputeResult(device, resultBuffer, makeArray<float>(10.f, 1.f, 20.f, 2.5f));

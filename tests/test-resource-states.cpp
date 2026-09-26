@@ -10,8 +10,14 @@ GPU_TEST_CASE("buffer-resource-states", D3D12 | Vulkan)
     ComPtr<IShaderProgram> shaderProgram;
     REQUIRE_CALL(loadProgram(device, "test-dummy", "computeMain", shaderProgram.writeRef()));
 
+    PipelineLayoutDesc layoutDesc = {};
+    layoutDesc.program = shaderProgram;
+    ComPtr<IPipelineLayout> layout;
+    REQUIRE_CALL(device->createPipelineLayout(layoutDesc, layout.writeRef()));
+
     ComputePipelineDesc pipelineDesc = {};
     pipelineDesc.program = shaderProgram.get();
+    pipelineDesc.layout = layout;
     ComPtr<IComputePipeline> pipeline;
     REQUIRE_CALL(device->createComputePipeline(pipelineDesc, pipeline.writeRef()));
 
@@ -50,13 +56,13 @@ GPU_TEST_CASE("buffer-resource-states", D3D12 | Vulkan)
         auto commandEncoder = queue->createCommandEncoder();
         commandEncoder->setBufferState(buffer, state);
         auto passEncoder = commandEncoder->beginComputePass();
-        passEncoder->bindPipeline(pipeline);
+        REQUIRE_CALL(passEncoder->bindPipeline(pipeline, FlatBindingDesc{}));
         passEncoder->dispatchCompute(1, 1, 1);
         passEncoder->end();
-        queue->submit(commandEncoder->finish());
+        REQUIRE_CALL(queue->submit(commandEncoder->finish()));
     }
 
-    queue->waitOnHost();
+    REQUIRE_CALL(queue->waitOnHost());
 }
 
 GPU_TEST_CASE("texture-resource-states", D3D12 | Vulkan)
@@ -64,8 +70,14 @@ GPU_TEST_CASE("texture-resource-states", D3D12 | Vulkan)
     ComPtr<IShaderProgram> shaderProgram;
     REQUIRE_CALL(loadProgram(device, "test-dummy", "computeMain", shaderProgram.writeRef()));
 
+    PipelineLayoutDesc layoutDesc = {};
+    layoutDesc.program = shaderProgram;
+    ComPtr<IPipelineLayout> layout;
+    REQUIRE_CALL(device->createPipelineLayout(layoutDesc, layout.writeRef()));
+
     ComputePipelineDesc pipelineDesc = {};
     pipelineDesc.program = shaderProgram.get();
+    pipelineDesc.layout = layout;
     ComPtr<IComputePipeline> pipeline;
     REQUIRE_CALL(device->createComputePipeline(pipelineDesc, pipeline.writeRef()));
 
@@ -127,12 +139,12 @@ GPU_TEST_CASE("texture-resource-states", D3D12 | Vulkan)
             auto commandEncoder = queue->createCommandEncoder();
             commandEncoder->setTextureState(texture, state);
             auto passEncoder = commandEncoder->beginComputePass();
-            passEncoder->bindPipeline(pipeline);
+            REQUIRE_CALL(passEncoder->bindPipeline(pipeline, FlatBindingDesc{}));
             passEncoder->dispatchCompute(1, 1, 1);
             passEncoder->end();
-            queue->submit(commandEncoder->finish());
+            REQUIRE_CALL(queue->submit(commandEncoder->finish()));
         }
 
-        queue->waitOnHost();
+        REQUIRE_CALL(queue->waitOnHost());
     }
 }

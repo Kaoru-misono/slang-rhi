@@ -76,7 +76,11 @@ BindingSetImpl::~BindingSetImpl()
 
 void BindingSetImpl::deleteThis()
 {
-    // A set bound by an in-flight command buffer must outlive the submission.
+    // Command buffers track the set until they retire, so no pending submission reads it here. A deferred
+    // set must not keep the device alive through its layout and resources; each defers its own destruction.
+    m_accesses.clear();
+    m_bindings.clear();
+    m_layout.setNull();
     getDevice<DeviceImpl>()->deferDelete(this);
 }
 
@@ -220,6 +224,39 @@ static bool descriptorRangesMatch(
     return cursor == expectedTypes.size();
 }
 
+/// Reads the execution constants' register and space from reflection, from the same sources the
+/// pipeline layout collects them from. The root signature builder derives a constant buffer's space
+/// from its enclosing scope and drops an explicit `register(bN, spaceM)` space the shader still reads.
+static bool findConstantsRegister(slang::ProgramLayout* programLayout, UINT& outRegister, UINT& outSpace)
+{
+    const auto category = slang::ParameterCategory::ConstantBuffer;
+    auto* globals = programLayout->getGlobalParamsVarLayout();
+    for (unsigned i = 0; i < programLayout->getParameterCount(); ++i)
+    {
+        auto* param = programLayout->getParameterByIndex(i);
+        if (param->getTypeLayout()->getKind() != slang::TypeReflection::Kind::ConstantBuffer)
+            continue;
+        outRegister = UINT((globals ? globals->getOffset(category) : 0) + param->getOffset(category));
+        outSpace = UINT((globals ? globals->getBindingSpace(category) : 0) + param->getBindingSpace(category));
+        return true;
+    }
+    for (unsigned i = 0; i < programLayout->getEntryPointCount(); ++i)
+    {
+        auto* entryPoint = programLayout->getEntryPointByIndex(i);
+        for (unsigned j = 0; j < entryPoint->getParameterCount(); ++j)
+        {
+            auto* param = entryPoint->getParameterByIndex(j);
+            if (param->getCategoryCount() != 1 || param->getCategoryByIndex(0) != slang::ParameterCategory::Uniform)
+                continue;
+            auto* varLayout = entryPoint->getVarLayout();
+            outRegister = UINT(varLayout->getOffset(category));
+            outSpace = UINT(varLayout->getBindingSpace(category));
+            return true;
+        }
+    }
+    return false;
+}
+
 Result PipelineLayoutImpl::initNative()
 {
     DeviceImpl* device = getDevice<DeviceImpl>();
@@ -293,6 +330,17 @@ Result PipelineLayoutImpl::initNative()
         );
         return SLANG_E_INVALID_ARG;
     }
+    UINT constantsRegister = 0;
+    UINT constantsSpace = 0;
+    if (m_constantsProfile != ConstantsProfile::None &&
+        !findConstantsRegister(programLayout, constantsRegister, constantsSpace))
+    {
+        device->printError(
+            "Pipeline layout '%s': the program's execution constants have no reflected constant buffer",
+            label
+        );
+        return SLANG_E_INVALID_ARG;
+    }
 
     for (uint32_t i = 0; i < m_setLayouts.size(); ++i)
     {
@@ -326,8 +374,8 @@ Result PipelineLayoutImpl::initNative()
         D3D12_ROOT_PARAMETER1 parameter = {};
         parameter.ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
         parameter.ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
-        parameter.Descriptor.ShaderRegister = rootRanges[0].BaseShaderRegister;
-        parameter.Descriptor.RegisterSpace = rootRanges[0].RegisterSpace;
+        parameter.Descriptor.ShaderRegister = constantsRegister;
+        parameter.Descriptor.RegisterSpace = constantsSpace;
         // Consecutive binds write further constants into the same transient upload page after this descriptor is set.
         parameter.Descriptor.Flags = D3D12_ROOT_DESCRIPTOR_FLAG_DATA_VOLATILE;
         m_constantsRootParameterIndex = uint32_t(rootParameters.size());

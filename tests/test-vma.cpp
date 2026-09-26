@@ -1,4 +1,4 @@
-#include "testing.h"
+#include "test-compute-trivial.h"
 
 using namespace rhi;
 using namespace rhi::testing;
@@ -84,13 +84,7 @@ GPU_TEST_CASE("vma-buffer-mapping", Vulkan)
 // Test device-local buffer with initial data upload (exercises VMA staging path).
 GPU_TEST_CASE("vma-buffer-initial-data", Vulkan)
 {
-    ComPtr<IShaderProgram> shaderProgram;
-    REQUIRE_CALL(loadProgram(device, "test-compute-trivial", "computeMain", shaderProgram.writeRef()));
-
-    ComputePipelineDesc pipelineDesc = {};
-    pipelineDesc.program = shaderProgram.get();
-    ComPtr<IComputePipeline> pipeline;
-    REQUIRE_CALL(device->createComputePipeline(pipelineDesc, pipeline.writeRef()));
+    auto pipeline = trivialCompute::createPipeline(device);
 
     const int numberCount = 4;
     float initialData[] = {0.0f, 1.0f, 2.0f, 3.0f};
@@ -110,11 +104,8 @@ GPU_TEST_CASE("vma-buffer-initial-data", Vulkan)
         auto queue = device->getQueue(QueueType::Graphics);
         auto commandEncoder = queue->createCommandEncoder();
         auto passEncoder = commandEncoder->beginComputePass();
-        auto rootObject = passEncoder->bindPipeline(pipeline);
-        ShaderCursor shaderCursor(rootObject);
-        shaderCursor["buffer"].setBinding(buffer);
         float value = 10.f;
-        shaderCursor["value"].setData(value);
+        trivialCompute::bindBuffer(device, passEncoder, pipeline, buffer, value);
         passEncoder->dispatchCompute(1, 1, 1);
         passEncoder->end();
         queue->submit(commandEncoder->finish());

@@ -1,16 +1,15 @@
-#include "testing.h"
+#include "test-compute-trivial.h"
 
 using namespace rhi;
 using namespace rhi::testing;
 
-static void dispatchIncrement(IDevice* device, IComputePipeline* pipeline, IBuffer* buffer)
+static void dispatchIncrement(IDevice* device, const trivialCompute::Pipeline& pipeline, IBuffer* buffer)
 {
     auto queue = device->getQueue(QueueType::Graphics);
     auto commandEncoder = queue->createCommandEncoder();
 
     auto passEncoder = commandEncoder->beginComputePass();
-    auto rootObject = passEncoder->bindPipeline(pipeline);
-    ShaderCursor(rootObject)["buffer"].setBinding(buffer);
+    trivialCompute::bindBuffer(device, passEncoder, pipeline, buffer);
     passEncoder->dispatchCompute(1, 1, 1);
     passEncoder->end();
 
@@ -20,13 +19,7 @@ static void dispatchIncrement(IDevice* device, IComputePipeline* pipeline, IBuff
 
 GPU_TEST_CASE("buffer-from-handle", D3D12 | Vulkan | Metal | CUDA | WGPU)
 {
-    ComPtr<IShaderProgram> shaderProgram;
-    REQUIRE_CALL(loadProgram(device, "test-compute-trivial", "computeMain", shaderProgram.writeRef()));
-
-    ComputePipelineDesc pipelineDesc = {};
-    pipelineDesc.program = shaderProgram.get();
-    ComPtr<IComputePipeline> pipeline;
-    REQUIRE_CALL(device->createComputePipeline(pipelineDesc, pipeline.writeRef()));
+    auto pipeline = trivialCompute::createPipeline(device);
 
     const int numberCount = 4;
     float initialData[] = {0.0f, 1.0f, 2.0f, 3.0f};

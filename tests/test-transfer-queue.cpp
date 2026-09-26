@@ -1,4 +1,4 @@
-#include "testing.h"
+#include "test-compute-trivial.h"
 
 using namespace rhi;
 using namespace rhi::testing;
@@ -96,13 +96,7 @@ GPU_TEST_CASE("transfer-queue-all-queues", D3D12 | Vulkan)
     REQUIRE(computeQueue != nullptr);
     REQUIRE(transferQueue != nullptr);
 
-    ComPtr<IShaderProgram> shaderProgram;
-    REQUIRE_CALL(loadProgram(device, "test-compute-trivial", "computeMain", shaderProgram.writeRef()));
-
-    ComputePipelineDesc pipelineDesc = {};
-    pipelineDesc.program = shaderProgram.get();
-    ComPtr<IComputePipeline> pipeline;
-    REQUIRE_CALL(device->createComputePipeline(pipelineDesc, pipeline.writeRef()));
+    auto pipeline = trivialCompute::createPipeline(device);
 
     const int numberCount = 4;
     float initialDataA[] = {0.0f, 1.0f, 2.0f, 3.0f};
@@ -151,11 +145,8 @@ GPU_TEST_CASE("transfer-queue-all-queues", D3D12 | Vulkan)
     {
         auto encoder = graphicsQueue->createCommandEncoder();
         auto pass = encoder->beginComputePass();
-        auto rootObject = pass->bindPipeline(pipeline);
-        ShaderCursor shaderCursor(rootObject);
-        shaderCursor["buffer"].setBinding(bufferA);
         float value = 10.f;
-        shaderCursor["value"].setData(value);
+        trivialCompute::bindBuffer(device, pass, pipeline, bufferA, value);
         pass->dispatchCompute(1, 1, 1);
         pass->end();
         graphicsQueue->submit(encoder->finish());
@@ -166,11 +157,8 @@ GPU_TEST_CASE("transfer-queue-all-queues", D3D12 | Vulkan)
         auto encoder = computeQueue->createCommandEncoder();
         encoder->acquireBufferFromQueue(bufferB, ResourceState::UnorderedAccess, QueueType::Graphics);
         auto pass = encoder->beginComputePass();
-        auto rootObject = pass->bindPipeline(pipeline);
-        ShaderCursor shaderCursor(rootObject);
-        shaderCursor["buffer"].setBinding(bufferB);
         float value = 5.f;
-        shaderCursor["value"].setData(value);
+        trivialCompute::bindBuffer(device, pass, pipeline, bufferB, value);
         pass->dispatchCompute(1, 1, 1);
         pass->end();
         encoder->releaseBufferForQueue(bufferB, ResourceState::UnorderedAccess, QueueType::Graphics);

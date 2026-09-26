@@ -11,6 +11,9 @@ public:
     struct PipelineData : public RefObject
     {
         RefPtr<BufferImpl> buffer;
+        /// Keeps the pipeline that keys this entry alive, so a new pipeline can never reuse its
+        /// address and receive the stale shader identifiers.
+        RefPtr<RayTracingPipelineImpl> pipeline;
 
         uint32_t rayGenTableOffset;
         uint32_t missTableOffset;
