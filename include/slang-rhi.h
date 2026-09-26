@@ -87,6 +87,8 @@ enum class StructType
     D3D12ExperimentalFeaturesDesc,
 
     VulkanDeviceExtendedDesc,
+
+    AccelerationStructureDependenciesDesc,
 };
 
 // TODO: Implementation or backend or something else?
@@ -1532,6 +1534,18 @@ public:
     virtual SLANG_NO_THROW AccelerationStructureHandle SLANG_MCALL getHandle() = 0;
     virtual SLANG_NO_THROW DeviceAddress SLANG_MCALL getDeviceAddress() = 0;
     virtual SLANG_NO_THROW Result SLANG_MCALL getDescriptorHandle(DescriptorHandle* outHandle) = 0;
+};
+
+/// Optional TLAS creation extension. The dependencies are copied and retained until the TLAS is destroyed.
+/// A supplied extension must contain at least one BLAS from the same device. The array is only
+/// borrowed during creation; getDesc().next does not retain the extension chain.
+struct AccelerationStructureDependenciesDesc
+{
+    static constexpr StructType kStructType = StructType::AccelerationStructureDependenciesDesc;
+    StructType structType = kStructType;
+    const void* next = nullptr;
+    uint32_t structureCount = 0;
+    IAccelerationStructure* const* structures = nullptr;
 };
 
 // Micromaps
