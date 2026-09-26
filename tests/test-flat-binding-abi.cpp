@@ -13,7 +13,7 @@ namespace {
 using flat::Nested;
 using flat::Params;
 
-auto createSession(IDevice* device, bool inlineConstants) -> ComPtr<slang::ISession>
+auto createSession(IDevice* device, bool inlineConstants, bool nonzeroRegister) -> ComPtr<slang::ISession>
 {
     auto deviceSession = device->getSlangSession();
     auto* globalSession = deviceSession->getGlobalSession();
@@ -33,7 +33,10 @@ auto createSession(IDevice* device, bool inlineConstants) -> ComPtr<slang::ISess
     options[1].name = slang::CompilerOptionName::MatrixLayoutColumn;
     options[1].value.kind = slang::CompilerOptionValueKind::Int;
     options[1].value.intValue0 = 1;
-    slang::PreprocessorMacroDesc macro{"INLINE_CONSTANTS", inlineConstants ? "1" : "0"};
+    slang::PreprocessorMacroDesc macros[]{
+        {"INLINE_CONSTANTS", inlineConstants ? "1" : "0"},
+        {"NONZERO_CONSTANT_REGISTER", nonzeroRegister ? "1" : "0"},
+    };
     auto searchPaths = getSlangSearchPaths();
     slang::SessionDesc desc{};
     desc.targets = &target;
@@ -41,8 +44,8 @@ auto createSession(IDevice* device, bool inlineConstants) -> ComPtr<slang::ISess
     desc.defaultMatrixLayoutMode = SLANG_MATRIX_LAYOUT_COLUMN_MAJOR;
     desc.searchPaths = searchPaths.data();
     desc.searchPathCount = searchPaths.size();
-    desc.preprocessorMacros = &macro;
-    desc.preprocessorMacroCount = 1;
+    desc.preprocessorMacros = macros;
+    desc.preprocessorMacroCount = std::size(macros);
     desc.compilerOptionEntries = options;
     desc.compilerOptionEntryCount = std::size(options);
     ComPtr<slang::ISession> session;
@@ -57,7 +60,13 @@ auto field(slang::TypeLayoutReflection* type, const char* name) -> slang::Variab
     return type->getFieldByIndex(static_cast<unsigned int>(index));
 }
 
-auto checkReflection(slang::ProgramLayout* program, DeviceType target, bool inlineConstants, bool graphics) -> void
+auto checkReflection(
+    slang::ProgramLayout* program,
+    DeviceType target,
+    bool inlineConstants,
+    bool graphics,
+    bool nonzeroRegister
+) -> void
 {
     REQUIRE(program != nullptr);
     CHECK(program->getEntryPointCount() == (graphics ? 2u : 1u));
@@ -73,8 +82,11 @@ auto checkReflection(slang::ProgramLayout* program, DeviceType target, bool inli
                           : target == DeviceType::Vulkan ? slang::ParameterCategory::DescriptorTableSlot
                                                          : slang::ParameterCategory::ConstantBuffer;
     CHECK(parameters->getCategory() == category);
-    CHECK(globals->getOffset(category) + parameters->getOffset(category) == 0);
-    CHECK(globals->getBindingSpace(category) + parameters->getBindingSpace(category) == (inlineConstants ? 0u : 1u));
+    CHECK(globals->getOffset(category) + parameters->getOffset(category) == (nonzeroRegister ? 3u : 0u));
+    CHECK(
+        globals->getBindingSpace(category) + parameters->getBindingSpace(category) ==
+        (inlineConstants ? 0u : nonzeroRegister ? 2u : 1u)
+    );
     if (inlineConstants)
     {
         CHECK(parameters->getTypeLayout()->getSize(slang::ParameterCategory::DescriptorTableSlot) == 0);
@@ -154,9 +166,9 @@ auto createAbiPipelineLayout(
 }
 
 // Exercise the same literal ABI oracle through flat compute and graphics bindings.
-auto runBaseline(IDevice* device, bool inlineConstants) -> void
+auto runBaseline(IDevice* device, bool inlineConstants, bool nonzeroRegister = false) -> void
 {
-    auto session = createSession(device, inlineConstants);
+    auto session = createSession(device, inlineConstants, nonzeroRegister);
     const Params params{
         {1.f, 2.f, 3.f},
         2.f,
@@ -190,7 +202,7 @@ auto runBaseline(IDevice* device, bool inlineConstants) -> void
         computeProgram.writeRef(),
         &computeReflection
     ));
-    checkReflection(computeReflection, device->getDeviceType(), inlineConstants, false);
+    checkReflection(computeReflection, device->getDeviceType(), inlineConstants, false, nonzeroRegister);
     auto computeLayout = createAbiPipelineLayout(device, computeProgram, setLayout, inlineConstants);
     const BindingSetEntry outputBinding{.slot = 0, .resource = output};
     const BindingSetDesc setDesc{.layout = setLayout, .entries = &outputBinding, .entryCount = 1};
@@ -231,7 +243,7 @@ auto runBaseline(IDevice* device, bool inlineConstants) -> void
         renderProgram.writeRef(),
         &renderReflection
     ));
-    checkReflection(renderReflection, device->getDeviceType(), inlineConstants, true);
+    checkReflection(renderReflection, device->getDeviceType(), inlineConstants, true, nonzeroRegister);
     auto renderLayout = createAbiPipelineLayout(device, renderProgram, setLayout, inlineConstants);
     ColorTargetDesc target{};
     target.format = Format::RGBA32Float;
@@ -307,4 +319,9 @@ GPU_TEST_CASE("flat-binding-abi-global-buffered", D3D12 | Vulkan)
 GPU_TEST_CASE("flat-binding-abi-global-inline", Vulkan)
 {
     runBaseline(device, true);
+}
+
+GPU_TEST_CASE("flat-binding-abi-global-buffered-nonzero-register-space", D3D12)
+{
+    runBaseline(device, false, true);
 }

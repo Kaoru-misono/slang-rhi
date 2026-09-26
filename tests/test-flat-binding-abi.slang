@@ -2,6 +2,10 @@
 #define NATIVE_LAYOUT 0
 #endif
 
+#ifndef NONZERO_CONSTANT_REGISTER
+#define NONZERO_CONSTANT_REGISTER 0
+#endif
+
 struct Nested
 {
     float3 weights;
@@ -19,6 +23,8 @@ struct Params
 
 #if INLINE_CONSTANTS
 [[vk::push_constant]] ConstantBuffer<Params> parameters;
+#elif !NATIVE_LAYOUT && NONZERO_CONSTANT_REGISTER
+[[vk::binding(3, 2)]] ConstantBuffer<Params> parameters : register(b3, space2);
 #else
 [[vk::binding(0, 1)]] ConstantBuffer<Params> parameters : register(b0, space1);
 #endif
