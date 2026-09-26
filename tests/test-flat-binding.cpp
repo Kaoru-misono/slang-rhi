@@ -1,4 +1,6 @@
 #include "testing.h"
+#include "test-ray-tracing-common.h"
+#include "debug-layer/debug-command-encoder.h"
 #include "../src/state-tracking.h"
 #if SLANG_RHI_ENABLE_VULKAN
 #include "vulkan/vk-api.h"
@@ -19,6 +21,17 @@ using namespace rhi;
 using namespace rhi::testing;
 
 namespace {
+const DebugLayerOptions kFlatRootDebugOptions{.coreValidation = true};
+
+auto checkNoDebugRoots(ICommandEncoder* encoder) -> debug::DebugCommandEncoder*
+{
+    auto* debugEncoder = static_cast<debug::DebugCommandEncoder*>(encoder);
+    CHECK(debugEncoder->m_computePassEncoder.m_rootObject == nullptr);
+    CHECK(debugEncoder->m_renderPassEncoder.m_rootObject == nullptr);
+    CHECK(debugEncoder->m_rayTracingPassEncoder.m_rootObject == nullptr);
+    return debugEncoder;
+}
+
 struct alignas(16) Params
 {
     float direction[3];
@@ -562,7 +575,8 @@ struct FlatVariant
     uint32_t samplerCount = 0;
 };
 
-auto createFlatSession(IDevice* device, const FlatVariant& variant) -> ComPtr<slang::ISession>
+auto createFlatSession(IDevice* device, const FlatVariant& variant, const char* profile = "sm_6_0")
+    -> ComPtr<slang::ISession>
 {
     auto deviceSession = device->getSlangSession();
     auto* globalSession = deviceSession->getGlobalSession();
@@ -571,7 +585,7 @@ auto createFlatSession(IDevice* device, const FlatVariant& variant) -> ComPtr<sl
     if (target.format == SLANG_DXIL)
     {
         // ResourceDescriptorHeap, which a descriptor handle lowers to, needs SM 6.6.
-        target.profile = globalSession->findProfile(variant.bindlessHandle ? "sm_6_6" : "sm_6_0");
+        target.profile = globalSession->findProfile(variant.bindlessHandle ? "sm_6_6" : profile);
     }
     target.forceGLSLScalarBufferLayout = true;
     slang::CompilerOptionEntry options[2]{};
@@ -901,7 +915,7 @@ GPU_TEST_CASE("flat-binding-compute-inline", D3D12 | Vulkan)
     runFlatCompute(device, true);
 }
 
-GPU_TEST_CASE("flat-binding-graphics-vs-ps", D3D12 | Vulkan)
+GPU_TEST_CASE_EX("flat-binding-graphics-vs-ps", D3D12 | Vulkan, kFlatRootDebugOptions)
 {
     const FlatDeviceDrain drain{device};
     auto session = createFlatSession(device, {});
@@ -939,6 +953,7 @@ GPU_TEST_CASE("flat-binding-graphics-vs-ps", D3D12 | Vulkan)
     const auto bindings = flatBindings(&constants, sizeof(constants), sets);
     auto queue = device->getQueue(QueueType::Graphics);
     auto encoder = queue->createCommandEncoder();
+    auto* debugEncoder = checkNoDebugRoots(encoder);
     RenderPassColorAttachment attachment{};
     attachment.view = view;
     attachment.loadOp = LoadOp::Clear;
@@ -948,6 +963,7 @@ GPU_TEST_CASE("flat-binding-graphics-vs-ps", D3D12 | Vulkan)
     passDesc.colorAttachmentCount = 1;
     auto pass = encoder->beginRenderPass(passDesc);
     REQUIRE_CALL(pass->bindPipeline(pipeline, bindings));
+    checkNoDebugRoots(encoder);
     RenderState state{};
     state.viewports[0] = Viewport::fromSize(2, 2);
     state.viewportCount = 1;
@@ -957,6 +973,7 @@ GPU_TEST_CASE("flat-binding-graphics-vs-ps", D3D12 | Vulkan)
     DrawArguments draw{};
     draw.vertexCount = 3;
     pass->draw(draw);
+    debug::DebugRootShaderObject* firstRoot = nullptr;
     const auto bindShaderObject = [&](bool suppliedRoot)
     {
         auto legacyDesc = desc;
@@ -972,6 +989,14 @@ GPU_TEST_CASE("flat-binding-graphics-vs-ps", D3D12 | Vulkan)
         else
         {
             root = pass->bindPipeline(legacyPipeline);
+            auto* wrapper = debugEncoder->m_renderPassEncoder.m_rootObject.get();
+            REQUIRE(wrapper != nullptr);
+            CHECK(root.get() == wrapper);
+            if (firstRoot)
+                CHECK(wrapper == firstRoot);
+            firstRoot = wrapper;
+            CHECK(wrapper->m_objects.empty());
+            CHECK(wrapper->m_entryPoints.empty());
         }
         REQUIRE(root != nullptr);
         constants.bias = 19;
@@ -981,12 +1006,35 @@ GPU_TEST_CASE("flat-binding-graphics-vs-ps", D3D12 | Vulkan)
         REQUIRE_CALL(cursor["scene"]["output"].setBinding(scene.output));
         REQUIRE_CALL(cursor["scene"]["texture"].setBinding(scene.textureView));
         REQUIRE_CALL(cursor["scene"]["sampler"].setBinding(scene.sampler));
+        if (!suppliedRoot)
+        {
+            CHECK_FALSE(firstRoot->m_objects.empty());
+            ComPtr<IShaderObject> entryPoint;
+            REQUIRE_CALL(root->getEntryPoint(0, entryPoint.writeRef()));
+            CHECK_FALSE(firstRoot->m_entryPoints.empty());
+        }
         pass->setRenderState(state);
         pass->draw(draw);
     };
     SUBCASE("flat only") {}
     SUBCASE("switch to encoder-created root") { bindShaderObject(false); }
     SUBCASE("switch to supplied root") { bindShaderObject(true); }
+    SUBCASE("encoder root reused across legacy and flat binds")
+    {
+        bindShaderObject(false);
+        bindShaderObject(false);
+        constants.bias = 23;
+        REQUIRE_CALL(pass->bindPipeline(pipeline, bindings));
+        pass->draw(draw);
+        bindShaderObject(false);
+    }
+    SUBCASE("return from encoder root to flat")
+    {
+        bindShaderObject(false);
+        constants.bias = 23;
+        REQUIRE_CALL(pass->bindPipeline(pipeline, bindings));
+        pass->draw(draw);
+    }
     SUBCASE("new pass has no inherited binding")
     {
         pass->end();
@@ -1019,6 +1067,208 @@ GPU_TEST_CASE("flat-binding-graphics-vs-ps", D3D12 | Vulkan)
             std::memcpy(pixel.data(), source + y * readbackLayout.rowPitch + x * sizeof(pixel), sizeof(pixel));
             compareResultFuzzy(pixel.data(), expected.data(), pixel.size());
         }
+    }
+}
+
+GPU_TEST_CASE_EX("flat-binding-debug-root-lazy-compute", D3D12 | Vulkan, kFlatRootDebugOptions)
+{
+    const FlatDeviceDrain drain{device};
+    auto session = createFlatSession(device, {});
+    ComPtr<IShaderProgram> program;
+    REQUIRE_CALL(loadAndLinkProgram(device, session, "test-flat-binding-cases", "csMain", program.writeRef()));
+    const std::array<uint32_t, 4> input{5, 6, 7, 8};
+    FlatScene scene;
+    scene.setLayout = createFlatSceneSetLayout(device);
+    createFlatSceneResources(device, input, 20, scene);
+    auto layout = createFlatPipelineLayout(device, program, scene.setLayout, sizeof(FlatConstants), "lazy root");
+    createFlatSceneBindingSet(device, scene);
+    ComputePipelineDesc desc{.program = program, .layout = layout};
+    ComPtr<IComputePipeline> pipeline;
+    REQUIRE_CALL(device->createComputePipeline(desc, pipeline.writeRef()));
+    desc.layout = nullptr;
+    ComPtr<IComputePipeline> legacyPipeline;
+    REQUIRE_CALL(device->createComputePipeline(desc, legacyPipeline.writeRef()));
+    auto queue = device->getQueue(QueueType::Graphics);
+    auto encoder = queue->createCommandEncoder();
+    auto* debugEncoder = checkNoDebugRoots(encoder);
+    auto pass = encoder->beginComputePass();
+    IBindingSet* const sets[]{scene.set};
+    debug::DebugRootShaderObject* firstRoot = nullptr;
+    std::array<uint32_t, 20> expected{};
+    // flat -> legacy -> repeated legacy -> flat -> legacy, with disjoint output regions.
+    for (uint32_t step = 0; step < 5; ++step)
+    {
+        const FlatConstants constants{.offset = step * 4, .multiplier = step + 2, .bias = step * 7, .tag = 0};
+        if (step == 0 || step == 3)
+        {
+            REQUIRE_CALL(pass->bindPipeline(pipeline, flatBindings(&constants, sizeof(constants), sets)));
+            if (step == 0)
+                checkNoDebugRoots(encoder);
+        }
+        else
+        {
+            auto* root = pass->bindPipeline(legacyPipeline);
+            REQUIRE(root != nullptr);
+            auto* wrapper = debugEncoder->m_computePassEncoder.m_rootObject.get();
+            REQUIRE(wrapper != nullptr);
+            CHECK(root == wrapper);
+            if (firstRoot)
+                CHECK(wrapper == firstRoot);
+            firstRoot = wrapper;
+            CHECK(wrapper->m_objects.empty());
+            CHECK(wrapper->m_entryPoints.empty());
+            ShaderCursor cursor(root);
+            REQUIRE_CALL(cursor["constants"].getDereferenced().setData(&constants, sizeof(constants)));
+            REQUIRE_CALL(cursor["scene"]["input"].setBinding(scene.input));
+            REQUIRE_CALL(cursor["scene"]["output"].setBinding(scene.output));
+            REQUIRE_CALL(cursor["scene"]["texture"].setBinding(scene.textureView));
+            REQUIRE_CALL(cursor["scene"]["sampler"].setBinding(scene.sampler));
+            CHECK_FALSE(wrapper->m_objects.empty());
+            ComPtr<IShaderObject> entryPoint;
+            REQUIRE_CALL(root->getEntryPoint(0, entryPoint.writeRef()));
+            CHECK_FALSE(wrapper->m_entryPoints.empty());
+        }
+        pass->dispatchCompute(4, 1, 1);
+        for (uint32_t i = 0; i < 4; ++i)
+            expected[step * 4 + i] = flatExpected(0, input[i], constants);
+    }
+    CHECK(debugEncoder->m_renderPassEncoder.m_rootObject == nullptr);
+    CHECK(debugEncoder->m_rayTracingPassEncoder.m_rootObject == nullptr);
+    pass->end();
+    auto commands = encoder->finish();
+    REQUIRE(commands != nullptr);
+    REQUIRE_CALL(queue->submit(commands));
+    REQUIRE_CALL(queue->waitOnHost());
+    compareComputeResult(device, scene.output, expected);
+}
+
+GPU_TEST_CASE_EX("flat-binding-debug-root-lazy-ray-tracing", D3D12 | Vulkan, kFlatRootDebugOptions)
+{
+    if (!device->hasFeature(Feature::RayTracing))
+        SKIP("ray tracing not supported; debug RT root allocation regression not executed");
+    const FlatDeviceDrain drain{device};
+    auto queue = device->getQueue(QueueType::Graphics);
+    SingleTriangleBLAS blas(device, queue);
+    TLAS tlas(device, queue, blas.blas);
+    auto session = createFlatSession(device, {}, "sm_6_3");
+    ComPtr<IShaderProgram> program;
+    REQUIRE_CALL(loadAndLinkProgram(device, session, "test-flat-binding-rt",
+        {"rayGenMain", "missMain", "closestHitMain"}, program.writeRef()));
+    const BindingSetLayoutEntry entries[]{
+        {BindingKind::RaytracingAccelerationStructure, 1, "tlas"},
+        {BindingKind::RWTexture2D, 1, "output"},
+    };
+    const BindingSetLayoutDesc setLayoutDesc{.entries = entries, .entryCount = 2};
+    ComPtr<IBindingSetLayout> setLayout;
+    REQUIRE_CALL(device->createBindingSetLayout(setLayoutDesc, setLayout.writeRef()));
+    struct RtConstants
+    {
+        uint32_t dims[2];
+        float hitValue;
+        float missValue;
+    };
+    static_assert(sizeof(RtConstants) == 16);
+    auto layout = createFlatPipelineLayout(device, program, setLayout, sizeof(RtConstants), "lazy RT root");
+    HitGroupDesc hitGroup{};
+    hitGroup.hitGroupName = "hitGroup";
+    hitGroup.closestHitEntryPoint = "closestHitMain";
+    RayTracingPipelineDesc pipelineDesc{};
+    pipelineDesc.program = program;
+    pipelineDesc.layout = layout;
+    pipelineDesc.hitGroups = &hitGroup;
+    pipelineDesc.hitGroupCount = 1;
+    pipelineDesc.maxRayPayloadSize = 16;
+    pipelineDesc.maxAttributeSizeInBytes = 8;
+    pipelineDesc.maxRecursion = 1;
+    ComPtr<IRayTracingPipeline> pipeline;
+    REQUIRE_CALL(device->createRayTracingPipeline(pipelineDesc, pipeline.writeRef()));
+    pipelineDesc.layout = nullptr;
+    ComPtr<IRayTracingPipeline> legacyPipeline;
+    REQUIRE_CALL(device->createRayTracingPipeline(pipelineDesc, legacyPipeline.writeRef()));
+    const char* raygenNames[]{"rayGenMain"};
+    const char* missNames[]{"missMain"};
+    const char* hitNames[]{"hitGroup"};
+    ShaderTableDesc tableDesc{};
+    tableDesc.program = program;
+    tableDesc.rayGenShaderEntryPointNames = raygenNames;
+    tableDesc.rayGenShaderCount = 1;
+    tableDesc.missShaderEntryPointNames = missNames;
+    tableDesc.missShaderCount = 1;
+    tableDesc.hitGroupNames = hitNames;
+    tableDesc.hitGroupCount = 1;
+    ComPtr<IShaderTable> table;
+    REQUIRE_CALL(device->createShaderTable(tableDesc, table.writeRef()));
+    std::array<ComPtr<ITexture>, 5> outputs;
+    auto encoder = queue->createCommandEncoder();
+    auto* debugEncoder = checkNoDebugRoots(encoder);
+    auto pass = encoder->beginRayTracingPass();
+    debug::DebugRootShaderObject* firstRoot = nullptr;
+    for (uint32_t step = 0; step < outputs.size(); ++step)
+    {
+        TextureDesc textureDesc{};
+        textureDesc.type = TextureType::Texture2D;
+        textureDesc.size = {4, 4, 1};
+        textureDesc.format = Format::RGBA32Float;
+        textureDesc.usage = TextureUsage::UnorderedAccess | TextureUsage::CopySource;
+        textureDesc.defaultState = ResourceState::UnorderedAccess;
+        REQUIRE_CALL(device->createTexture(textureDesc, nullptr, outputs[step].writeRef()));
+        const RtConstants constants{{4, 4}, 0.75f + float(step), 0.25f + float(step)};
+        if (step == 0 || step == 3)
+        {
+            const BindingSetEntry bindings[]{
+                {.slot = 0, .resource = tlas.tlas},
+                {.slot = 1, .resource = outputs[step]->getDefaultView()},
+            };
+            const BindingSetDesc setDesc{.layout = setLayout, .entries = bindings, .entryCount = 2};
+            ComPtr<IBindingSet> set;
+            REQUIRE_CALL(device->createBindingSet(setDesc, set.writeRef()));
+            IBindingSet* const sets[]{set};
+            REQUIRE_CALL(pass->bindPipeline(pipeline, table, flatBindings(&constants, sizeof(constants), sets)));
+            if (step == 0)
+                checkNoDebugRoots(encoder);
+        }
+        else
+        {
+            auto* root = pass->bindPipeline(legacyPipeline, table);
+            REQUIRE(root != nullptr);
+            auto* wrapper = debugEncoder->m_rayTracingPassEncoder.m_rootObject.get();
+            REQUIRE(wrapper != nullptr);
+            CHECK(root == wrapper);
+            if (firstRoot)
+                CHECK(wrapper == firstRoot);
+            firstRoot = wrapper;
+            CHECK(wrapper->m_objects.empty());
+            CHECK(wrapper->m_entryPoints.empty());
+            ShaderCursor cursor(root);
+            REQUIRE_CALL(cursor["params"].getDereferenced().setData(&constants, sizeof(constants)));
+            REQUIRE_CALL(cursor["scene"]["tlas"].setBinding(tlas.tlas));
+            REQUIRE_CALL(cursor["scene"]["output"].setBinding(outputs[step]->getDefaultView()));
+            CHECK_FALSE(wrapper->m_objects.empty());
+            ComPtr<IShaderObject> entryPoint;
+            REQUIRE_CALL(root->getEntryPoint(0, entryPoint.writeRef()));
+            CHECK_FALSE(wrapper->m_entryPoints.empty());
+        }
+        pass->dispatchRays(0, 4, 4, 1);
+    }
+    CHECK(debugEncoder->m_computePassEncoder.m_rootObject == nullptr);
+    CHECK(debugEncoder->m_renderPassEncoder.m_rootObject == nullptr);
+    pass->end();
+    auto commands = encoder->finish();
+    REQUIRE(commands != nullptr);
+    REQUIRE_CALL(queue->submit(commands));
+    REQUIRE_CALL(queue->waitOnHost());
+    for (uint32_t step = 0; step < outputs.size(); ++step)
+    {
+        std::array<float, 64> expected{};
+        for (uint32_t y = 0; y < 4; ++y)
+            for (uint32_t x = 0; x < 4; ++x)
+            {
+                const uint32_t offset = (y * 4 + x) * 4;
+                const float value = (x + y <= 3 ? 0.75f : 0.25f) + float(step);
+                expected[offset] = expected[offset + 1] = expected[offset + 2] = value;
+                expected[offset + 3] = 1.f;
+            }
+        compareComputeResult(device, outputs[step], 0, 0, expected);
     }
 }
 
