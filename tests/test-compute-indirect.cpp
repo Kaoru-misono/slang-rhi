@@ -1,28 +1,127 @@
 #include "testing.h"
 
+#include <initializer_list>
+
 using namespace rhi;
 using namespace rhi::testing;
+
+struct IndirectComputePipeline
+{
+    ComPtr<IBindingSetLayout> setLayout;
+    ComPtr<IPipelineLayout> layout;
+    ComPtr<IComputePipeline> pipeline;
+};
+
+static ComPtr<slang::ISession> createIndirectSession(IDevice* device, const char* entryPoint)
+{
+    auto deviceSession = device->getSlangSession();
+    auto* globalSession = deviceSession->getGlobalSession();
+    slang::TargetDesc target{};
+    target.format = device->getDeviceType() == DeviceType::Vulkan ? SLANG_SPIRV : SLANG_DXIL;
+    if (target.format == SLANG_DXIL)
+        target.profile = globalSession->findProfile("sm_6_0");
+    target.forceGLSLScalarBufferLayout = true;
+    slang::CompilerOptionEntry option{};
+    option.name = slang::CompilerOptionName::EmitSpirvDirectly;
+    option.value.kind = slang::CompilerOptionValueKind::Int;
+    option.value.intValue0 = 1;
+    std::string macroName = std::string("INDIRECT_ENTRY_") + entryPoint;
+    slang::PreprocessorMacroDesc macro{macroName.c_str(), "1"};
+    auto searchPaths = getSlangSearchPaths();
+    slang::SessionDesc desc{};
+    desc.targets = &target;
+    desc.targetCount = 1;
+    desc.defaultMatrixLayoutMode = SLANG_MATRIX_LAYOUT_ROW_MAJOR;
+    desc.searchPaths = searchPaths.data();
+    desc.searchPathCount = SlangInt(searchPaths.size());
+    desc.preprocessorMacros = &macro;
+    desc.preprocessorMacroCount = 1;
+    desc.compilerOptionEntries = &option;
+    desc.compilerOptionEntryCount = 1;
+    ComPtr<slang::ISession> session;
+    REQUIRE_CALL(globalSession->createSession(desc, session.writeRef()));
+    return session;
+}
+
+static IndirectComputePipeline createIndirectPipeline(
+    IDevice* device,
+    const char* entryPoint,
+    std::initializer_list<BindingSetLayoutEntry> entries,
+    size_t constantsSize
+)
+{
+    auto session = createIndirectSession(device, entryPoint);
+    ComPtr<IShaderProgram> program;
+    REQUIRE_CALL(loadProgram(device, session, "test-compute-indirect", entryPoint, program.writeRef()));
+    IndirectComputePipeline result;
+    BindingSetLayoutDesc setDesc = {};
+    setDesc.entries = entries.begin();
+    setDesc.entryCount = uint32_t(entries.size());
+    REQUIRE_CALL(device->createBindingSetLayout(setDesc, result.setLayout.writeRef()));
+    PipelineLayoutSetDesc set = {"resources", result.setLayout};
+    PipelineLayoutDesc layoutDesc = {program, &set, 1, (constantsSize + 15) & ~size_t(15)};
+    REQUIRE_CALL(device->createPipelineLayout(layoutDesc, result.layout.writeRef()));
+    REQUIRE(result.layout->getDesc().constantsSize == layoutDesc.constantsSize);
+    REQUIRE(result.layout->getConstantsSize() == layoutDesc.constantsSize);
+    ComputePipelineDesc pipelineDesc = {};
+    pipelineDesc.program = program;
+    pipelineDesc.layout = result.layout;
+    REQUIRE_CALL(device->createComputePipeline(pipelineDesc, result.pipeline.writeRef()));
+    return result;
+}
+
+static ComPtr<IBindingSet> createIndirectSet(
+    IDevice* device,
+    const IndirectComputePipeline& pipeline,
+    std::initializer_list<IBuffer*> buffers
+)
+{
+    std::vector<BindingSetEntry> entries;
+    for (auto* buffer : buffers)
+        entries.push_back({.slot = uint32_t(entries.size()), .resource = buffer});
+    BindingSetDesc desc = {};
+    desc.layout = pipeline.setLayout;
+    desc.entries = entries.data();
+    desc.entryCount = uint32_t(entries.size());
+    ComPtr<IBindingSet> result;
+    REQUIRE_CALL(device->createBindingSet(desc, result.writeRef()));
+    return result;
+}
+
+static void bindIndirectPipeline(
+    IComputePassEncoder* encoder,
+    const IndirectComputePipeline& pipeline,
+    IBindingSet* set,
+    const void* constants = nullptr,
+    size_t constantsSize = 0
+)
+{
+    size_t paddedSize = pipeline.layout->getDesc().constantsSize;
+    REQUIRE(paddedSize == ((constantsSize + 15) & ~size_t(15)));
+    std::vector<uint8_t> paddedConstants(paddedSize, 0);
+    if (constantsSize != 0)
+    {
+        REQUIRE(constants != nullptr);
+        std::memcpy(paddedConstants.data(), constants, constantsSize);
+    }
+    FlatBindingDesc binding = {};
+    binding.constants = paddedConstants.empty() ? nullptr : paddedConstants.data();
+    binding.constantsSize = paddedSize;
+    binding.sets = &set;
+    binding.setCount = 1;
+    REQUIRE_CALL(encoder->bindPipeline(pipeline.pipeline, binding));
+}
 
 // Test dispatchComputeIndirect with a simple compute shader.
 // The test sets up an indirect argument buffer with dispatch dimensions written by the GPU,
 // then verifies the compute shader ran with the correct number of threads.
 GPU_TEST_CASE("compute-indirect", D3D12 | Vulkan | Metal | CUDA)
 {
-    ComPtr<IShaderProgram> program;
-    REQUIRE_CALL(loadProgram(device, "test-compute-indirect", "computeMain", program.writeRef()));
-
-    ComPtr<IShaderProgram> writeArgsProgram;
-    REQUIRE_CALL(loadProgram(device, "test-compute-indirect", "writeDispatchArgs", writeArgsProgram.writeRef()));
-
-    ComputePipelineDesc pipelineDesc = {};
-    pipelineDesc.program = program.get();
-    ComPtr<IComputePipeline> pipeline;
-    REQUIRE_CALL(device->createComputePipeline(pipelineDesc, pipeline.writeRef()));
-
-    ComputePipelineDesc writeArgsPipelineDesc = {};
-    writeArgsPipelineDesc.program = writeArgsProgram.get();
-    ComPtr<IComputePipeline> writeArgsPipeline;
-    REQUIRE_CALL(device->createComputePipeline(writeArgsPipelineDesc, writeArgsPipeline.writeRef()));
+    auto pipeline = createIndirectPipeline(
+        device, "computeMain", {{BindingKind::RWByteAddressBuffer, 1, "outputBuffer"}}, sizeof(uint32_t));
+    auto writeArgsPipeline = createIndirectPipeline(
+        device, "writeDispatchArgs",
+        {{BindingKind::RWStructuredBuffer, 1, "dispatchArgsBuffer"}}, 4 * sizeof(uint32_t));
 
     // Create output buffer to count how many threads ran for each dispatch
     const int dispatchCount = 4;
@@ -52,6 +151,8 @@ GPU_TEST_CASE("compute-indirect", D3D12 | Vulkan | Metal | CUDA)
 
     ComPtr<IBuffer> indirectBuffer;
     REQUIRE_CALL(device->createBuffer(indirectBufferDesc, nullptr, indirectBuffer.writeRef()));
+    auto outputSet = createIndirectSet(device, pipeline, {outputBuffer});
+    auto writeArgsSet = createIndirectSet(device, writeArgsPipeline, {indirectBuffer});
 
     // Dispatch arguments to write: (x, y, z) thread group counts
     // dispatch0: 1x1x1 = 1 group = 16 threads
@@ -75,13 +176,9 @@ GPU_TEST_CASE("compute-indirect", D3D12 | Vulkan | Metal | CUDA)
             auto passEncoder = commandEncoder->beginComputePass();
             for (int i = 0; i < dispatchCount; i++)
             {
-                auto rootObject = passEncoder->bindPipeline(writeArgsPipeline);
-                ShaderCursor shaderCursor(rootObject);
-                shaderCursor["dispatchArgsBuffer"].setBinding(indirectBuffer);
-                uint32_t dispatchIndex = i;
-                shaderCursor["dispatchIndex"].setData(dispatchIndex);
-                uint32_t counts[3] = {threadGroupCounts[i][0], threadGroupCounts[i][1], threadGroupCounts[i][2]};
-                shaderCursor["threadGroupCounts"].setData(counts, sizeof(counts));
+                uint32_t constants[4] = {
+                    uint32_t(i), threadGroupCounts[i][0], threadGroupCounts[i][1], threadGroupCounts[i][2]};
+                bindIndirectPipeline(passEncoder, writeArgsPipeline, writeArgsSet, constants, sizeof(constants));
                 passEncoder->dispatchCompute(1, 1, 1);
             }
             passEncoder->end();
@@ -92,18 +189,15 @@ GPU_TEST_CASE("compute-indirect", D3D12 | Vulkan | Metal | CUDA)
             auto passEncoder = commandEncoder->beginComputePass();
             for (int i = 0; i < dispatchCount; i++)
             {
-                auto rootObject = passEncoder->bindPipeline(pipeline);
-                ShaderCursor shaderCursor(rootObject);
-                shaderCursor["outputBuffer"].setBinding(outputBuffer);
                 uint32_t dispatchIndex = i;
-                shaderCursor["dispatchIndex"].setData(dispatchIndex);
+                bindIndirectPipeline(passEncoder, pipeline, outputSet, &dispatchIndex, sizeof(dispatchIndex));
                 passEncoder->dispatchComputeIndirect({indirectBuffer, i * sizeof(IndirectDispatchArguments)});
             }
             passEncoder->end();
         }
 
-        queue->submit(commandEncoder->finish());
-        queue->waitOnHost();
+        REQUIRE_CALL(queue->submit(commandEncoder->finish()));
+        REQUIRE_CALL(queue->waitOnHost());
     }
 
     // Verify results
@@ -119,21 +213,11 @@ GPU_TEST_CASE("compute-indirect", D3D12 | Vulkan | Metal | CUDA)
 // This verifies the implementation handles edge cases correctly.
 GPU_TEST_CASE("compute-indirect-zero", D3D12 | Vulkan | Metal | CUDA)
 {
-    ComPtr<IShaderProgram> program;
-    REQUIRE_CALL(loadProgram(device, "test-compute-indirect", "computeMain", program.writeRef()));
-
-    ComPtr<IShaderProgram> writeArgsProgram;
-    REQUIRE_CALL(loadProgram(device, "test-compute-indirect", "writeDispatchArgs", writeArgsProgram.writeRef()));
-
-    ComputePipelineDesc pipelineDesc = {};
-    pipelineDesc.program = program.get();
-    ComPtr<IComputePipeline> pipeline;
-    REQUIRE_CALL(device->createComputePipeline(pipelineDesc, pipeline.writeRef()));
-
-    ComputePipelineDesc writeArgsPipelineDesc = {};
-    writeArgsPipelineDesc.program = writeArgsProgram.get();
-    ComPtr<IComputePipeline> writeArgsPipeline;
-    REQUIRE_CALL(device->createComputePipeline(writeArgsPipelineDesc, writeArgsPipeline.writeRef()));
+    auto pipeline = createIndirectPipeline(
+        device, "computeMain", {{BindingKind::RWByteAddressBuffer, 1, "outputBuffer"}}, sizeof(uint32_t));
+    auto writeArgsPipeline = createIndirectPipeline(
+        device, "writeDispatchArgs",
+        {{BindingKind::RWStructuredBuffer, 1, "dispatchArgsBuffer"}}, 4 * sizeof(uint32_t));
 
     // Create output buffer
     BufferDesc outputBufferDesc = {};
@@ -160,6 +244,8 @@ GPU_TEST_CASE("compute-indirect-zero", D3D12 | Vulkan | Metal | CUDA)
 
     ComPtr<IBuffer> indirectBuffer;
     REQUIRE_CALL(device->createBuffer(indirectBufferDesc, nullptr, indirectBuffer.writeRef()));
+    auto outputSet = createIndirectSet(device, pipeline, {outputBuffer});
+    auto writeArgsSet = createIndirectSet(device, writeArgsPipeline, {indirectBuffer});
 
     // Execute: write zero dispatch args, then run indirect dispatch
     {
@@ -169,13 +255,8 @@ GPU_TEST_CASE("compute-indirect-zero", D3D12 | Vulkan | Metal | CUDA)
         // First pass: write zero dispatch arguments using GPU
         {
             auto passEncoder = commandEncoder->beginComputePass();
-            auto rootObject = passEncoder->bindPipeline(writeArgsPipeline);
-            ShaderCursor shaderCursor(rootObject);
-            shaderCursor["dispatchArgsBuffer"].setBinding(indirectBuffer);
-            uint32_t dispatchIndex = 0;
-            shaderCursor["dispatchIndex"].setData(dispatchIndex);
-            uint32_t counts[3] = {0, 0, 0};
-            shaderCursor["threadGroupCounts"].setData(counts, sizeof(counts));
+            uint32_t constants[4] = {0, 0, 0, 0};
+            bindIndirectPipeline(passEncoder, writeArgsPipeline, writeArgsSet, constants, sizeof(constants));
             passEncoder->dispatchCompute(1, 1, 1);
             passEncoder->end();
         }
@@ -183,17 +264,14 @@ GPU_TEST_CASE("compute-indirect-zero", D3D12 | Vulkan | Metal | CUDA)
         // Second pass: execute indirect dispatch with zero dimensions
         {
             auto passEncoder = commandEncoder->beginComputePass();
-            auto rootObject = passEncoder->bindPipeline(pipeline);
-            ShaderCursor shaderCursor(rootObject);
-            shaderCursor["outputBuffer"].setBinding(outputBuffer);
             uint32_t dispatchIndex = 0;
-            shaderCursor["dispatchIndex"].setData(dispatchIndex);
+            bindIndirectPipeline(passEncoder, pipeline, outputSet, &dispatchIndex, sizeof(dispatchIndex));
             passEncoder->dispatchComputeIndirect({indirectBuffer, 0});
             passEncoder->end();
         }
 
-        queue->submit(commandEncoder->finish());
-        queue->waitOnHost();
+        REQUIRE_CALL(queue->submit(commandEncoder->finish()));
+        REQUIRE_CALL(queue->waitOnHost());
     }
 
     // Verify no threads ran (output should still be 0)
@@ -204,21 +282,11 @@ GPU_TEST_CASE("compute-indirect-zero", D3D12 | Vulkan | Metal | CUDA)
 // This verifies the offset parameter is handled correctly.
 GPU_TEST_CASE("compute-indirect-offset", D3D12 | Vulkan | Metal | CUDA)
 {
-    ComPtr<IShaderProgram> program;
-    REQUIRE_CALL(loadProgram(device, "test-compute-indirect", "computeMain", program.writeRef()));
-
-    ComPtr<IShaderProgram> writeArgsProgram;
-    REQUIRE_CALL(loadProgram(device, "test-compute-indirect", "writeDispatchArgs", writeArgsProgram.writeRef()));
-
-    ComputePipelineDesc pipelineDesc = {};
-    pipelineDesc.program = program.get();
-    ComPtr<IComputePipeline> pipeline;
-    REQUIRE_CALL(device->createComputePipeline(pipelineDesc, pipeline.writeRef()));
-
-    ComputePipelineDesc writeArgsPipelineDesc = {};
-    writeArgsPipelineDesc.program = writeArgsProgram.get();
-    ComPtr<IComputePipeline> writeArgsPipeline;
-    REQUIRE_CALL(device->createComputePipeline(writeArgsPipelineDesc, writeArgsPipeline.writeRef()));
+    auto pipeline = createIndirectPipeline(
+        device, "computeMain", {{BindingKind::RWByteAddressBuffer, 1, "outputBuffer"}}, sizeof(uint32_t));
+    auto writeArgsPipeline = createIndirectPipeline(
+        device, "writeDispatchArgs",
+        {{BindingKind::RWStructuredBuffer, 1, "dispatchArgsBuffer"}}, 4 * sizeof(uint32_t));
 
     // Create output buffer
     BufferDesc outputBufferDesc = {};
@@ -246,6 +314,8 @@ GPU_TEST_CASE("compute-indirect-offset", D3D12 | Vulkan | Metal | CUDA)
 
     ComPtr<IBuffer> indirectBuffer;
     REQUIRE_CALL(device->createBuffer(indirectBufferDesc, nullptr, indirectBuffer.writeRef()));
+    auto outputSet = createIndirectSet(device, pipeline, {outputBuffer});
+    auto writeArgsSet = createIndirectSet(device, writeArgsPipeline, {indirectBuffer});
 
     // Execute: write dispatch args at index 1, then dispatch using offset
     {
@@ -255,13 +325,9 @@ GPU_TEST_CASE("compute-indirect-offset", D3D12 | Vulkan | Metal | CUDA)
         // First pass: write dispatch arguments at index 1 using GPU
         {
             auto passEncoder = commandEncoder->beginComputePass();
-            auto rootObject = passEncoder->bindPipeline(writeArgsPipeline);
-            ShaderCursor shaderCursor(rootObject);
-            shaderCursor["dispatchArgsBuffer"].setBinding(indirectBuffer);
-            uint32_t dispatchIndex = 1; // Write to second slot
-            shaderCursor["dispatchIndex"].setData(dispatchIndex);
-            uint32_t counts[3] = {3, 1, 1}; // 3x1x1 = 3 groups = 48 threads
-            shaderCursor["threadGroupCounts"].setData(counts, sizeof(counts));
+            // Write the second slot: 3x1x1 = 3 groups = 48 threads.
+            uint32_t constants[4] = {1, 3, 1, 1};
+            bindIndirectPipeline(passEncoder, writeArgsPipeline, writeArgsSet, constants, sizeof(constants));
             passEncoder->dispatchCompute(1, 1, 1);
             passEncoder->end();
         }
@@ -269,18 +335,15 @@ GPU_TEST_CASE("compute-indirect-offset", D3D12 | Vulkan | Metal | CUDA)
         // Second pass: execute indirect dispatch with offset to second slot
         {
             auto passEncoder = commandEncoder->beginComputePass();
-            auto rootObject = passEncoder->bindPipeline(pipeline);
-            ShaderCursor shaderCursor(rootObject);
-            shaderCursor["outputBuffer"].setBinding(outputBuffer);
             uint32_t dispatchIndex = 0;
-            shaderCursor["dispatchIndex"].setData(dispatchIndex);
+            bindIndirectPipeline(passEncoder, pipeline, outputSet, &dispatchIndex, sizeof(dispatchIndex));
             // Use offset to point to second dispatch args slot
             passEncoder->dispatchComputeIndirect({indirectBuffer, sizeof(IndirectDispatchArguments)});
             passEncoder->end();
         }
 
-        queue->submit(commandEncoder->finish());
-        queue->waitOnHost();
+        REQUIRE_CALL(queue->submit(commandEncoder->finish()));
+        REQUIRE_CALL(queue->waitOnHost());
     }
 
     // Verify correct number of threads ran (3 groups * 16 threads = 48)
@@ -289,20 +352,13 @@ GPU_TEST_CASE("compute-indirect-offset", D3D12 | Vulkan | Metal | CUDA)
 
 static void runComputeIndirectShaderRead(IDevice* device, QueueType queueType)
 {
-    ComPtr<IShaderProgram> writeProgram;
-    REQUIRE_CALL(loadProgram(device, "test-compute-indirect", "writeDispatchRecord", writeProgram.writeRef()));
-
-    ComPtr<IShaderProgram> consumeProgram;
-    REQUIRE_CALL(loadProgram(device, "test-compute-indirect", "consumeDispatchRecord", consumeProgram.writeRef()));
-
-    ComputePipelineDesc pipelineDesc = {};
-    pipelineDesc.program = writeProgram.get();
-    ComPtr<IComputePipeline> writePipeline;
-    REQUIRE_CALL(device->createComputePipeline(pipelineDesc, writePipeline.writeRef()));
-
-    pipelineDesc.program = consumeProgram.get();
-    ComPtr<IComputePipeline> consumePipeline;
-    REQUIRE_CALL(device->createComputePipeline(pipelineDesc, consumePipeline.writeRef()));
+    auto writePipeline = createIndirectPipeline(
+        device, "writeDispatchRecord",
+        {{BindingKind::RWStructuredBuffer, 1, "dispatchRecords"}}, 2 * sizeof(uint32_t));
+    auto consumePipeline = createIndirectPipeline(
+        device, "consumeDispatchRecord",
+        {{BindingKind::StructuredBuffer, 1, "dispatchRecords"},
+         {BindingKind::RWStructuredBuffer, 1, "outputBuffer"}}, 0);
 
     BufferDesc recordDesc = {};
     recordDesc.size = 8 * sizeof(uint32_t);
@@ -324,6 +380,8 @@ static void runComputeIndirectShaderRead(IDevice* device, QueueType queueType)
 
     ComPtr<IBuffer> outputBuffer;
     REQUIRE_CALL(device->createBuffer(outputDesc, nullptr, outputBuffer.writeRef()));
+    auto writeSet = createIndirectSet(device, writePipeline, {recordBuffer});
+    auto consumeSet = createIndirectSet(device, consumePipeline, {recordBuffer, outputBuffer});
 
     ComPtr<IBuffer> outputReadback;
     if (queueType == QueueType::Compute)
@@ -341,21 +399,15 @@ static void runComputeIndirectShaderRead(IDevice* device, QueueType queueType)
 
     {
         auto passEncoder = commandEncoder->beginComputePass();
-        auto rootObject = passEncoder->bindPipeline(writePipeline);
-        ShaderCursor cursor(rootObject);
-        cursor["dispatchRecords"].setBinding(recordBuffer);
-        cursor["itemCount"].setData(uint32_t(41));
-        cursor["itemStart"].setData(uint32_t(32));
+        uint32_t constants[2] = {41, 32};
+        bindIndirectPipeline(passEncoder, writePipeline, writeSet, constants, sizeof(constants));
         passEncoder->dispatchCompute(1, 1, 1);
         passEncoder->end();
     }
 
     {
         auto passEncoder = commandEncoder->beginComputePass();
-        auto rootObject = passEncoder->bindPipeline(consumePipeline);
-        ShaderCursor cursor(rootObject);
-        cursor["dispatchRecords"].setBinding(recordBuffer);
-        cursor["outputBuffer"].setBinding(outputBuffer);
+        bindIndirectPipeline(passEncoder, consumePipeline, consumeSet);
         passEncoder->dispatchComputeIndirect({recordBuffer, 0});
         passEncoder->end();
     }

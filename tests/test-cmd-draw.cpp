@@ -98,6 +98,16 @@ static ComPtr<ITexture> createColorBuffer(IDevice* device)
     return colorBuffer;
 }
 
+static ComPtr<IPipelineLayout> createDrawPipelineLayout(IDevice* device, IShaderProgram* program)
+{
+    PipelineLayoutDesc desc{};
+    desc.program = program;
+    ComPtr<IPipelineLayout> layout;
+    REQUIRE_CALL(device->createPipelineLayout(desc, layout.writeRef()));
+    REQUIRE(layout != nullptr);
+    return layout;
+}
+
 GPU_TEST_CASE("cmd-draw-pipeline-switch-vertex-stride", D3D12 | Vulkan)
 {
     // Stride 16 visits rows 0,1,2; stride 32 visits rows 0,2,4.
@@ -119,6 +129,7 @@ GPU_TEST_CASE("cmd-draw-pipeline-switch-vertex-stride", D3D12 | Vulkan)
     auto target = createColorBuffer(device);
     ComPtr<IShaderProgram> program;
     REQUIRE_CALL(loadProgram(device, "test-cmd-draw", {"vertexMain", "fragmentMain"}, program.writeRef()));
+    auto pipelineLayout = createDrawPipelineLayout(device, program);
 
     ComPtr<IRenderPipeline> pipelines[2];
     for (uint32_t i = 0; i < 2; ++i)
@@ -143,6 +154,7 @@ GPU_TEST_CASE("cmd-draw-pipeline-switch-vertex-stride", D3D12 | Vulkan)
         colorTarget.format = format;
         RenderPipelineDesc desc{};
         desc.program = program;
+        desc.layout = pipelineLayout;
         desc.inputLayout = inputLayout;
         desc.targets = &colorTarget;
         desc.targetCount = 1;
@@ -175,10 +187,10 @@ GPU_TEST_CASE("cmd-draw-pipeline-switch-vertex-stride", D3D12 | Vulkan)
     DrawArguments draw{};
     draw.vertexCount = 3;
     draw.instanceCount = 1;
-    REQUIRE(pass->bindPipeline(pipelines[0]) != nullptr);
+    REQUIRE_CALL(pass->bindPipeline(pipelines[0], FlatBindingDesc{}));
     pass->draw(draw);
     // No render-state setter between draws: only the pipeline changes.
-    REQUIRE(pass->bindPipeline(pipelines[1]) != nullptr);
+    REQUIRE_CALL(pass->bindPipeline(pipelines[1], FlatBindingDesc{}));
     pass->draw(draw);
     pass->end();
     auto commands = encoder->finish();
@@ -245,11 +257,13 @@ public:
 
         ComPtr<IShaderProgram> shaderProgram;
         REQUIRE_CALL(loadProgram(device, "test-cmd-draw", {"vertexMain", "fragmentMain"}, shaderProgram.writeRef()));
+        auto pipelineLayout = createDrawPipelineLayout(device, shaderProgram);
 
         ColorTargetDesc colorTarget;
         colorTarget.format = format;
         RenderPipelineDesc pipelineDesc = {};
         pipelineDesc.program = shaderProgram.get();
+        pipelineDesc.layout = pipelineLayout;
         pipelineDesc.inputLayout = inputLayout;
         pipelineDesc.targets = &colorTarget;
         pipelineDesc.targetCount = 1;
@@ -315,7 +329,7 @@ struct DrawInstancedTest : BaseDrawTest
         renderPass.colorAttachmentCount = 1;
         auto passEncoder = commandEncoder->beginRenderPass(renderPass);
 
-        passEncoder->bindPipeline(pipeline);
+        REQUIRE_CALL(passEncoder->bindPipeline(pipeline, FlatBindingDesc{}));
 
         RenderState state;
         state.viewports[0] = Viewport::fromSize(kWidth, kHeight);
@@ -371,7 +385,7 @@ struct DrawIndexedInstancedTest : BaseDrawTest
         renderPass.colorAttachmentCount = 1;
         auto passEncoder = commandEncoder->beginRenderPass(renderPass);
 
-        passEncoder->bindPipeline(pipeline);
+        REQUIRE_CALL(passEncoder->bindPipeline(pipeline, FlatBindingDesc{}));
 
         RenderState state;
         state.vertexBuffers[0] = vertexBuffer;
@@ -455,7 +469,7 @@ struct DrawIndirectTest : BaseDrawTest
         renderPass.colorAttachmentCount = 1;
         auto passEncoder = commandEncoder->beginRenderPass(renderPass);
 
-        passEncoder->bindPipeline(pipeline);
+        REQUIRE_CALL(passEncoder->bindPipeline(pipeline, FlatBindingDesc{}));
 
         RenderState state;
         state.vertexBuffers[0] = vertexBuffer;
@@ -537,7 +551,7 @@ struct DrawIndexedIndirectTest : BaseDrawTest
         renderPass.colorAttachmentCount = 1;
         auto passEncoder = commandEncoder->beginRenderPass(renderPass);
 
-        passEncoder->bindPipeline(pipeline);
+        REQUIRE_CALL(passEncoder->bindPipeline(pipeline, FlatBindingDesc{}));
 
         RenderState state;
         state.vertexBuffers[0] = vertexBuffer;
@@ -622,6 +636,7 @@ ComPtr<IRenderPipeline> makePipeline(IDevice* device, const char* fragment, bool
 {
     ComPtr<IShaderProgram> program;
     REQUIRE_CALL(loadAndLinkProgram(device, "test-dynamic-draw-state", {"vsMain", fragment}, program.writeRef()));
+    auto pipelineLayout = createDrawPipelineLayout(device, program);
     ColorTargetDesc target{};
     target.format = Format::RGBA32Float;
     target.enableBlend = blend;
@@ -632,6 +647,7 @@ ComPtr<IRenderPipeline> makePipeline(IDevice* device, const char* fragment, bool
     }
     RenderPipelineDesc desc{};
     desc.program = program;
+    desc.layout = pipelineLayout;
     desc.targets = &target;
     desc.targetCount = 1;
     desc.rasterizer.cullMode = CullMode::None;
@@ -706,22 +722,22 @@ GPU_TEST_CASE("dynamic-stencil-reference-draw-pipeline-pass", D3D12 | Vulkan)
         pass->setRenderState(state);
         pass->draw(draw);
     };
-    REQUIRE(pass->bindPipeline(white) != nullptr);
+    REQUIRE_CALL(pass->bindPipeline(white, FlatBindingDesc{}));
     drawPixel(0, 7);
-    REQUIRE(pass->bindPipeline(red) != nullptr);
+    REQUIRE_CALL(pass->bindPipeline(red, FlatBindingDesc{}));
     pass->draw(draw);
-    REQUIRE(pass->bindPipeline(white) != nullptr);
+    REQUIRE_CALL(pass->bindPipeline(white, FlatBindingDesc{}));
     drawPixel(1, 3);
-    REQUIRE(pass->bindPipeline(red) != nullptr);
+    REQUIRE_CALL(pass->bindPipeline(red, FlatBindingDesc{}));
     drawPixel(2, 3);
     drawPixel(3, 7);
-    REQUIRE(pass->bindPipeline(white) != nullptr);
+    REQUIRE_CALL(pass->bindPipeline(white, FlatBindingDesc{}));
     drawPixel(4, 7);
     pass->end();
     color.view = second->getDefaultView();
     ds.stencilClearValue = 0;
     pass = encoder->beginRenderPass(passDesc);
-    REQUIRE(pass->bindPipeline(white) != nullptr);
+    REQUIRE_CALL(pass->bindPipeline(white, FlatBindingDesc{}));
     pass->setRenderState(fullState());
     pass->draw(draw);
     pass->end();
@@ -746,7 +762,7 @@ GPU_TEST_CASE("dynamic-blend-factor-default-zero", D3D12 | Vulkan)
         channel = 0.5f;
     RenderPassDesc desc{.colorAttachments = &color, .colorAttachmentCount = 1};
     auto pass = encoder->beginRenderPass(desc);
-    REQUIRE(pass->bindPipeline(pipeline) != nullptr);
+    REQUIRE_CALL(pass->bindPipeline(pipeline, FlatBindingDesc{}));
     pass->setRenderState(fullState());
     DrawArguments draw{};
     draw.vertexCount = 3;
@@ -784,24 +800,24 @@ GPU_TEST_CASE("dynamic-blend-factor-draw-pipeline-pass", D3D12 | Vulkan)
         pass->setRenderState(state);
         pass->draw(draw);
     };
-    REQUIRE(pass->bindPipeline(white) != nullptr);
+    REQUIRE_CALL(pass->bindPipeline(white, FlatBindingDesc{}));
     std::memcpy(state.blendFactor, a, sizeof(a));
     drawPixel(0);
-    REQUIRE(pass->bindPipeline(red) != nullptr);
+    REQUIRE_CALL(pass->bindPipeline(red, FlatBindingDesc{}));
     pass->draw(draw);
-    REQUIRE(pass->bindPipeline(white) != nullptr);
+    REQUIRE_CALL(pass->bindPipeline(white, FlatBindingDesc{}));
     std::memcpy(state.blendFactor, b, sizeof(b));
     drawPixel(1);
-    REQUIRE(pass->bindPipeline(red) != nullptr);
+    REQUIRE_CALL(pass->bindPipeline(red, FlatBindingDesc{}));
     drawPixel(2);
     std::memcpy(state.blendFactor, a, sizeof(a));
     drawPixel(3);
-    REQUIRE(pass->bindPipeline(white) != nullptr);
+    REQUIRE_CALL(pass->bindPipeline(white, FlatBindingDesc{}));
     drawPixel(4);
     pass->end();
     color.view = second->getDefaultView();
     pass = encoder->beginRenderPass(desc);
-    REQUIRE(pass->bindPipeline(white) != nullptr);
+    REQUIRE_CALL(pass->bindPipeline(white, FlatBindingDesc{}));
     pass->setRenderState(fullState());
     pass->draw(draw);
     pass->end();
@@ -858,6 +874,7 @@ GPU_TEST_CASE("cmd-draw-pipeline-switch-unused-vertex-streams", D3D12 | Vulkan)
     auto instanceBuffer = createInstanceBuffer(device);
     ComPtr<IShaderProgram> program;
     REQUIRE_CALL(loadAndLinkProgram(device, "test-dynamic-draw-state", {"vsMain", "psRed"}, program.writeRef()));
+    auto pipelineLayout = createDrawPipelineLayout(device, program);
     ComPtr<IRenderPipeline> pipelines[3];
     for (uint32_t i = 0; i < 3; ++i)
     {
@@ -882,6 +899,7 @@ GPU_TEST_CASE("cmd-draw-pipeline-switch-unused-vertex-streams", D3D12 | Vulkan)
         colorTarget.alpha.dstFactor = BlendFactor::One;
         RenderPipelineDesc desc{};
         desc.program = program;
+        desc.layout = pipelineLayout;
         desc.inputLayout = inputLayout;
         desc.targets = &colorTarget;
         desc.targetCount = 1;
@@ -907,7 +925,7 @@ GPU_TEST_CASE("cmd-draw-pipeline-switch-unused-vertex-streams", D3D12 | Vulkan)
     draw.vertexCount = 3;
     for (const auto& pipeline : pipelines)
     {
-        REQUIRE(pass->bindPipeline(pipeline) != nullptr);
+        REQUIRE_CALL(pass->bindPipeline(pipeline, FlatBindingDesc{}));
         pass->draw(draw);
     }
     pass->end();
