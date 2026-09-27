@@ -271,6 +271,7 @@ public:
     );
 
     uint32_t getQueueFamilyIndex(QueueType queueType);
+    uint32_t getSharingQueueFamilies(SharingMode mode, uint32_t (&families)[3]) const;
 
 public:
     DeviceNativeHandles m_existingDeviceHandles;

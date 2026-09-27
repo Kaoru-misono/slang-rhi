@@ -2146,6 +2146,8 @@ Result DeviceImpl::readBuffer(IBuffer* buffer, Offset offset, Size size, void* o
     barrier.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
     barrier.srcAccessMask = calcAccessFlags(bufferImpl->m_desc.defaultState);
     barrier.dstAccessMask = calcAccessFlags(ResourceState::CopySource);
+    barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
     barrier.buffer = bufferImpl->m_buffer.m_buffer;
     barrier.offset = 0;
     barrier.size = bufferImpl->m_desc.size;
@@ -2370,6 +2372,22 @@ void DeviceImpl::_transitionImageLayout(
     m_api.vkCmdPipelineBarrier(commandBuffer, sourceStage, destinationStage, 0, 0, nullptr, 0, nullptr, 1, &barrier);
 }
 
+uint32_t DeviceImpl::getSharingQueueFamilies(SharingMode mode, uint32_t (&families)[3]) const
+{
+    if (mode != SharingMode::Concurrent)
+        return 0;
+    uint32_t count = 0;
+    for (uint32_t family : {m_queueFamilyIndex, m_computeQueueFamilyIndex, m_transferQueueFamilyIndex})
+    {
+        bool duplicate = false;
+        for (uint32_t i = 0; i < count; ++i)
+            duplicate |= families[i] == family;
+        if (!duplicate)
+            families[count++] = family;
+    }
+    return count > 1 ? count : 0;
+}
+
 uint32_t DeviceImpl::getQueueFamilyIndex(QueueType queueType)
 {
     switch (queueType)
@@ -2411,6 +2429,8 @@ void DeviceImpl::_labelObject(uint64_t object, VkObjectType objectType, const ch
 Result DeviceImpl::getTextureAllocationInfo(const TextureDesc& desc_, Size* outSize, Size* outAlignment)
 {
     TextureDesc desc = fixupTextureDesc(desc_);
+    if (desc.sharingMode != SharingMode::Exclusive && desc.sharingMode != SharingMode::Concurrent)
+        return SLANG_E_INVALID_ARG;
 
     const VkFormat format = getVkFormat(desc.format);
     if (format == VK_FORMAT_UNDEFINED)
@@ -2462,7 +2482,10 @@ Result DeviceImpl::getTextureAllocationInfo(const TextureDesc& desc_, Size* outS
 
     imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
     imageInfo.usage = _calcImageUsageFlags(desc.usage, desc.memoryType, nullptr);
-    imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    uint32_t queueFamilies[3] = {};
+    imageInfo.queueFamilyIndexCount = getSharingQueueFamilies(desc.sharingMode, queueFamilies);
+    imageInfo.pQueueFamilyIndices = imageInfo.queueFamilyIndexCount ? queueFamilies : nullptr;
+    imageInfo.sharingMode = imageInfo.queueFamilyIndexCount ? VK_SHARING_MODE_CONCURRENT : VK_SHARING_MODE_EXCLUSIVE;
 
     imageInfo.samples = (VkSampleCountFlagBits)desc.sampleCount;
 

@@ -1431,6 +1431,9 @@ Result DeviceImpl::createTexture(const TextureDesc& desc_, const SubresourceData
     // https://msdn.microsoft.com/en-us/library/windows/desktop/dn899215%28v=vs.85%29.aspx
 
     TextureDesc desc = fixupTextureDesc(desc_);
+    // COMMON is a legal boundary state for graphics, compute and copy queues.
+    if (desc.sharingMode == SharingMode::Concurrent)
+        desc.defaultState = ResourceState::General;
 
     bool isTypeless = is_set(desc.usage, TextureUsage::Typeless);
     if (isDepthFormat(desc.format) &&
