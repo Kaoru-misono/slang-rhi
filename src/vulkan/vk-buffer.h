@@ -18,7 +18,9 @@ public:
         Size bufferSize,
         VkBufferUsageFlags usage,
         VkMemoryPropertyFlags reqMemoryProperties,
-        VkExternalMemoryHandleTypeFlagsKHR externalMemoryHandleTypeFlags = 0
+        VkExternalMemoryHandleTypeFlagsKHR externalMemoryHandleTypeFlags = 0,
+        uint32_t queueFamilyCount = 0,
+        const uint32_t* queueFamilies = nullptr
     );
 
     /// Initialize with VMA sub-allocated memory (default path).
@@ -27,7 +29,9 @@ public:
         const VulkanApi& api,
         Size bufferSize,
         VkBufferUsageFlags usage,
-        VkMemoryPropertyFlags reqMemoryProperties
+        VkMemoryPropertyFlags reqMemoryProperties,
+        uint32_t queueFamilyCount = 0,
+        const uint32_t* queueFamilies = nullptr
     );
 
     /// Returns true if has been initialized

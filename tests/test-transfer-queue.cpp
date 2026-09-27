@@ -282,3 +282,171 @@ GPU_TEST_CASE("transfer-queue-ownership-transfer", D3D12 | Vulkan)
 
     compareComputeResult(device, dstBuffer, makeArray<float>(1.0f, 2.0f, 3.0f, 4.0f));
 }
+
+GPU_TEST_CASE("concurrent-resources-initial-data-three-queues", D3D12 | Vulkan)
+{
+    auto expected = makeArray<float>(3.f, 7.f, 11.f, 19.f);
+    BufferDesc bufferDesc = {};
+    bufferDesc.size = sizeof(expected);
+    bufferDesc.usage = BufferUsage::CopySource | BufferUsage::CopyDestination;
+    bufferDesc.defaultState = ResourceState::CopySource;
+    bufferDesc.sharingMode = SharingMode::Concurrent;
+    ComPtr<IBuffer> sourceBuffer;
+    REQUIRE_CALL(device->createBuffer(bufferDesc, expected.data(), sourceBuffer.writeRef()));
+    CHECK(sourceBuffer->getDesc().sharingMode == SharingMode::Concurrent);
+
+    TextureDesc textureDesc = {};
+    textureDesc.size = {4, 1, 1};
+    textureDesc.format = Format::R32Float;
+    textureDesc.usage = TextureUsage::CopySource | TextureUsage::CopyDestination | TextureUsage::ShaderResource;
+    // D3D12 COPY queues require COMMON at queue boundaries; Vulkan readers
+    // retain one layout so concurrent copies do not race layout transitions.
+    textureDesc.defaultState = device->getDeviceType() == DeviceType::D3D12
+        ? ResourceState::General : ResourceState::CopySource;
+    textureDesc.sharingMode = SharingMode::Concurrent;
+    SubresourceData initial = {expected.data(), sizeof(expected), sizeof(expected)};
+    ComPtr<ITexture> sourceTexture;
+    REQUIRE_CALL(device->createTexture(textureDesc, &initial, sourceTexture.writeRef()));
+    CHECK(sourceTexture->getDesc().sharingMode == SharingMode::Concurrent);
+
+    ComPtr<IFence> uploaded;
+    REQUIRE_CALL(device->createFence({}, uploaded.writeRef()));
+    IFence* uploadFence = uploaded;
+    uint64_t uploadValue = 1;
+    SubmitDesc signal = {};
+    signal.signalFences = &uploadFence;
+    signal.signalFenceValues = &uploadValue;
+    signal.signalFenceCount = 1;
+    REQUIRE_CALL(device->getQueue(QueueType::Graphics)->submit(signal));
+
+    const QueueType types[] = {QueueType::Graphics, QueueType::Compute, QueueType::Transfer};
+    ComPtr<ICommandQueue> queues[3];
+    ComPtr<IBuffer> outputBuffers[3];
+    ComPtr<ITexture> outputTextures[3];
+    for (uint32_t i = 0; i < 3; ++i)
+    {
+        REQUIRE_CALL(device->getQueue(types[i], queues[i].writeRef()));
+        bufferDesc.defaultState = ResourceState::CopyDestination;
+        textureDesc.defaultState = device->getDeviceType() == DeviceType::D3D12
+            ? ResourceState::General : ResourceState::CopyDestination;
+        REQUIRE_CALL(device->createBuffer(bufferDesc, nullptr, outputBuffers[i].writeRef()));
+        REQUIRE_CALL(device->createTexture(textureDesc, nullptr, outputTextures[i].writeRef()));
+        auto encoder = queues[i]->createCommandEncoder();
+        REQUIRE(encoder);
+        // No QFOT: the resources are shared across families, but initialization still needs a wait.
+        encoder->copyBuffer(outputBuffers[i], 0, sourceBuffer, 0, sizeof(expected));
+        encoder->copyTexture(outputTextures[i], {}, {}, sourceTexture, {}, {}, Extent3D::kWholeTexture);
+        ComPtr<ICommandBuffer> commands;
+        REQUIRE_CALL(encoder->finish(commands.writeRef()));
+        ICommandBuffer* command = commands;
+        SubmitDesc submit = {};
+        submit.commandBuffers = &command;
+        submit.commandBufferCount = 1;
+        submit.waitFences = &uploadFence;
+        submit.waitFenceValues = &uploadValue;
+        submit.waitFenceCount = 1;
+        REQUIRE_CALL(queues[i]->submit(submit));
+    }
+    for (uint32_t i = 0; i < 3; ++i)
+    {
+        REQUIRE_CALL(queues[i]->waitOnHost());
+        compareComputeResult(device, outputBuffers[i], expected);
+        compareComputeResult(device, outputTextures[i], 0, 0, std::span<float>(expected));
+    }
+
+    // A non-default texture read layout must finish before a copy on another queue.
+    auto pipeline = trivialCompute::createPipeline(device, trivialCompute::BindingModel::Flat, "readTexture");
+    BufferDesc resultDesc = {};
+    resultDesc.size = sizeof(float);
+    resultDesc.elementSize = sizeof(float);
+    resultDesc.usage = BufferUsage::UnorderedAccess | BufferUsage::CopySource;
+    resultDesc.defaultState = ResourceState::UnorderedAccess;
+    resultDesc.sharingMode = SharingMode::Concurrent;
+    ComPtr<IBuffer> result;
+    REQUIRE_CALL(device->createBuffer(resultDesc, nullptr, result.writeRef()));
+    auto encoder = queues[1]->createCommandEncoder();
+    REQUIRE(encoder);
+    auto pass = encoder->beginComputePass();
+    REQUIRE(pass);
+    trivialCompute::bind(device, pass, pipeline, {
+        {.slot = 0, .resource = sourceTexture->getDefaultView()},
+        {.slot = 1, .resource = result},
+    });
+    pass->dispatchCompute(1, 1, 1);
+    pass->end();
+    REQUIRE_CALL(queues[1]->submit(encoder->finish()));
+    syncQueues(device, queues[1], queues[2]);
+    auto copy = queues[2]->createCommandEncoder();
+    REQUIRE(copy);
+    copy->copyTexture(outputTextures[2], {}, {}, sourceTexture, {}, {}, Extent3D::kWholeTexture);
+    REQUIRE_CALL(queues[2]->submit(copy->finish()));
+    syncQueues(device, queues[2], queues[0]);
+    compareComputeResult(device, result, makeArray<float>(3.f));
+    compareComputeResult(device, outputTextures[2], 0, 0, std::span<float>(expected));
+}
+
+GPU_TEST_CASE("shader-resource-texture-default-compute-roundtrip", D3D12)
+{
+    auto graphicsQueue = device->getQueue(QueueType::Graphics);
+    auto computeQueue = device->getQueue(QueueType::Compute);
+    REQUIRE(graphicsQueue);
+    REQUIRE(computeQueue);
+
+    auto initialPixels = makeArray<float>(3.f, 7.f, 11.f, 19.f);
+    TextureDesc desc = {};
+    desc.size = {4, 1, 1};
+    desc.format = Format::R32Float;
+    desc.usage = TextureUsage::ShaderResource | TextureUsage::UnorderedAccess |
+                 TextureUsage::CopySource | TextureUsage::CopyDestination;
+    desc.defaultState = ResourceState::ShaderResource;
+    desc.sharingMode = SharingMode::Concurrent;
+    SubresourceData initial = {initialPixels.data(), sizeof(initialPixels), sizeof(initialPixels)};
+    ComPtr<ITexture> seed;
+    ComPtr<ITexture> texture;
+    REQUIRE_CALL(device->createTexture(desc, &initial, seed.writeRef()));
+    REQUIRE_CALL(device->createTexture(desc, nullptr, texture.writeRef()));
+    CHECK(seed->getDesc().defaultState == ResourceState::General);
+    CHECK(texture->getDesc().defaultState == ResourceState::General);
+
+    // Establish the default state through a real graphics copy and the encoder's
+    // normal restoration, rather than only trusting the initial texture state.
+    {
+        auto encoder = graphicsQueue->createCommandEncoder();
+        REQUIRE(encoder);
+        encoder->copyTexture(texture, {}, {}, seed, {}, {}, Extent3D::kWholeTexture);
+        REQUIRE_CALL(graphicsQueue->submit(encoder->finish()));
+    }
+    syncQueues(device, graphicsQueue, computeQueue);
+
+    auto pipeline = trivialCompute::createPipeline(device, trivialCompute::BindingModel::Flat, "writeTexture");
+    {
+        auto encoder = computeQueue->createCommandEncoder();
+        REQUIRE(encoder);
+        auto pass = encoder->beginComputePass();
+        REQUIRE(pass);
+        trivialCompute::bind(device, pass, pipeline, {
+            {.slot = 0, .resource = texture->getDefaultView()},
+        });
+        pass->dispatchCompute(1, 1, 1);
+        pass->end();
+        // Restore the actual default state, not the requested ShaderResource state.
+        REQUIRE_CALL(computeQueue->submit(encoder->finish()));
+    }
+    syncQueues(device, computeQueue, graphicsQueue);
+
+    ComPtr<ITexture> output;
+    desc.defaultState = ResourceState::General;
+    REQUIRE_CALL(device->createTexture(desc, nullptr, output.writeRef()));
+    {
+        auto encoder = graphicsQueue->createCommandEncoder();
+        REQUIRE(encoder);
+        encoder->copyTexture(output, {}, {}, texture, {}, {}, Extent3D::kWholeTexture);
+        REQUIRE_CALL(graphicsQueue->submit(encoder->finish()));
+        REQUIRE_CALL(graphicsQueue->waitOnHost());
+    }
+    auto expected = makeArray<float>(42.f, 7.f, 11.f, 19.f);
+    auto expectedWords = makeArray<uint32_t>(0u, 0u, 0u, 0u);
+    std::memcpy(expectedWords.data(), expected.data(), sizeof(expected));
+    compareComputeResult(device, output, 0, 0, std::span<uint32_t>(expectedWords));
+    compareComputeResult(device, texture, 0, 0, std::span<uint32_t>(expectedWords));
+}

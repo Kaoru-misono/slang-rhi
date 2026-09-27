@@ -304,6 +304,8 @@ TextureImpl::View TextureViewImpl::getRenderTargetView()
 Result DeviceImpl::createTexture(const TextureDesc& desc_, const SubresourceData* initData, ITexture** outTexture)
 {
     TextureDesc desc = fixupTextureDesc(desc_);
+    if (desc.sharingMode != SharingMode::Exclusive && desc.sharingMode != SharingMode::Concurrent)
+        return SLANG_E_INVALID_ARG;
 
     const VkFormat format = getVkFormat(desc.format);
     if (format == VK_FORMAT_UNDEFINED)
@@ -370,7 +372,10 @@ Result DeviceImpl::createTexture(const TextureDesc& desc_, const SubresourceData
 
     imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
     imageInfo.usage = _calcImageUsageFlags(desc.usage, desc.memoryType, initData);
-    imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    uint32_t queueFamilies[3] = {};
+    imageInfo.queueFamilyIndexCount = getSharingQueueFamilies(desc.sharingMode, queueFamilies);
+    imageInfo.pQueueFamilyIndices = imageInfo.queueFamilyIndexCount ? queueFamilies : nullptr;
+    imageInfo.sharingMode = imageInfo.queueFamilyIndexCount ? VK_SHARING_MODE_CONCURRENT : VK_SHARING_MODE_EXCLUSIVE;
 
     imageInfo.samples = (VkSampleCountFlagBits)desc.sampleCount;
 
