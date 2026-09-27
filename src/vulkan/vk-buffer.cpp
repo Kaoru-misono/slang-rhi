@@ -19,13 +19,17 @@ Result createVkBuffer(
     Size bufferSize,
     VkBufferUsageFlags usage,
     VkExternalMemoryHandleTypeFlagsKHR externalMemoryHandleTypeFlags,
-    VkBuffer* outBuffer
+    VkBuffer* outBuffer,
+    uint32_t queueFamilyCount,
+    const uint32_t* queueFamilies
 )
 {
     VkBufferCreateInfo bufferCreateInfo = {VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
     bufferCreateInfo.size = bufferSize;
     bufferCreateInfo.usage = usage;
-    bufferCreateInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    bufferCreateInfo.sharingMode = queueFamilyCount ? VK_SHARING_MODE_CONCURRENT : VK_SHARING_MODE_EXCLUSIVE;
+    bufferCreateInfo.queueFamilyIndexCount = queueFamilyCount;
+    bufferCreateInfo.pQueueFamilyIndices = queueFamilies;
 
     VkExternalMemoryBufferCreateInfo externalMemoryBufferCreateInfo = {
         VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_BUFFER_CREATE_INFO
@@ -124,7 +128,9 @@ Result VKBufferHandleRAII::init(
     Size bufferSize,
     VkBufferUsageFlags usage,
     VkMemoryPropertyFlags reqMemoryProperties,
-    VkExternalMemoryHandleTypeFlagsKHR externalMemoryHandleTypeFlags
+    VkExternalMemoryHandleTypeFlagsKHR externalMemoryHandleTypeFlags,
+    uint32_t queueFamilyCount,
+    const uint32_t* queueFamilies
 )
 {
     SLANG_RHI_ASSERT(!isInitialized());
@@ -134,7 +140,7 @@ Result VKBufferHandleRAII::init(
     m_buffer = VK_NULL_HANDLE;
 
     // Create buffer
-    SLANG_RETURN_ON_FAIL(createVkBuffer(api, bufferSize, usage, externalMemoryHandleTypeFlags, &m_buffer));
+    SLANG_RETURN_ON_FAIL(createVkBuffer(api, bufferSize, usage, externalMemoryHandleTypeFlags, &m_buffer, queueFamilyCount, queueFamilies));
 
     // Allocate memory
     SLANG_RETURN_ON_FAIL(
@@ -390,6 +396,8 @@ Result DeviceImpl::uploadBufferInitData(IBuffer* buffer, Offset offset, Size siz
 Result DeviceImpl::createBuffer(const BufferDesc& desc_, const void* initData, IBuffer** outBuffer)
 {
     BufferDesc desc = fixupBufferDesc(desc_);
+    if (desc.sharingMode != SharingMode::Exclusive && desc.sharingMode != SharingMode::Concurrent)
+        return SLANG_E_INVALID_ARG;
 
     const Size bufferSize = desc.size;
 
@@ -420,6 +428,8 @@ Result DeviceImpl::createBuffer(const BufferDesc& desc_, const void* initData, I
         reqMemoryProperties = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
     }
 
+    uint32_t queueFamilies[3] = {};
+    uint32_t queueFamilyCount = getSharingQueueFamilies(desc.sharingMode, queueFamilies);
     RefPtr<BufferImpl> buffer(new BufferImpl(this, desc));
     if (is_set(desc.usage, BufferUsage::Shared))
     {
@@ -430,7 +440,8 @@ Result DeviceImpl::createBuffer(const BufferDesc& desc_, const void* initData, I
             = VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD_BIT;
 #endif
         SLANG_RETURN_ON_FAIL(
-            buffer->m_buffer.init(m_api, desc.size, usage, reqMemoryProperties, externalMemoryHandleTypeFlags)
+            buffer->m_buffer.init(m_api, desc.size, usage, reqMemoryProperties, externalMemoryHandleTypeFlags,
+                queueFamilyCount, queueFamilyCount ? queueFamilies : nullptr)
         );
     }
     else

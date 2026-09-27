@@ -357,6 +357,27 @@ Frame contract:
 | `flush`            | :x: | yes  | :x:   | yes   | yes    | :x:   | :x:  |
 | `removeEmptyPages` | :x: | yes  | :x:   | yes   | yes    | :x:   | :x:  |
 
+### Resource queue sharing
+
+`BufferDesc::sharingMode` and `TextureDesc::sharingMode` default to `SharingMode::Exclusive`.
+`Concurrent` permits access by all graphics, compute and transfer queue families selected by the device.
+Vulkan deduplicates the family indices and uses exclusive native sharing when only one family exists.
+D3D12 has no queue-family ownership operation; it creates Concurrent textures with
+`D3D12_RESOURCE_FLAG_ALLOW_SIMULTANEOUS_ACCESS`, so several queues may transition them at once. They
+leave COMMON by implicit promotion rather than a barrier, which the debug layer reports as a cross-queue
+write. D3D12 refuses Concurrent depth-stencil or multisampled textures with `SLANG_E_INVALID_ARG`.
+For newly created Concurrent textures, D3D12 normalizes `defaultState` to `General` (native COMMON),
+including the descriptor returned by `getDesc()`. This keeps creation and command-end restoration
+compatible with graphics, compute and copy queues. Exclusive textures and native-handle imports
+retain their existing default-state contracts; Vulkan does not apply this normalization.
+Native-handle imports must describe the sharing mode used to create the native resource.
+
+Concurrent sharing removes ownership transfers, not memory or layout dependencies. Callers must
+order initial uploads and writes before readers. Independent read submissions may overlap only
+while their layouts are compatible; automatic end-of-command restoration to `defaultState` also
+participates in that requirement. Existing release/acquire calls on Concurrent resources retain
+state handling but do not issue queue-family ownership transfers.
+
 ## OptiX callable stack limits
 
 CUDA ray-tracing pipelines accept `OptixRayTracingPipelineDesc` through

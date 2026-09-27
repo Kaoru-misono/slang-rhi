@@ -1716,7 +1716,7 @@ void CommandRecorder::cmdReleaseBufferForQueue(const commands::ReleaseBufferForQ
     uint32_t srcFamily = m_device->getQueueFamilyIndex(m_queueType);
     uint32_t dstFamily = m_device->getQueueFamilyIndex(cmd.dstQueue);
 
-    if (srcFamily == dstFamily)
+    if (srcFamily == dstFamily || buffer->m_desc.sharingMode == SharingMode::Concurrent)
     {
         m_stateTracking.setBufferState(buffer, cmd.currentState);
         return;
@@ -1758,7 +1758,7 @@ void CommandRecorder::cmdReleaseTextureForQueue(const commands::ReleaseTextureFo
     uint32_t srcFamily = m_device->getQueueFamilyIndex(m_queueType);
     uint32_t dstFamily = m_device->getQueueFamilyIndex(cmd.dstQueue);
 
-    if (srcFamily == dstFamily)
+    if (srcFamily == dstFamily || texture->m_desc.sharingMode == SharingMode::Concurrent)
     {
         m_stateTracking.setTextureState(texture, cmd.subresourceRange, cmd.currentState);
         return;
@@ -1804,7 +1804,7 @@ void CommandRecorder::cmdAcquireBufferFromQueue(const commands::AcquireBufferFro
     uint32_t srcFamily = m_device->getQueueFamilyIndex(cmd.srcQueue);
     uint32_t dstFamily = m_device->getQueueFamilyIndex(m_queueType);
 
-    if (srcFamily == dstFamily)
+    if (srcFamily == dstFamily || buffer->m_desc.sharingMode == SharingMode::Concurrent)
     {
         m_stateTracking.setBufferState(buffer, cmd.desiredState);
         return;
@@ -1845,7 +1845,7 @@ void CommandRecorder::cmdAcquireTextureFromQueue(const commands::AcquireTextureF
     uint32_t srcFamily = m_device->getQueueFamilyIndex(cmd.srcQueue);
     uint32_t dstFamily = m_device->getQueueFamilyIndex(m_queueType);
 
-    if (srcFamily == dstFamily)
+    if (srcFamily == dstFamily || texture->m_desc.sharingMode == SharingMode::Concurrent)
     {
         m_stateTracking.setTextureState(texture, cmd.subresourceRange, cmd.desiredState);
         return;
@@ -2104,6 +2104,8 @@ void CommandRecorder::commitBarriers()
         barrier.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
         barrier.srcAccessMask = beforeScope.access;
         barrier.dstAccessMask = afterScope.access;
+        barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
         barrier.buffer = buffer->m_buffer.m_buffer;
         barrier.offset = 0;
         barrier.size = buffer->m_desc.size;
@@ -2149,6 +2151,8 @@ void CommandRecorder::commitBarriers()
 
         VkImageMemoryBarrier barrier = {};
         barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+        barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
         barrier.image = texture->m_image;
         barrier.oldLayout = translateImageLayout(textureBarrier.stateBefore);
         // This is a bit of a hack.

@@ -14,7 +14,9 @@ public:
         Size bufferSize,
         VkBufferUsageFlags usage,
         VkMemoryPropertyFlags reqMemoryProperties,
-        VkExternalMemoryHandleTypeFlagsKHR externalMemoryHandleTypeFlags = 0
+        VkExternalMemoryHandleTypeFlagsKHR externalMemoryHandleTypeFlags = 0,
+        uint32_t queueFamilyCount = 0,
+        const uint32_t* queueFamilies = nullptr
     );
 
     /// Returns true if has been initialized

@@ -669,12 +669,14 @@ Result DeviceImpl::createRenderPipeline2(const RenderPipelineDesc& desc, IRender
 
     auto forcedSampleCount = rasterizerDesc.forcedSampleCount;
 
+    // The public mask covers 32 samples. Keep higher samples enabled for 64-sample pipelines.
+    VkSampleMask sampleMasks[2] = {desc.multisample.sampleMask, 0xFFFFFFFFu};
     VkPipelineMultisampleStateCreateInfo multisampling = {};
     multisampling.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
     multisampling.rasterizationSamples = (forcedSampleCount == 0) ? VkSampleCountFlagBits(desc.multisample.sampleCount)
                                                                   : translateSampleCount(forcedSampleCount);
     multisampling.sampleShadingEnable = VK_FALSE; // TODO: Should check if fragment shader needs this
-    // TODO: Sample mask is dynamic in D3D12 but PSO state in Vulkan
+    multisampling.pSampleMask = sampleMasks;
     multisampling.alphaToCoverageEnable = desc.multisample.alphaToCoverageEnable;
     multisampling.alphaToOneEnable = desc.multisample.alphaToOneEnable;
 

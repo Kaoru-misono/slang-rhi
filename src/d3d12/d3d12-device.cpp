@@ -1425,6 +1425,9 @@ Result DeviceImpl::createTexture(const TextureDesc& desc_, const SubresourceData
     // https://msdn.microsoft.com/en-us/library/windows/desktop/dn899215%28v=vs.85%29.aspx
 
     TextureDesc desc = fixupTextureDesc(desc_);
+    // COMMON is a legal boundary state for graphics, compute and copy queues.
+    if (desc.sharingMode == SharingMode::Concurrent)
+        desc.defaultState = ResourceState::General;
 
     bool isTypeless = is_set(desc.usage, TextureUsage::Typeless);
     if (isDepthFormat(desc.format) &&
@@ -1434,6 +1437,13 @@ Result DeviceImpl::createTexture(const TextureDesc& desc_, const SubresourceData
     }
     D3D12_RESOURCE_DESC resourceDesc = {};
     SLANG_RETURN_ON_FAIL(initTextureDesc(resourceDesc, desc, isTypeless));
+    // Simultaneous access lets several queues transition the texture at once; D3D12 forbids it on depth and MSAA.
+    if (desc.sharingMode == SharingMode::Concurrent)
+    {
+        if (isDepthFormat(desc.format) || desc.sampleCount > 1)
+            return SLANG_E_INVALID_ARG;
+        resourceDesc.Flags |= D3D12_RESOURCE_FLAG_ALLOW_SIMULTANEOUS_ACCESS;
+    }
 
     RefPtr<TextureImpl> texture(new TextureImpl(this, desc));
 

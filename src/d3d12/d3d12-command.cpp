@@ -28,6 +28,13 @@ inline bool arraysEqual(uint32_t countA, uint32_t countB, const T* a, const T* b
     return (countA == countB) ? std::memcmp(a, b, countA * sizeof(T)) == 0 : false;
 }
 
+inline D3D12_RESOURCE_STATES translateResourceStateForQueue(ResourceState state, QueueType queueType)
+{
+    if (queueType == QueueType::Compute && state == ResourceState::ShaderResource)
+        return D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+    return translateResourceState(state);
+}
+
 inline D3D12_RESOURCE_STATES translateBufferStateSet(const BufferStateSet& states, QueueType queueType)
 {
     SLANG_RHI_ASSERT(isValidBufferStateSet(states));
@@ -36,10 +43,7 @@ inline D3D12_RESOURCE_STATES translateBufferStateSet(const BufferStateSet& state
     states.forEach(
         [&](ResourceState state)
         {
-            if (queueType == QueueType::Compute && state == ResourceState::ShaderResource)
-                result |= D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
-            else
-                result |= translateResourceState(state);
+            result |= translateResourceStateForQueue(state, queueType);
         }
     );
     return result;
@@ -1902,8 +1906,14 @@ void CommandRecorder::commitBarriers()
             continue;
         TextureImpl* texture = checked_cast<TextureImpl*>(textureBarrier.texture);
         D3D12_RESOURCE_BARRIER barrier = {};
-        D3D12_RESOURCE_STATES stateBefore = clampState(translateResourceState(textureBarrier.stateBefore));
-        D3D12_RESOURCE_STATES stateAfter = clampState(translateResourceState(textureBarrier.stateAfter));
+        D3D12_RESOURCE_STATES stateBefore =
+            clampState(translateResourceStateForQueue(textureBarrier.stateBefore, m_queueType));
+        D3D12_RESOURCE_STATES stateAfter =
+            clampState(translateResourceStateForQueue(textureBarrier.stateAfter, m_queueType));
+        // Simultaneous-access textures keep one layout and leave COMMON by implicit promotion; an explicit barrier
+        // there is a write another queue can race.
+        if (texture->m_desc.sharingMode == SharingMode::Concurrent && stateBefore == D3D12_RESOURCE_STATE_COMMON)
+            continue;
         if (stateBefore != stateAfter)
         {
             barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
