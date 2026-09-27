@@ -343,11 +343,15 @@ TextureImpl::View TextureViewImpl::getRenderTargetView()
 Result DeviceImpl::createTexture(const TextureDesc& desc_, const SubresourceData* initData, ITexture** outTexture)
 {
     TextureDesc desc = fixupTextureDesc(desc_);
+    if (desc.sharingMode != SharingMode::Exclusive && desc.sharingMode != SharingMode::Concurrent)
+        return SLANG_E_INVALID_ARG;
 
     if (desc.heap)
         SLANG_RETURN_ON_FAIL(checkTexturePlacementSupported(desc));
     VkImageCreateInfo imageInfo = {};
     SLANG_RETURN_ON_FAIL(getVkImageCreateInfo(desc, initData != nullptr || desc.heap != nullptr, &imageInfo));
+    uint32_t queueFamilies[3] = {};
+    setImageSharingMode(desc.sharingMode, queueFamilies, imageInfo);
     const VkFormat format = imageInfo.format;
     const uint32_t layerCount = desc.getLayerCount();
 

@@ -790,6 +790,12 @@ SLANG_RHI_ENUM_CLASS_OPERATORS(BufferUsage);
 
 class IResourceHeap;
 
+enum class SharingMode
+{
+    Exclusive,
+    Concurrent,
+};
+
 struct BufferDesc
 {
     static constexpr StructType kStructType = StructType::BufferDesc;
@@ -805,6 +811,7 @@ struct BufferDesc
 
     MemoryType memoryType = MemoryType::DeviceLocal;
 
+    SharingMode sharingMode = SharingMode::Exclusive;
     BufferUsage usage = BufferUsage::None;
     ResourceState defaultState = ResourceState::Undefined;
 
@@ -1093,6 +1100,7 @@ struct TextureDesc
 
     MemoryType memoryType = MemoryType::DeviceLocal;
 
+    SharingMode sharingMode = SharingMode::Exclusive;
     TextureUsage usage = TextureUsage::None;
     ResourceState defaultState = ResourceState::Undefined;
 

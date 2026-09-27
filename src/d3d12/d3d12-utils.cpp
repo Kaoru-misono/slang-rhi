@@ -423,6 +423,13 @@ Result initTextureDesc(D3D12_RESOURCE_DESC& resourceDesc, const TextureDesc& tex
     resourceDesc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
 
     resourceDesc.Flags |= calcResourceFlags(textureDesc.usage);
+    // Simultaneous access lets several queues transition the texture at once; D3D12 forbids it on depth and MSAA.
+    if (textureDesc.sharingMode == SharingMode::Concurrent)
+    {
+        if (isDepthFormat(textureDesc.format) || textureDesc.sampleCount > 1)
+            return SLANG_E_INVALID_ARG;
+        resourceDesc.Flags |= D3D12_RESOURCE_FLAG_ALLOW_SIMULTANEOUS_ACCESS;
+    }
 
     resourceDesc.Alignment = 0;
 

@@ -275,6 +275,9 @@ public:
     );
 
     uint32_t getQueueFamilyIndex(QueueType queueType);
+    uint32_t getSharingQueueFamilies(SharingMode mode, uint32_t (&families)[3]) const;
+    // Makes `imageInfo` concurrent across the queue families of `mode`; `families` must outlive `imageInfo`.
+    void setImageSharingMode(SharingMode mode, uint32_t (&families)[3], VkImageCreateInfo& imageInfo) const;
 
 public:
     DeviceNativeHandles m_existingDeviceHandles;

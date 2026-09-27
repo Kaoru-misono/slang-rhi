@@ -1518,6 +1518,9 @@ Result DeviceImpl::createTexture(const TextureDesc& desc_, const SubresourceData
     TextureDesc desc = fixupTextureDesc(desc_);
     if (desc.memoryType != MemoryType::DeviceLocal)
         return SLANG_E_NOT_AVAILABLE;
+    // COMMON is a legal boundary state for graphics, compute and copy queues.
+    if (desc.sharingMode == SharingMode::Concurrent)
+        desc.defaultState = ResourceState::General;
 
     bool isTypeless = shouldCreateTypelessTexture(desc);
     D3D12_RESOURCE_DESC resourceDesc = {};

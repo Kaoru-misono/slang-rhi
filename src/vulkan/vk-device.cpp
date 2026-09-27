@@ -2172,6 +2172,8 @@ Result DeviceImpl::readBuffer(IBuffer* buffer, Offset offset, Size size, void* o
     barrier.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
     barrier.srcAccessMask = calcAccessFlags(bufferImpl->m_desc.defaultState);
     barrier.dstAccessMask = calcAccessFlags(ResourceState::CopySource);
+    barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
     barrier.buffer = bufferImpl->m_buffer.m_buffer;
     barrier.offset = 0;
     barrier.size = bufferImpl->m_desc.size;
@@ -2400,6 +2402,29 @@ void DeviceImpl::_transitionImageLayout(
     m_api.vkCmdPipelineBarrier(commandBuffer, sourceStage, destinationStage, 0, 0, nullptr, 0, nullptr, 1, &barrier);
 }
 
+uint32_t DeviceImpl::getSharingQueueFamilies(SharingMode mode, uint32_t (&families)[3]) const
+{
+    if (mode != SharingMode::Concurrent)
+        return 0;
+    uint32_t count = 0;
+    for (uint32_t family : {m_queueFamilyIndex, m_computeQueueFamilyIndex, m_transferQueueFamilyIndex})
+    {
+        bool duplicate = false;
+        for (uint32_t i = 0; i < count; ++i)
+            duplicate |= families[i] == family;
+        if (!duplicate)
+            families[count++] = family;
+    }
+    return count > 1 ? count : 0;
+}
+
+void DeviceImpl::setImageSharingMode(SharingMode mode, uint32_t (&families)[3], VkImageCreateInfo& imageInfo) const
+{
+    imageInfo.queueFamilyIndexCount = getSharingQueueFamilies(mode, families);
+    imageInfo.pQueueFamilyIndices = imageInfo.queueFamilyIndexCount ? families : nullptr;
+    imageInfo.sharingMode = imageInfo.queueFamilyIndexCount ? VK_SHARING_MODE_CONCURRENT : VK_SHARING_MODE_EXCLUSIVE;
+}
+
 uint32_t DeviceImpl::getQueueFamilyIndex(QueueType queueType)
 {
     switch (queueType)
@@ -2452,8 +2477,10 @@ Result DeviceImpl::getBufferMemoryRequirements(const BufferDesc& desc_, Resource
     resetResourceMemoryRequirements(outRequirements);
     BufferDesc desc = fixupBufferDesc(desc_);
     VkBufferUsageFlags usage = getBufferUsageFlags(m_api, desc);
+    uint32_t queueFamilies[3] = {};
+    uint32_t queueFamilyCount = getSharingQueueFamilies(desc.sharingMode, queueFamilies);
     VkBuffer buffer = VK_NULL_HANDLE;
-    SLANG_RETURN_ON_FAIL(createVkBuffer(m_api, desc.size, usage, 0, &buffer));
+    SLANG_RETURN_ON_FAIL(createVkBuffer(m_api, desc.size, usage, 0, &buffer, queueFamilyCount, queueFamilies));
     VkMemoryRequirements reqs = {};
     VkMemoryDedicatedRequirements dedicatedReqs = {VK_STRUCTURE_TYPE_MEMORY_DEDICATED_REQUIREMENTS};
     if (m_api.vkGetBufferMemoryRequirements2)
@@ -2502,6 +2529,8 @@ Result DeviceImpl::getTextureMemoryRequirements(const TextureDesc& desc_, Resour
     SLANG_RETURN_ON_FAIL(checkTexturePlacementSupported(desc));
     VkImageCreateInfo imageInfo = {};
     SLANG_RETURN_ON_FAIL(getVkImageCreateInfo(desc, true, &imageInfo));
+    uint32_t queueFamilies[3] = {};
+    setImageSharingMode(desc.sharingMode, queueFamilies, imageInfo);
 
     VkExternalMemoryImageCreateInfo externalMemoryImageCreateInfo = {
         VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_IMAGE_CREATE_INFO
@@ -2552,9 +2581,13 @@ Result DeviceImpl::getTextureMemoryRequirements(const TextureDesc& desc_, Resour
 Result DeviceImpl::getTextureAllocationInfo(const TextureDesc& desc_, Size* outSize, Size* outAlignment)
 {
     TextureDesc desc = fixupTextureDesc(desc_);
+    if (desc.sharingMode != SharingMode::Exclusive && desc.sharingMode != SharingMode::Concurrent)
+        return SLANG_E_INVALID_ARG;
 
     VkImageCreateInfo imageInfo = {};
     SLANG_RETURN_ON_FAIL(getVkImageCreateInfo(desc, false, &imageInfo));
+    uint32_t queueFamilies[3] = {};
+    setImageSharingMode(desc.sharingMode, queueFamilies, imageInfo);
 
     VkImage image;
     SLANG_VK_RETURN_ON_FAIL_REPORT(m_api.vkCreateImage(m_device, &imageInfo, nullptr, &image), this);

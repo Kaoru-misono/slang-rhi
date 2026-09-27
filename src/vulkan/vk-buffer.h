@@ -22,7 +22,9 @@ Result createVkBuffer(
     Size bufferSize,
     VkBufferUsageFlags usage,
     VkExternalMemoryHandleTypeFlagsKHR externalMemoryHandleTypeFlags,
-    VkBuffer* outBuffer
+    VkBuffer* outBuffer,
+    uint32_t queueFamilyCount = 0,
+    const uint32_t* queueFamilies = nullptr
 );
 
 // Combined buffer and memory class
@@ -38,7 +40,9 @@ public:
         VkBufferUsageFlags usage,
         VkMemoryPropertyFlags reqMemoryProperties,
         VkExternalMemoryHandleTypeFlagsKHR externalMemoryHandleTypeFlags = 0,
-        VkMemoryPropertyFlags preferredMemoryProperties = 0
+        VkMemoryPropertyFlags preferredMemoryProperties = 0,
+        uint32_t queueFamilyCount = 0,
+        const uint32_t* queueFamilies = nullptr
     );
 
     /// Create a buffer and bind it to existing memory.
@@ -48,7 +52,9 @@ public:
         VkBufferUsageFlags usage,
         uint32_t memoryTypeIndex,
         VkDeviceMemory memory,
-        Offset offset
+        Offset offset,
+        uint32_t queueFamilyCount = 0,
+        const uint32_t* queueFamilies = nullptr
     );
 
     /// Wrap a buffer without taking ownership of the buffer or its memory.
