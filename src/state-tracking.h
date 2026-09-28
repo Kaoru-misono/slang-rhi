@@ -2,11 +2,102 @@
 
 #include "rhi-shared.h"
 
+#include <algorithm>
 #include <bit>
+#include <cstdint>
 #include <vector>
-#include <unordered_map>
 
 namespace rhi {
+
+/// Open-addressing map from a resource pointer to its tracked state. Recording looks up
+/// every bound resource on every state change, and a node-based map allocates per
+/// resource and probes slowly, which dominated recording in checked builds.
+template<typename Key, typename Value>
+class ResourceStateMap
+{
+public:
+    struct Entry
+    {
+        Key* key;
+        Value value;
+    };
+
+    Value* find(Key* key)
+    {
+        if (m_index.empty())
+            return nullptr;
+        size_t const mask = m_index.size() - 1;
+        for (size_t slot = slotOf(key, mask);; slot = (slot + 1) & mask)
+        {
+            uint32_t const entry = m_index[slot];
+            if (entry == kEmpty)
+                return nullptr;
+            if (m_entries[entry].key == key)
+                return &m_entries[entry].value;
+        }
+    }
+
+    Value& insertOrAssign(Key* key, Value value)
+    {
+        if (Value* existing = find(key))
+        {
+            *existing = std::move(value);
+            return *existing;
+        }
+        if ((m_entries.size() + 1) * 2 > m_index.size())
+            rebuild(std::max<size_t>(64, m_index.size() * 2));
+        m_entries.emplace_back(Entry{key, std::move(value)});
+        place(key, uint32_t(m_entries.size() - 1));
+        return m_entries.back().value;
+    }
+
+    void erase(Key* key)
+    {
+        auto it = std::find_if(m_entries.begin(), m_entries.end(), [key](const Entry& entry) { return entry.key == key; });
+        if (it == m_entries.end())
+            return;
+        *it = std::move(m_entries.back());
+        m_entries.pop_back();
+        rebuild(m_index.size());
+    }
+
+    void clear()
+    {
+        m_entries.clear();
+        std::fill(m_index.begin(), m_index.end(), kEmpty);
+    }
+
+    // Iteration must not insert: that can move the entries.
+    Entry* begin() { return m_entries.data(); }
+    Entry* end() { return m_entries.data() + m_entries.size(); }
+
+private:
+    static constexpr uint32_t kEmpty = ~0u;
+
+    static size_t slotOf(Key* key, size_t mask)
+    {
+        return size_t((uint64_t(uintptr_t(key)) * 0x9E3779B97F4A7C15ull) >> 32) & mask;
+    }
+
+    void place(Key* key, uint32_t entry)
+    {
+        size_t const mask = m_index.size() - 1;
+        size_t slot = slotOf(key, mask);
+        while (m_index[slot] != kEmpty)
+            slot = (slot + 1) & mask;
+        m_index[slot] = entry;
+    }
+
+    void rebuild(size_t slotCount)
+    {
+        m_index.assign(slotCount, kEmpty);
+        for (uint32_t entry = 0; entry < uint32_t(m_entries.size()); ++entry)
+            place(m_entries[entry].key, entry);
+    }
+
+    std::vector<Entry> m_entries;
+    std::vector<uint32_t> m_index;
+};
 
 static_assert(uint32_t(ResourceState::MicromapWrite) < 64);
 
@@ -266,16 +357,16 @@ public:
     {
         for (auto& bufferState : m_bufferStates)
         {
-            if (!bufferState.second.states.isExactly(bufferState.first->m_desc.defaultState))
+            if (!bufferState.value.states.isExactly(bufferState.key->m_desc.defaultState))
             {
-                setBufferState(bufferState.first, bufferState.first->m_desc.defaultState);
+                setBufferState(bufferState.key, bufferState.key->m_desc.defaultState);
             }
         }
         for (auto& textureState : m_textureStates)
         {
-            if (textureState.second.state != textureState.first->m_desc.defaultState)
+            if (textureState.value.state != textureState.key->m_desc.defaultState)
             {
-                setTextureState(textureState.first, kEntireTexture, textureState.first->m_desc.defaultState);
+                setTextureState(textureState.key, kEntireTexture, textureState.key->m_desc.defaultState);
             }
         }
     }
@@ -296,7 +387,7 @@ public:
             return;
 
         assertNoPendingBufferBarrier(buffer);
-        m_bufferStates.insert_or_assign(buffer, BufferState{BufferStateSet(state)});
+        m_bufferStates.insertOrAssign(buffer, BufferState{BufferStateSet(state)});
     }
 
     void clearBarriers()
@@ -313,8 +404,8 @@ public:
     }
 
 private:
-    std::unordered_map<Buffer*, BufferState> m_bufferStates;
-    std::unordered_map<Texture*, TextureState> m_textureStates;
+    ResourceStateMap<Buffer, BufferState> m_bufferStates;
+    ResourceStateMap<Texture, TextureState> m_textureStates;
     std::vector<BufferBarrier> m_bufferBarriers;
     std::vector<TextureBarrier> m_textureBarriers;
 
@@ -353,20 +444,16 @@ private:
 
     BufferState* getBufferState(Buffer* buffer)
     {
-        auto it = m_bufferStates.find(buffer);
-        if (it != m_bufferStates.end())
-            return &it->second;
-        m_bufferStates[buffer] = {BufferStateSet(buffer->m_desc.defaultState)};
-        return &m_bufferStates[buffer];
+        if (BufferState* state = m_bufferStates.find(buffer))
+            return state;
+        return &m_bufferStates.insertOrAssign(buffer, BufferState{BufferStateSet(buffer->m_desc.defaultState)});
     }
 
     TextureState* getTextureState(Texture* texture)
     {
-        auto it = m_textureStates.find(texture);
-        if (it != m_textureStates.end())
-            return &it->second;
-        m_textureStates[texture] = {texture->m_desc.defaultState};
-        return &m_textureStates[texture];
+        if (TextureState* state = m_textureStates.find(texture))
+            return state;
+        return &m_textureStates.insertOrAssign(texture, TextureState{texture->m_desc.defaultState, {}});
     }
 };
 
