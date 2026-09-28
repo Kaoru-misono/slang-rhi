@@ -17,9 +17,9 @@ static void dispatchIncrement(IDevice* device, const trivialCompute::Pipeline& p
     queue->waitOnHost();
 }
 
-static void runBufferFromHandle(IDevice* device, trivialCompute::BindingModel model)
+static void runBufferFromHandle(IDevice* device)
 {
-    auto pipeline = trivialCompute::createPipeline(device, model);
+    auto pipeline = trivialCompute::createPipeline(device);
 
     const int numberCount = 4;
     float initialData[] = {0.0f, 1.0f, 2.0f, 3.0f};
@@ -89,10 +89,5 @@ static void runBufferFromHandle(IDevice* device, trivialCompute::BindingModel mo
 
 GPU_TEST_CASE("buffer-from-handle", D3D12 | Vulkan | Metal | CUDA | WGPU)
 {
-    runBufferFromHandle(device, trivialCompute::BindingModel::Legacy);
-}
-
-GPU_TEST_CASE("buffer-from-handle-flat", D3D12 | Vulkan)
-{
-    runBufferFromHandle(device, trivialCompute::BindingModel::Flat);
+    runBufferFromHandle(device);
 }

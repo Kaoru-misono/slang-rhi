@@ -5,20 +5,14 @@
 using namespace rhi;
 using namespace rhi::testing;
 
-/// flat selects an explicit pipeline layout and flat binding; otherwise the root shader object binds.
-static void runBufferResourceStates(IDevice* device, bool flat)
+static void runBufferResourceStates(IDevice* device)
 {
     ComPtr<IShaderProgram> shaderProgram;
     REQUIRE_CALL(loadProgram(device, "test-dummy", "computeMain", shaderProgram.writeRef()));
 
-    PipelineLayoutDesc layoutDesc = {};
-    layoutDesc.program = shaderProgram;
-    ComPtr<IPipelineLayout> layout;
-    REQUIRE_CALL(device->createPipelineLayout(layoutDesc, layout.writeRef()));
 
     ComputePipelineDesc pipelineDesc = {};
     pipelineDesc.program = shaderProgram.get();
-    pipelineDesc.layout = flat ? layout.get() : nullptr;
     ComPtr<IComputePipeline> pipeline;
     REQUIRE_CALL(device->createComputePipeline(pipelineDesc, pipeline.writeRef()));
 
@@ -57,10 +51,7 @@ static void runBufferResourceStates(IDevice* device, bool flat)
         auto commandEncoder = queue->createCommandEncoder();
         commandEncoder->setBufferState(buffer, state);
         auto passEncoder = commandEncoder->beginComputePass();
-        if (flat)
-            REQUIRE_CALL(passEncoder->bindPipeline(pipeline, FlatBindingDesc{}));
-        else
-            REQUIRE(passEncoder->bindPipeline(pipeline) != nullptr);
+        REQUIRE(passEncoder->bindPipeline(pipeline) != nullptr);
         passEncoder->dispatchCompute(1, 1, 1);
         passEncoder->end();
         REQUIRE_CALL(queue->submit(commandEncoder->finish()));
@@ -71,27 +62,17 @@ static void runBufferResourceStates(IDevice* device, bool flat)
 
 GPU_TEST_CASE("buffer-resource-states", D3D12 | Vulkan)
 {
-    runBufferResourceStates(device, false);
+    runBufferResourceStates(device);
 }
 
-GPU_TEST_CASE("buffer-resource-states-flat", D3D12 | Vulkan)
-{
-    runBufferResourceStates(device, true);
-}
-
-static void runTextureResourceStates(IDevice* device, bool flat)
+static void runTextureResourceStates(IDevice* device)
 {
     ComPtr<IShaderProgram> shaderProgram;
     REQUIRE_CALL(loadProgram(device, "test-dummy", "computeMain", shaderProgram.writeRef()));
 
-    PipelineLayoutDesc layoutDesc = {};
-    layoutDesc.program = shaderProgram;
-    ComPtr<IPipelineLayout> layout;
-    REQUIRE_CALL(device->createPipelineLayout(layoutDesc, layout.writeRef()));
 
     ComputePipelineDesc pipelineDesc = {};
     pipelineDesc.program = shaderProgram.get();
-    pipelineDesc.layout = flat ? layout.get() : nullptr;
     ComPtr<IComputePipeline> pipeline;
     REQUIRE_CALL(device->createComputePipeline(pipelineDesc, pipeline.writeRef()));
 
@@ -153,10 +134,7 @@ static void runTextureResourceStates(IDevice* device, bool flat)
             auto commandEncoder = queue->createCommandEncoder();
             commandEncoder->setTextureState(texture, state);
             auto passEncoder = commandEncoder->beginComputePass();
-            if (flat)
-                REQUIRE_CALL(passEncoder->bindPipeline(pipeline, FlatBindingDesc{}));
-            else
-                REQUIRE(passEncoder->bindPipeline(pipeline) != nullptr);
+            REQUIRE(passEncoder->bindPipeline(pipeline) != nullptr);
             passEncoder->dispatchCompute(1, 1, 1);
             passEncoder->end();
             REQUIRE_CALL(queue->submit(commandEncoder->finish()));
@@ -168,10 +146,5 @@ static void runTextureResourceStates(IDevice* device, bool flat)
 
 GPU_TEST_CASE("texture-resource-states", D3D12 | Vulkan)
 {
-    runTextureResourceStates(device, false);
-}
-
-GPU_TEST_CASE("texture-resource-states-flat", D3D12 | Vulkan)
-{
-    runTextureResourceStates(device, true);
+    runTextureResourceStates(device);
 }

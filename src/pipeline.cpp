@@ -1,5 +1,4 @@
 #include "pipeline.h"
-#include "pipeline-layout.h"
 
 #include "rhi-shared.h"
 
@@ -31,7 +30,6 @@ RenderPipeline::RenderPipeline(Device* device, const RenderPipelineDesc& desc)
     m_descHolder.holdList(m_desc.targets, m_desc.targetCount);
     m_descHolder.holdString(m_desc.label);
     m_program = checked_cast<ShaderProgram*>(desc.program);
-    m_layout = checked_cast<PipelineLayout*>(desc.layout);
     m_inputLayout = checked_cast<InputLayout*>(desc.inputLayout);
 }
 
@@ -68,7 +66,6 @@ ComputePipeline::ComputePipeline(Device* device, const ComputePipelineDesc& desc
 {
     m_descHolder.holdString(m_desc.label);
     m_program = checked_cast<ShaderProgram*>(desc.program);
-    m_layout = checked_cast<PipelineLayout*>(desc.layout);
 }
 
 
@@ -114,7 +111,6 @@ RayTracingPipeline::RayTracingPipeline(Device* device, const RayTracingPipelineD
         m_descHolder.holdString(hitGroup.intersectionEntryPoint);
     }
     m_program = checked_cast<ShaderProgram*>(desc.program);
-    m_layout = checked_cast<PipelineLayout*>(desc.layout);
 }
 
 // ----------------------------------------------------------------------------

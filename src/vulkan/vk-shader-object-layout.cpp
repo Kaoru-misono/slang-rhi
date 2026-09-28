@@ -64,24 +64,6 @@ void ShaderObjectLayoutImpl::Builder::_addDescriptorRangesAsValue(
     const BindingOffset& offset
 )
 {
-    // First we will scan through all the descriptor sets that the Slang reflection
-    // information believes go into making up the given type.
-    //
-    // Note: We are initializing the sets in order so that their order in our
-    // internal data structures should be deterministically based on the order
-    // in which they are listed in Slang's reflection information.
-    //
-    uint32_t descriptorSetCount = typeLayout->getDescriptorSetCount();
-    for (uint32_t i = 0; i < descriptorSetCount; ++i)
-    {
-        SlangInt descriptorRangeCount = typeLayout->getDescriptorSetDescriptorRangeCount(i);
-        if (descriptorRangeCount == 0)
-            continue;
-        auto descriptorSetIndex =
-            findOrAddDescriptorSet(offset.bindingSet + typeLayout->getDescriptorSetSpaceOffset(i));
-        SLANG_UNUSED(descriptorSetIndex);
-    }
-
     // For actually populating the descriptor sets we prefer to enumerate
     // the binding ranges of the type instead of the descriptor sets.
     //
@@ -461,6 +443,9 @@ void ShaderObjectLayoutImpl::Builder::addBindingRanges(slang::TypeLayoutReflecti
         //
         subObjectRange.offset = SubObjectRangeOffset(typeLayout->getSubObjectRangeOffset(r));
         subObjectRange.stride = SubObjectRangeStride(slangLeafTypeLayout);
+        auto* elementLayout = slangLeafTypeLayout->getElementVarLayout();
+        subObjectRange.childSetOffset = elementLayout
+            ? uint32_t(elementLayout->getOffset(SLANG_PARAMETER_CATEGORY_SUB_ELEMENT_REGISTER_SPACE)) : 0;
 
         switch (slangBindingType)
         {
@@ -661,6 +646,8 @@ RootShaderObjectLayoutImpl::~RootShaderObjectLayoutImpl()
     {
         m_device->m_api.vkDestroyPipelineLayout(m_device->m_api.m_device, m_pipelineLayout, nullptr);
     }
+    if (m_emptyDescriptorSetLayout)
+        m_device->m_api.vkDestroyDescriptorSetLayout(m_device->m_api.m_device, m_emptyDescriptorSetLayout, nullptr);
 }
 
 uint32_t RootShaderObjectLayoutImpl::findEntryPointIndex(VkShaderStageFlags stage)
@@ -744,12 +731,37 @@ Result RootShaderObjectLayoutImpl::_init(const Builder* builder)
     // Once we've collected the information across the entire
     // tree of sub-objects
 
-    // Add bindless descriptor set layout if needed.
-    // We currently assume that the bindless descriptor set is always the last,
-    // following all other descriptor sets, without any gaps.
     if (m_device->m_bindlessDescriptorSet)
     {
-        m_vkDescriptorSetLayouts.push_back(m_device->m_bindlessDescriptorSet->m_descriptorSetLayout);
+        SlangInt reflectedSpace = m_programLayout->getBindlessSpaceIndex();
+        uint32_t setIndex = reflectedSpace >= 0 ? uint32_t(reflectedSpace) : uint32_t(m_vkDescriptorSetLayouts.size());
+        // Frontend reflection can reserve an unused heap space inside a nested block.
+        // The emitted shader must confirm heap use before such a collision is an error.
+        if (setIndex < kMaxDescriptorSets &&
+            setIndex < m_device->m_api.m_deviceProperties.limits.maxBoundDescriptorSets &&
+            (setIndex >= m_vkDescriptorSetLayouts.size() || m_vkDescriptorSetLayouts[setIndex] == VK_NULL_HANDLE))
+        {
+            SLANG_RETURN_ON_FAIL(addDescriptorSetLayout(
+                setIndex,
+                m_device->m_bindlessDescriptorSet->m_descriptorSetLayout
+            ));
+            m_bindlessSetIndex = setIndex;
+        }
+    }
+
+    // Keep native set numbers, including gaps reserved by the compiled program.
+    for (auto& setLayout : m_vkDescriptorSetLayouts)
+    {
+        if (setLayout != VK_NULL_HANDLE)
+            continue;
+        if (m_emptyDescriptorSetLayout == VK_NULL_HANDLE)
+        {
+            VkDescriptorSetLayoutCreateInfo desc = {VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
+            SLANG_RETURN_ON_FAIL(m_device->m_api.vkCreateDescriptorSetLayout(
+                m_device->m_api.m_device, &desc, nullptr, &m_emptyDescriptorSetLayout
+            ));
+        }
+        setLayout = m_emptyDescriptorSetLayout;
     }
 
     // Now call Vulkan API to create a pipeline layout.
@@ -785,65 +797,68 @@ Result RootShaderObjectLayoutImpl::_init(const Builder* builder)
 
 /// Add all the descriptor sets implied by this root object and sub-objects
 
+Result RootShaderObjectLayoutImpl::addDescriptorSetLayout(uint64_t setIndex, VkDescriptorSetLayout layout)
+{
+    if (setIndex >= kMaxDescriptorSets || setIndex >= m_device->m_api.m_deviceProperties.limits.maxBoundDescriptorSets)
+        return SLANG_E_NOT_AVAILABLE;
+    if (setIndex >= m_vkDescriptorSetLayouts.size())
+        m_vkDescriptorSetLayouts.resize(size_t(setIndex + 1), VK_NULL_HANDLE);
+    if (m_vkDescriptorSetLayouts[size_t(setIndex)] != VK_NULL_HANDLE)
+    {
+        m_device->printError("Shader parameters overlap descriptor set %u.", uint32_t(setIndex));
+        return SLANG_E_INVALID_ARG;
+    }
+    m_vkDescriptorSetLayouts[size_t(setIndex)] = layout;
+    return SLANG_OK;
+}
+
 Result RootShaderObjectLayoutImpl::addAllDescriptorSets()
 {
-    SLANG_RETURN_ON_FAIL(addAllDescriptorSetsRec(this));
-
-    // Note: the descriptor ranges/sets for direct entry point parameters
-    // were already enumerated into the ranges/sets of the root object itself,
-    // so we don't wnat to add them again.
-    //
-    // We do however have to deal with the possibility that an entry
-    // point could introduce "child" descriptor sets, e.g., because it
-    // has a `ParameterBlock<X>` parameter.
-    //
+    SLANG_RETURN_ON_FAIL(addAllDescriptorSetsRec(this, {}));
+    // Entry point ordinary descriptors are already part of the root layout.
     for (auto& entryPoint : getEntryPoints())
-    {
-        SLANG_RETURN_ON_FAIL(addChildDescriptorSetsRec(entryPoint.layout));
-    }
-
+        SLANG_RETURN_ON_FAIL(addChildDescriptorSetsRec(entryPoint.layout, entryPoint.offset));
     return SLANG_OK;
 }
 
-/// Recurisvely add descriptor sets defined by `layout` and sub-objects
-
-Result RootShaderObjectLayoutImpl::addAllDescriptorSetsRec(ShaderObjectLayoutImpl* layout)
+Result RootShaderObjectLayoutImpl::addAllDescriptorSetsRec(
+    ShaderObjectLayoutImpl* layout,
+    const BindingOffset& offset
+)
 {
-    // TODO: This logic assumes that descriptor sets are all contiguous
-    // and have been allocated in a global order that matches the order
-    // of enumeration here.
-
-    for (auto& descSetInfo : layout->getOwnDescriptorSets())
-    {
-        m_vkDescriptorSetLayouts.push_back(descSetInfo.descriptorSetLayout);
-    }
-
-    SLANG_RETURN_ON_FAIL(addChildDescriptorSetsRec(layout));
-    return SLANG_OK;
+    for (const auto& set : layout->getOwnDescriptorSets())
+        SLANG_RETURN_ON_FAIL(addDescriptorSetLayout(uint64_t(offset.bindingSet) + uint32_t(set.space), set.descriptorSetLayout));
+    return addChildDescriptorSetsRec(layout, offset);
 }
 
-/// Recurisvely add descriptor sets defined by sub-objects of `layout`
-
-Result RootShaderObjectLayoutImpl::addChildDescriptorSetsRec(ShaderObjectLayoutImpl* layout)
+Result RootShaderObjectLayoutImpl::addChildDescriptorSetsRec(
+    ShaderObjectLayoutImpl* layout,
+    const BindingOffset& offset
+)
 {
-    for (auto& subObject : layout->getSubObjectRanges())
+    for (const auto& subObject : layout->getSubObjectRanges())
     {
-        const auto& bindingRange = layout->getBindingRange(subObject.bindingRangeIndex);
-        switch (bindingRange.bindingType)
+        if (!subObject.layout)
+            continue;
+        const auto& range = layout->getBindingRange(subObject.bindingRangeIndex);
+        BindingOffset childOffset = offset;
+        childOffset += subObject.offset;
+        for (uint32_t i = 0; i < range.count; ++i)
         {
-        case slang::BindingType::ParameterBlock:
-            SLANG_RETURN_ON_FAIL(addAllDescriptorSetsRec(subObject.layout));
-            break;
-
-        default:
-            if (auto subObjectLayout = subObject.layout)
+            BindingOffset elementOffset = childOffset;
+            elementOffset.parameterBlockSet += subObject.childSetOffset;
+            if (range.bindingType == slang::BindingType::ParameterBlock)
             {
-                SLANG_RETURN_ON_FAIL(addChildDescriptorSetsRec(subObject.layout));
+                elementOffset.bindingSet = childOffset.parameterBlockSet;
+                SLANG_RETURN_ON_FAIL(addAllDescriptorSetsRec(subObject.layout, elementOffset));
             }
-            break;
+            else
+            {
+                SLANG_RETURN_ON_FAIL(addChildDescriptorSetsRec(subObject.layout, elementOffset));
+            }
+            childOffset += subObject.stride;
         }
     }
-
     return SLANG_OK;
 }
 
@@ -898,13 +913,6 @@ Result RootShaderObjectLayoutImpl::addChildPushConstantRangesRec(ShaderObjectLay
 
 Result RootShaderObjectLayoutImpl::Builder::build(RootShaderObjectLayoutImpl** outLayout)
 {
-    // Push-constant reflection can enumerate a descriptor range without a Vulkan
-    // binding. It must not shift a bindless heap reflected at set zero to set one.
-    if (m_programLayout->getBindlessSpaceIndex() == 0 && m_childDescriptorSetCount == 0 &&
-        m_descriptorSetBuildInfos.size() == 1 && m_descriptorSetBuildInfos[0].vkBindings.empty())
-    {
-        m_descriptorSetBuildInfos.clear();
-    }
     RefPtr<RootShaderObjectLayoutImpl> layout = new RootShaderObjectLayoutImpl();
     SLANG_RETURN_ON_FAIL(layout->_init(this));
     returnRefPtrMove(outLayout, layout);

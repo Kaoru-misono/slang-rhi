@@ -82,9 +82,9 @@ GPU_TEST_CASE("vma-buffer-mapping", Vulkan)
 }
 
 // Test device-local buffer with initial data upload (exercises VMA staging path).
-static void runVmaBufferInitialData(IDevice* device, trivialCompute::BindingModel model)
+static void runVmaBufferInitialData(IDevice* device)
 {
-    auto pipeline = trivialCompute::createPipeline(device, model);
+    auto pipeline = trivialCompute::createPipeline(device);
 
     const int numberCount = 4;
     float initialData[] = {0.0f, 1.0f, 2.0f, 3.0f};
@@ -117,12 +117,7 @@ static void runVmaBufferInitialData(IDevice* device, trivialCompute::BindingMode
 
 GPU_TEST_CASE("vma-buffer-initial-data", Vulkan)
 {
-    runVmaBufferInitialData(device, trivialCompute::BindingModel::Legacy);
-}
-
-GPU_TEST_CASE("vma-buffer-initial-data-flat", Vulkan)
-{
-    runVmaBufferInitialData(device, trivialCompute::BindingModel::Flat);
+    runVmaBufferInitialData(device);
 }
 
 // Test texture creation (exercises VMA image memory allocation).

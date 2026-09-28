@@ -30,9 +30,6 @@
 | `createRootShaderObject`           | yes   | yes    |
 | `createShaderTable`                | yes   | yes    |
 | `createShaderProgram`              | yes   | yes    |
-| `createBindingSetLayout`           | yes   | yes    |
-| `createBindingSet`                 | yes   | yes    |
-| `createPipelineLayout`             | yes   | yes    |
 | `createRenderPipeline`             | yes   | yes    |
 | `createComputePipeline`            | yes   | yes    |
 | `createRayTracingPipeline`         | yes   | yes    |
@@ -128,26 +125,8 @@
 
 ## `IShaderTable` interface
 
-## `IBindingSetLayout` interface
 
-| API       | D3D12 | Vulkan |
-|-----------|-------|--------|
-| `getDesc` | yes   | yes    |
 
-## `IBindingSet` interface
-
-| API         | D3D12 | Vulkan |
-|-------------|-------|--------|
-| `getLayout` | yes   | yes    |
-
-## `IPipelineLayout` interface
-
-| API                   | D3D12 | Vulkan |
-|-----------------------|-------|--------|
-| `getDesc`             | yes   | yes    |
-| `getConstantsProfile` | yes   | yes    |
-| `getConstantsSize`    | yes   | yes    |
-| `getSetCount`         | yes   | yes    |
 
 ## `IPipeline` interface
 
@@ -242,7 +221,6 @@
 | API                   | D3D12 | Vulkan |
 |-----------------------|-------|--------|
 | `bindPipeline`        | yes   | yes    |
-| `bindPipeline` (flat) | yes   | yes    |
 | `setRenderState`      | yes   | yes    |
 | `draw`                | yes   | yes    |
 | `drawIndexed`         | yes   | yes    |
@@ -266,29 +244,15 @@ to match inputs using `semanticName` and `semanticIndex`.
 | API                       | D3D12 | Vulkan |
 |---------------------------|-------|--------|
 | `bindPipeline`            | yes   | yes    |
-| `bindPipeline` (flat)     | yes   | yes    |
 | `dispatchCompute`         | yes   | yes    |
 | `dispatchComputeIndirect` | yes   | yes    |
 
-Compute binding supports the general shader-object overloads and the `FlatBindingDesc` overload.
-Flat bindings use an `IPipelineLayout`, copy constant bytes immediately, and retain and transition
-resources declared by binding sets and explicit accesses. The earlier entry-point-data-only
-compute binding API has been removed.
-
-With `DeviceDesc::enableValidation`, replay of a flat binding reports `Warning` / `Layer` when
-its declared accesses require an effective resource-state change. Messages identify the resource
-label and target state, and include resolved layer/mip ranges for textures. Read-state unions are
-compared against the tracked effective state; repeated accesses already covered by that union and
-same-state UAV ordering barriers do not warn. The diagnostic does not suppress barriers or alter
-failure handling. Without the debug wrapper it is disabled, and general shader-object bindings,
-copy/clear commands, attachments, and default-state restoration do not produce this diagnostic.
-This applies to flat render, compute, and ray-tracing bindings on D3D12 and Vulkan.
-
-D3D12 caches flat sampler tables by immutable binding-set identity for the command buffer's
-lifetime, including workloads using more than 16 distinct sets. Rebinding an existing set does
-not allocate another sampler table. Command-buffer reset clears the cache along with its
-descriptor arenas. Distinct sets still consume the configured shader-visible sampler heap;
-exhaustion returns an allocation failure and does not overwrite tables used by earlier commands.
+Shader-object parameters are materialized when draw/dispatch is recorded. Recorded commands
+retain the resource dependencies and constant snapshots. Raw descriptor handles require explicit
+resource state commands before the pass; copying a handle alone does not retain its resource.
+D3D12 sampler tables are cached by complete descriptor sequence and layout, independently of
+ordinary constant changes. Failed legacy materialization is reported by `finish`, without publishing
+a partial command buffer.
 
 ### Vulkan allocation failures
 
@@ -302,7 +266,6 @@ reset fails are isolated instead of being returned to the reusable pool.
 | API                   | D3D12 | Vulkan |
 |-----------------------|-------|--------|
 | `bindPipeline`        | yes   | yes    |
-| `bindPipeline` (flat) | yes   | yes    |
 | `dispatchRays`        | yes   | yes    |
 
 ## `ICommandBuffer` interface

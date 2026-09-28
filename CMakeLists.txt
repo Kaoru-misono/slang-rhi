@@ -625,7 +625,6 @@ endif()
 
 target_sources(slang-rhi PRIVATE
     src/aftermath.cpp
-    src/binding-set.cpp
     src/command-buffer.cpp
     src/command-list.cpp
     src/device.cpp
@@ -634,7 +633,6 @@ target_sources(slang-rhi PRIVATE
     src/format-conversion.cpp
     src/heap.cpp
     src/pipeline.cpp
-    src/pipeline-layout.cpp
     src/pipeline-resolver.cpp
     src/resource-desc-utils.cpp
     src/rhi-shared.cpp
@@ -683,7 +681,6 @@ if(SLANG_RHI_ENABLE_D3D12)
     target_sources(slang-rhi PRIVATE
         src/d3d12/d3d12-acceleration-structure.cpp
         src/d3d12/d3d12-backend.cpp
-        src/d3d12/d3d12-binding-set.cpp
         src/d3d12/d3d12-bindless-descriptor-set.cpp
         src/d3d12/d3d12-buffer.cpp
         src/d3d12/d3d12-command.cpp
@@ -710,7 +707,6 @@ if(SLANG_RHI_ENABLE_VULKAN)
         src/vulkan/vk-acceleration-structure.cpp
         src/vulkan/vk-api.cpp
         src/vulkan/vk-backend.cpp
-        src/vulkan/vk-binding-set.cpp
         src/vulkan/vk-bindless-descriptor-set.cpp
         src/vulkan/vk-buffer.cpp
         src/vulkan/vk-command.cpp

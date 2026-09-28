@@ -1,5 +1,4 @@
 #include "d3d12-command.h"
-#include "d3d12-binding-set.h"
 #include "d3d12-device.h"
 #include "d3d12-buffer.h"
 #include "d3d12-texture.h"
@@ -1770,24 +1769,16 @@ void CommandRecorder::setBindings(BindingDataImpl* bindingData, BindMode bindMod
     for (uint32_t i = 0; i < bindingData->bufferStateCount; ++i)
     {
         const auto& bufferState = bindingData->bufferStates[i];
-        const bool changed = m_stateTracking.requireBufferState(
+        m_stateTracking.requireBufferState(
             bufferState.buffer, bufferState.state, getBufferReadStatePolicy(m_queueType)
         );
-        if (changed && bindingData->diagnoseStateTransitions)
-        {
-            reportFlatBindingTransition(m_device, bufferState.buffer, bufferState.state);
-        }
     }
     for (uint32_t i = 0; i < bindingData->textureStateCount; ++i)
     {
         const auto& textureState = bindingData->textureStates[i];
-        const bool changed = m_stateTracking.setTextureState(
+        m_stateTracking.setTextureState(
             textureState.texture, textureState.range, textureState.state
         );
-        if (changed && bindingData->diagnoseStateTransitions)
-        {
-            reportFlatBindingTransition(m_device, textureState.texture, textureState.range, textureState.state);
-        }
     }
 
     // We need barriers to be committed before setting root parameters.
@@ -2405,136 +2396,6 @@ Result CommandEncoderImpl::init()
     return SLANG_OK;
 }
 
-Result CommandEncoderImpl::getFlatBindingData(
-    Pipeline* pipeline,
-    const FlatBindingDesc& bindings,
-    std::span<const ResourceAccess> accesses,
-    BindingData*& outBindingData
-)
-{
-    DeviceImpl* device = getDevice<DeviceImpl>();
-    auto* layout = checked_cast<PipelineLayoutImpl*>(pipeline->m_layout.get());
-    auto& arena = m_commandBuffer->m_allocator;
-    auto* bindingData = arena.allocate<BindingDataImpl>();
-    *bindingData = {};
-
-    uint32_t rootParameterCount = layout->m_constantsRootParameterIndex != kInvalidRootParameterIndex ? 1 : 0;
-    for (const PipelineLayoutImpl::SetInfo& setInfo : layout->m_sets)
-    {
-        if (setInfo.resourceRootParameterIndex != kInvalidRootParameterIndex)
-            ++rootParameterCount;
-        if (setInfo.samplerRootParameterIndex != kInvalidRootParameterIndex)
-            ++rootParameterCount;
-    }
-    if (rootParameterCount)
-        bindingData->rootParameters = arena.allocate<BindingDataImpl::RootParameter>(rootParameterCount);
-
-    if (layout->m_constantsRootParameterIndex != kInvalidRootParameterIndex)
-    {
-        TransientBufferArena::Allocation allocation;
-        SLANG_RETURN_ON_FAIL(m_commandBuffer->m_constantBufferArena.allocate(bindings.constantsSize, &allocation));
-        // Copy the bytes because the caller may overwrite its constants immediately after the bind.
-        std::memcpy(allocation.mappedData, bindings.constants, bindings.constantsSize);
-        auto& rootParameter = bindingData->rootParameters[bindingData->rootParameterCount++];
-        rootParameter.type = BindingDataImpl::RootParameter::CBV;
-        rootParameter.index = layout->m_constantsRootParameterIndex;
-        rootParameter.bufferLocation =
-            checked_cast<BufferImpl*>(allocation.buffer)->getDeviceAddress() + allocation.offset;
-    }
-
-    for (uint32_t i = 0; i < bindings.setCount; ++i)
-    {
-        auto* set = checked_cast<BindingSetImpl*>(bindings.sets[i]);
-        auto* setLayout = set->getLayoutImpl();
-        m_commandBuffer->m_trackedObjects.insert(set);
-        const PipelineLayoutImpl::SetInfo& setInfo = layout->m_sets[i];
-        if (setInfo.resourceRootParameterIndex != kInvalidRootParameterIndex)
-        {
-            GPUDescriptorRange range = m_commandBuffer->m_cbvSrvUavArena.allocate(setLayout->m_resourceCount);
-            if (!range.isValid())
-            {
-                device->printError(
-                    "Flat binding: no room for the %u resource descriptors of binding set %u.",
-                    setLayout->m_resourceCount,
-                    i
-                );
-                return SLANG_E_OUT_OF_MEMORY;
-            }
-            device->m_device->CopyDescriptorsSimple(
-                setLayout->m_resourceCount,
-                range.getCpuHandle(0),
-                set->m_resources.firstCpuHandle,
-                D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV
-            );
-            auto& rootParameter = bindingData->rootParameters[bindingData->rootParameterCount++];
-            rootParameter.type = BindingDataImpl::RootParameter::DescriptorTable;
-            rootParameter.index = setInfo.resourceRootParameterIndex;
-            rootParameter.baseDescriptor = range.firstGpuHandle;
-        }
-        if (setInfo.samplerRootParameterIndex != kInvalidRootParameterIndex)
-        {
-            // Reuse an immutable set's sampler table so repeated binds do not exhaust the small GPU sampler heap.
-            GPUDescriptorRange range = m_commandBuffer->m_bindingCache.lookupFlatSamplers(set);
-            if (!range.isValid())
-            {
-                range = m_commandBuffer->m_samplerArena.allocate(setLayout->m_samplerCount);
-                if (!range.isValid())
-                {
-                    device->printError(
-                        "Flat binding: no room for the %u sampler descriptors of binding set %u.",
-                        setLayout->m_samplerCount,
-                        i
-                    );
-                    return SLANG_E_OUT_OF_MEMORY;
-                }
-                device->m_device->CopyDescriptorsSimple(
-                    setLayout->m_samplerCount,
-                    range.getCpuHandle(0),
-                    set->m_samplers.firstCpuHandle,
-                    D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER
-                );
-                m_commandBuffer->m_bindingCache.storeFlatSamplers(set, range);
-            }
-            auto& rootParameter = bindingData->rootParameters[bindingData->rootParameterCount++];
-            rootParameter.type = BindingDataImpl::RootParameter::DescriptorTable;
-            rootParameter.index = setInfo.samplerRootParameterIndex;
-            rootParameter.baseDescriptor = range.firstGpuHandle;
-        }
-    }
-
-    for (const ResourceAccess& access : accesses)
-    {
-        if (access.buffer)
-            ++bindingData->bufferStateCapacity;
-        else
-            ++bindingData->textureStateCapacity;
-    }
-    if (bindingData->bufferStateCapacity)
-        bindingData->bufferStates = arena.allocate<BindingDataImpl::BufferState>(bindingData->bufferStateCapacity);
-    if (bindingData->textureStateCapacity)
-        bindingData->textureStates = arena.allocate<BindingDataImpl::TextureState>(bindingData->textureStateCapacity);
-    for (const ResourceAccess& access : accesses)
-    {
-        if (access.buffer)
-        {
-            auto* buffer = checked_cast<BufferImpl*>(access.buffer);
-            bindingData->bufferStates[bindingData->bufferStateCount++] = {buffer, access.state};
-            m_commandBuffer->m_trackedObjects.insert(buffer);
-        }
-        else
-        {
-            auto* texture = checked_cast<TextureImpl*>(access.texture);
-            bindingData->textureStates[bindingData->textureStateCount++] = {
-                texture, access.subresourceRange, access.state
-            };
-            m_commandBuffer->m_trackedObjects.insert(texture);
-        }
-    }
-
-    outBindingData = bindingData;
-    return SLANG_OK;
-}
-
 Result CommandEncoderImpl::getBindingData(RootShaderObject* rootObject, BindingData*& outBindingData)
 {
     rootObject->trackResources(m_commandBuffer->m_trackedObjects);
@@ -2552,13 +2413,16 @@ Result CommandEncoderImpl::getBindingData(RootShaderObject* rootObject, BindingD
         checked_cast<RootShaderObjectLayoutImpl*>(specializedLayout),
         (BindingDataImpl*&)outBindingData
     ));
-    // Arena allocations do not run BindingData's default member initializers.
-    outBindingData->diagnoseStateTransitions = false;
     return SLANG_OK;
 }
 
 Result CommandEncoderImpl::finish(const CommandBufferDesc& desc, ICommandBuffer** outCommandBuffer)
 {
+    if (SLANG_FAILED(m_recordingResult))
+    {
+        *outCommandBuffer = nullptr;
+        return m_recordingResult;
+    }
     m_commandBuffer->setDesc(desc);
     // Set the d3d command list debug name only when THIS finish provides a non-null
     // label. The previous logic derived `hadLabel` from the command buffer's prior

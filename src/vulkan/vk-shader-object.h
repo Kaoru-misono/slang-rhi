@@ -18,6 +18,10 @@ struct BindingDataBuilder
     BindingDataImpl* m_bindingData;
     TransientBufferArena* m_constantBufferArena;
     DescriptorSetAllocator* m_descriptorSetAllocator;
+    uint32_t* m_allocatedDescriptorSetIndices;
+    uint32_t m_allocatedDescriptorSetCount;
+
+    void recordDescriptorSet(uint32_t setIndex, VkDescriptorSet set);
 
     // TODO remove
     std::span<const VkPushConstantRange> m_pushConstantRanges;
@@ -95,8 +99,7 @@ public:
         BufferImpl* buffer;
         ResourceState state;
     };
-    /// The range is stored alongside the texture because a flat bind declares its texture accesses
-    /// directly, with no texture view to read one from.
+    /// The exact subresource range whose state is required by this binding.
     struct TextureState
     {
         TextureImpl* texture;
@@ -155,7 +158,12 @@ struct BindingCache
         uint32_t subTreeVersion;
         ShaderObjectLayoutImpl* layout;
         VkDescriptorSet descriptorSets[kMaxDescriptorSetsPerEntry];
+        uint32_t descriptorSetOffsets[kMaxDescriptorSetsPerEntry];
         uint32_t descriptorSetCount;
+        BindingDataImpl::BufferState* bufferStates;
+        uint32_t bufferStateCount;
+        BindingDataImpl::TextureState* textureStates;
+        uint32_t textureStateCount;
     };
 
     Entry entries[kMaxEntries] = {};
@@ -177,7 +185,13 @@ struct BindingCache
         uint32_t subTreeVersion,
         ShaderObjectLayoutImpl* layout,
         VkDescriptorSet* sets,
-        uint32_t count
+        const uint32_t* indices,
+        uint32_t baseSet,
+        uint32_t count,
+        BindingDataImpl::BufferState* bufferStates,
+        uint32_t bufferStateCount,
+        BindingDataImpl::TextureState* textureStates,
+        uint32_t textureStateCount
     )
     {
         if (entryCount < kMaxEntries && count <= kMaxDescriptorSetsPerEntry)
@@ -187,8 +201,16 @@ struct BindingCache
             entry.subTreeVersion = subTreeVersion;
             entry.layout = layout;
             entry.descriptorSetCount = count;
+            // The state slices, like descriptor sets, live in this command buffer's arena.
+            entry.bufferStates = bufferStates;
+            entry.bufferStateCount = bufferStateCount;
+            entry.textureStates = textureStates;
+            entry.textureStateCount = textureStateCount;
             for (uint32_t i = 0; i < count; ++i)
-                entry.descriptorSets[i] = sets[i];
+            {
+                entry.descriptorSets[i] = sets[indices[i]];
+                entry.descriptorSetOffsets[i] = indices[i] - baseSet;
+            }
         }
     }
 

@@ -1,5 +1,4 @@
-// Ray tracing in the flat binding model: every resource lives in one ParameterBlock and the only
-// ordinary data is the push constant block, so the pipeline needs no shader object.
+// Shared ray-tracing oracle for ShaderObject snapshots and shader-table retention.
 
 [raypayload]
 struct RayPayload
@@ -12,6 +11,9 @@ struct Scene
     RaytracingAccelerationStructure tlas;
     RWTexture2D<float4> output;
 };
+#if defined(SCENE_SET)
+[[vk::binding(0, SCENE_SET)]]
+#endif
 ParameterBlock<Scene> scene;
 
 struct Params

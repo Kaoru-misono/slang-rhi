@@ -140,6 +140,13 @@ Result ShaderProgramImpl::createShaderModule(const ShaderModuleDesc& desc, ComPt
         module.bindlessDescriptorSet
     ));
     module.hasBindlessDescriptorSet = module.bindlessDescriptorSet != uint32_t(-1);
+    if (module.hasBindlessDescriptorSet &&
+        module.bindlessDescriptorSet != m_rootShaderObjectLayout->m_bindlessSetIndex)
+    {
+        device->printError("Compiled bindless descriptor set %u overlaps ordinary shader parameters.", module.bindlessDescriptorSet);
+        return SLANG_E_INVALID_ARG;
+    }
+
 
     VkShaderModuleCreateInfo moduleCreateInfo = {VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
     moduleCreateInfo.pCode = (uint32_t*)module.code->getBufferPointer();

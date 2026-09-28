@@ -9,63 +9,6 @@ namespace rhi::debug {
 
 namespace {
 
-Result validateFlatBindings(DebugContext* ctx, IPipelineLayout* layout, const FlatBindingDesc& bindings)
-{
-    if (!layout)
-    {
-        RHI_VALIDATION_ERROR("The pipeline was not created with a pipeline layout.");
-        return SLANG_E_INVALID_ARG;
-    }
-    if (bindings.setCount != layout->getSetCount())
-    {
-        RHI_VALIDATION_ERROR("'bindings.setCount' must match the pipeline layout set count.");
-        return SLANG_E_INVALID_ARG;
-    }
-    if (bindings.setCount && !bindings.sets)
-    {
-        RHI_VALIDATION_ERROR("'bindings.sets' must not be null when setCount is nonzero.");
-        return SLANG_E_INVALID_ARG;
-    }
-    for (uint32_t i = 0; i < bindings.setCount; ++i)
-    {
-        if (!bindings.sets[i])
-        {
-            RHI_VALIDATION_ERROR("'bindings.sets[i]' must not be null.");
-            return SLANG_E_INVALID_ARG;
-        }
-        if (bindings.sets[i]->getLayout() != layout->getDesc().sets[i].layout)
-        {
-            RHI_VALIDATION_ERROR("'bindings.sets[i]' layout must match the pipeline set layout.");
-            return SLANG_E_INVALID_ARG;
-        }
-    }
-    if (bindings.constantsSize != layout->getConstantsSize())
-    {
-        RHI_VALIDATION_ERROR("'bindings.constantsSize' must match the pipeline layout constants size.");
-        return SLANG_E_INVALID_ARG;
-    }
-    if (bindings.constantsSize && !bindings.constants)
-    {
-        RHI_VALIDATION_ERROR("'bindings.constants' must not be null when constantsSize is nonzero.");
-        return SLANG_E_INVALID_ARG;
-    }
-    if (bindings.accessCount && !bindings.accesses)
-    {
-        RHI_VALIDATION_ERROR("'bindings.accesses' must not be null when accessCount is nonzero.");
-        return SLANG_E_INVALID_ARG;
-    }
-    for (uint32_t i = 0; i < bindings.accessCount; ++i)
-    {
-        const ResourceAccess& access = bindings.accesses[i];
-        if ((access.buffer != nullptr) == (access.texture != nullptr))
-        {
-            RHI_VALIDATION_ERROR("'bindings.accesses[i]' must specify exactly one buffer or texture.");
-            return SLANG_E_INVALID_ARG;
-        }
-    }
-    return SLANG_OK;
-}
-
 bool isAccelerationStructureQueryType(QueryType queryType)
 {
     return queryType == QueryType::AccelerationStructureCompactedSize ||
@@ -118,24 +61,6 @@ DebugRenderPassEncoder::DebugRenderPassEncoder(DebugContext* ctx, DebugCommandEn
     : UnownedDebugObject<IRenderPassEncoder>(ctx)
     , m_commandEncoder(commandEncoder)
 {
-}
-
-Result DebugRenderPassEncoder::bindPipeline(IRenderPipeline* pipeline, const FlatBindingDesc& bindings)
-{
-    SLANG_RHI_DEBUG_API(IRenderPassEncoder, bindPipeline);
-
-    m_commandEncoder->requireOpen();
-    m_commandEncoder->requireRenderPass();
-
-    if (!pipeline)
-    {
-        RHI_VALIDATION_ERROR("'pipeline' must not be null.");
-        return SLANG_E_INVALID_ARG;
-    }
-    SLANG_RETURN_ON_FAIL(validateFlatBindings(ctx, pipeline->getDesc().layout, bindings));
-    Result result = baseObject->bindPipeline(pipeline, bindings);
-    m_pipelineBound = SLANG_SUCCEEDED(result);
-    return result;
 }
 
 IShaderObject* DebugRenderPassEncoder::bindPipeline(IRenderPipeline* pipeline)
@@ -427,24 +352,6 @@ DebugComputePassEncoder::DebugComputePassEncoder(DebugContext* ctx, DebugCommand
 {
 }
 
-Result DebugComputePassEncoder::bindPipeline(IComputePipeline* pipeline, const FlatBindingDesc& bindings)
-{
-    SLANG_RHI_DEBUG_API(IComputePassEncoder, bindPipeline);
-
-    m_commandEncoder->requireOpen();
-    m_commandEncoder->requireComputePass();
-
-    if (!pipeline)
-    {
-        RHI_VALIDATION_ERROR("'pipeline' must not be null.");
-        return SLANG_E_INVALID_ARG;
-    }
-    SLANG_RETURN_ON_FAIL(validateFlatBindings(ctx, pipeline->getDesc().layout, bindings));
-    Result result = baseObject->bindPipeline(pipeline, bindings);
-    m_pipelineBound = SLANG_SUCCEEDED(result);
-    return result;
-}
-
 IShaderObject* DebugComputePassEncoder::bindPipeline(IComputePipeline* pipeline)
 {
     SLANG_RHI_DEBUG_API(IComputePassEncoder, bindPipeline);
@@ -595,33 +502,6 @@ DebugRayTracingPassEncoder::DebugRayTracingPassEncoder(DebugContext* ctx, DebugC
     : UnownedDebugObject<IRayTracingPassEncoder>(ctx)
     , m_commandEncoder(commandEncoder)
 {
-}
-
-Result DebugRayTracingPassEncoder::bindPipeline(
-    IRayTracingPipeline* pipeline,
-    IShaderTable* shaderTable,
-    const FlatBindingDesc& bindings
-)
-{
-    SLANG_RHI_DEBUG_API(IRayTracingPassEncoder, bindPipeline);
-
-    m_commandEncoder->requireOpen();
-    m_commandEncoder->requireRayTracingPass();
-
-    if (!pipeline)
-    {
-        RHI_VALIDATION_ERROR("'pipeline' must not be null.");
-        return SLANG_E_INVALID_ARG;
-    }
-    if (!shaderTable)
-    {
-        RHI_VALIDATION_ERROR("'shaderTable' must not be null.");
-        return SLANG_E_INVALID_ARG;
-    }
-    SLANG_RETURN_ON_FAIL(validateFlatBindings(ctx, pipeline->getDesc().layout, bindings));
-    Result result = baseObject->bindPipeline(pipeline, shaderTable, bindings);
-    m_pipelineBound = SLANG_SUCCEEDED(result);
-    return result;
 }
 
 IShaderObject* DebugRayTracingPassEncoder::bindPipeline(IRayTracingPipeline* pipeline, IShaderTable* shaderTable)

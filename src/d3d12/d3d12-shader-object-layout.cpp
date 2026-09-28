@@ -739,6 +739,10 @@ void RootShaderObjectLayoutImpl::RootSignatureDescBuilder::addAsValue(
             BindingRegisterOffset elementOffset = subObjectRangeElementOffset;
             elementOffset += BindingRegisterOffset(elementVarLayout);
 
+            auto* reflectedOffset = typeLayout->getSubObjectRangeOffset(subObjectRangeIndex);
+            // Register-class spaces are independent of ParameterBlock space offsets.
+            elementOffset.spaceOffset +=
+                (UINT)reflectedOffset->getBindingSpace(SLANG_PARAMETER_CATEGORY_CONSTANT_BUFFER);
             addAsConstantBuffer(elementTypeLayout, physicalDescriptorSetIndex, containerOffset, elementOffset);
             break;
         }

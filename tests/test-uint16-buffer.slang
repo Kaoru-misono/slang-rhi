@@ -2,7 +2,7 @@
 
 // This is to verify that the slang-rhi can set correct buffer strides for structured buffer bindings.
 
-#if defined(UINT16_FLAT)
+#if defined(UINT16_PARAMETER_BLOCK)
 struct Resources
 {
     RWStructuredBuffer<uint16_t> buffer;

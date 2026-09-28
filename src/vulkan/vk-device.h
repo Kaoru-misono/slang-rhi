@@ -2,7 +2,6 @@
 
 #include "vk-base.h"
 #include "vk-bindless-descriptor-set.h"
-#include "vk-binding-set.h"
 #include "vk-memory-allocator.h"
 
 #include <string>
@@ -50,7 +49,6 @@ public:
     );
 
     Result initialize(const DeviceDesc& desc, BackendImpl* backend);
-    virtual uint32_t getInlineConstantsSizeLimit() const override;
     virtual SLANG_NO_THROW Result SLANG_MCALL createSurface(WindowHandle windowHandle, ISurface** outSurface) override;
     virtual SLANG_NO_THROW Result SLANG_MCALL createTexture(
         const TextureDesc& desc,
@@ -83,12 +81,6 @@ public:
 
     virtual SLANG_NO_THROW Result SLANG_MCALL createSampler(const SamplerDesc& desc, ISampler** outSampler) override;
 
-    virtual Result createBindingSetLayoutImpl(
-        const BindingSetLayoutDesc& desc,
-        RefPtr<BindingSetLayout>& outLayout
-    ) override;
-    virtual Result createBindingSetImpl(BindingSetLayout* layout, RefPtr<BindingSet>& outBindingSet) override;
-    virtual Result createPipelineLayoutImpl(const PipelineLayoutDesc& desc, RefPtr<PipelineLayout>& outLayout) override;
 
     virtual SLANG_NO_THROW Result SLANG_MCALL createTextureView(
         ITexture* texture,
@@ -318,7 +310,6 @@ public:
     RefPtr<CommandQueueImpl> m_transferQueue;
 
     DescriptorSetAllocator descriptorSetAllocator;
-    BindingSetDescriptorPool m_bindingSetDescriptorPool;
     RefPtr<BindlessDescriptorSet> m_bindlessDescriptorSet;
 
     VulkanMemoryAllocator m_memoryAllocator;

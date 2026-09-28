@@ -1,5 +1,4 @@
 #include "vk-command.h"
-#include "vk-binding-set.h"
 #include "vk-device.h"
 #include "vk-buffer.h"
 #include "vk-texture.h"
@@ -1956,16 +1955,24 @@ void CommandRecorder::setBindings(BindingDataImpl* bindingData, VkPipelineBindPo
         );
     }
 
-    // Bind descriptor sets.
-    if (bindingData->descriptorSetCount)
+    // Empty pipeline-layout slots reserve native indices but need no descriptor sets.
+    uint32_t setIndex = 0;
+    while (setIndex < bindingData->descriptorSetCount)
     {
+        while (setIndex < bindingData->descriptorSetCount && bindingData->descriptorSets[setIndex] == VK_NULL_HANDLE)
+            ++setIndex;
+        uint32_t firstSet = setIndex;
+        while (setIndex < bindingData->descriptorSetCount && bindingData->descriptorSets[setIndex] != VK_NULL_HANDLE)
+            ++setIndex;
+        if (firstSet == setIndex)
+            break;
         m_api.vkCmdBindDescriptorSets(
             m_cmdBuffer,
             bindPoint,
             bindingData->pipelineLayout,
-            0,
-            bindingData->descriptorSetCount,
-            bindingData->descriptorSets,
+            firstSet,
+            setIndex - firstSet,
+            bindingData->descriptorSets + firstSet,
             0,
             nullptr
         );
@@ -1977,24 +1984,16 @@ void CommandRecorder::requireBindingStates(BindingDataImpl* bindingData)
     for (uint32_t i = 0; i < bindingData->bufferStateCount; ++i)
     {
         const auto& bufferState = bindingData->bufferStates[i];
-        const bool changed = m_stateTracking.requireBufferState(
+        m_stateTracking.requireBufferState(
             bufferState.buffer, bufferState.state, getBufferReadStatePolicy(m_queueType)
         );
-        if (changed && bindingData->diagnoseStateTransitions)
-        {
-            reportFlatBindingTransition(m_device, bufferState.buffer, bufferState.state);
-        }
     }
     for (uint32_t i = 0; i < bindingData->textureStateCount; ++i)
     {
         const auto& textureState = bindingData->textureStates[i];
-        const bool changed = m_stateTracking.setTextureState(
+        m_stateTracking.setTextureState(
             textureState.texture, textureState.subresourceRange, textureState.state
         );
-        if (changed && bindingData->diagnoseStateTransitions)
-        {
-            reportFlatBindingTransition(m_device, textureState.texture, textureState.subresourceRange, textureState.state);
-        }
     }
 }
 
@@ -2592,114 +2591,6 @@ Result CommandEncoderImpl::init()
     return SLANG_OK;
 }
 
-Result CommandEncoderImpl::getFlatBindingData(
-    Pipeline* pipeline,
-    const FlatBindingDesc& bindings,
-    std::span<const ResourceAccess> accesses,
-    BindingData*& outBindingData
-)
-{
-    auto* device = getDevice<DeviceImpl>();
-    auto* layout = checked_cast<PipelineLayoutImpl*>(pipeline->m_layout.get());
-    auto& arena = m_commandBuffer->m_allocator;
-    auto* data = arena.allocate<BindingDataImpl>();
-    *data = {};
-    data->pipelineLayout = layout->m_pipelineLayout;
-
-    data->descriptorSetCount = layout->m_descriptorSetCount;
-    if (data->descriptorSetCount)
-    {
-        data->descriptorSets = arena.allocate<VkDescriptorSet>(data->descriptorSetCount);
-        for (uint32_t i = 0; i < data->descriptorSetCount; ++i)
-            data->descriptorSets[i] = VK_NULL_HANDLE;
-    }
-    for (uint32_t i = 0; i < bindings.setCount; ++i)
-    {
-        auto* set = checked_cast<BindingSetImpl*>(bindings.sets[i]);
-        data->descriptorSets[layout->m_setIndices[i]] = set->m_descriptorSet;
-        m_commandBuffer->m_trackedObjects.insert(set);
-    }
-
-    switch (layout->getConstantsProfile())
-    {
-    case ConstantsProfile::None:
-        break;
-    case ConstantsProfile::Inline:
-        data->pushConstantCount = 1;
-        data->pushConstantRanges = arena.allocate<VkPushConstantRange>();
-        data->pushConstantRanges[0] = {VK_SHADER_STAGE_ALL, 0, layout->getConstantsSize()};
-        data->pushConstantData = arena.allocate<void*>();
-        data->pushConstantData[0] = arena.allocate(bindings.constantsSize);
-        std::memcpy(data->pushConstantData[0], bindings.constants, bindings.constantsSize);
-        break;
-    case ConstantsProfile::Buffered:
-    {
-        TransientBufferArena::Allocation allocation;
-        SLANG_RETURN_ON_FAIL(m_commandBuffer->m_constantBufferArena.allocate(bindings.constantsSize, &allocation));
-        std::memcpy(allocation.mappedData, bindings.constants, bindings.constantsSize);
-        VulkanDescriptorSet descriptorSet;
-        SLANG_RETURN_ON_FAIL(m_commandBuffer->m_descriptorSetAllocator.allocate(
-            layout->m_constantsSetLayout, &descriptorSet
-        ));
-
-        VkDescriptorBufferInfo bufferInfo = {};
-        bufferInfo.buffer = checked_cast<BufferImpl*>(allocation.buffer)->m_buffer.m_buffer;
-        bufferInfo.offset = allocation.offset;
-        bufferInfo.range = bindings.constantsSize;
-        VkWriteDescriptorSet write = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
-        write.dstSet = descriptorSet.handle;
-        write.dstBinding = layout->m_constantsBinding;
-        write.descriptorCount = 1;
-        write.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-        write.pBufferInfo = &bufferInfo;
-        device->m_api.vkUpdateDescriptorSets(device->m_api.m_device, 1, &write, 0, nullptr);
-        data->descriptorSets[layout->m_constantsSetIndex] = descriptorSet.handle;
-        break;
-    }
-    }
-
-    if (layout->m_bindlessSetIndex != kInvalidDescriptorSetIndex)
-        data->descriptorSets[layout->m_bindlessSetIndex] = device->m_bindlessDescriptorSet->m_descriptorSet;
-    // Every set is rebound on every bind, so the indices no parameter occupies still need a set.
-    for (uint32_t i = 0; i < data->descriptorSetCount; ++i)
-    {
-        if (data->descriptorSets[i] == VK_NULL_HANDLE)
-        {
-            VulkanDescriptorSet descriptorSet;
-            SLANG_RETURN_ON_FAIL(m_commandBuffer->m_descriptorSetAllocator.allocate(
-                layout->m_emptySetLayout, &descriptorSet
-            ));
-            data->descriptorSets[i] = descriptorSet.handle;
-        }
-    }
-
-    // `accesses` is scratch storage the next bind overwrites, so the states have to be copied.
-    data->bufferStateCapacity = data->textureStateCapacity = uint32_t(accesses.size());
-    if (!accesses.empty())
-    {
-        data->bufferStates = arena.allocate<BindingDataImpl::BufferState>(accesses.size());
-        data->textureStates = arena.allocate<BindingDataImpl::TextureState>(accesses.size());
-    }
-    for (const auto& access : accesses)
-    {
-        if (access.buffer)
-        {
-            auto* buffer = checked_cast<BufferImpl*>(access.buffer);
-            data->bufferStates[data->bufferStateCount++] = {buffer, access.state};
-            m_commandBuffer->m_trackedObjects.insert(buffer);
-        }
-        else
-        {
-            auto* texture = checked_cast<TextureImpl*>(access.texture);
-            data->textureStates[data->textureStateCount++] = {texture, access.subresourceRange, access.state};
-            m_commandBuffer->m_trackedObjects.insert(texture);
-        }
-    }
-
-    outBindingData = data;
-    return SLANG_OK;
-}
-
 Result CommandEncoderImpl::getBindingData(RootShaderObject* rootObject, BindingData*& outBindingData)
 {
     rootObject->trackResources(m_commandBuffer->m_trackedObjects);
@@ -2716,13 +2607,16 @@ Result CommandEncoderImpl::getBindingData(RootShaderObject* rootObject, BindingD
         checked_cast<RootShaderObjectLayoutImpl*>(specializedLayout),
         (BindingDataImpl*&)outBindingData
     ));
-    // Arena allocations do not run BindingData's default member initializers.
-    outBindingData->diagnoseStateTransitions = false;
     return SLANG_OK;
 }
 
 Result CommandEncoderImpl::finish(const CommandBufferDesc& desc, ICommandBuffer** outCommandBuffer)
 {
+    if (SLANG_FAILED(m_recordingResult))
+    {
+        *outCommandBuffer = nullptr;
+        return m_recordingResult;
+    }
     DeviceImpl* device = getDevice<DeviceImpl>();
     bool hadLabel = m_commandBuffer->m_desc.label != nullptr;
     m_commandBuffer->setDesc(desc);

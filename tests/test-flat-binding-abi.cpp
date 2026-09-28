@@ -149,25 +149,7 @@ auto checkReflection(
     CHECK(output->getTypeLayout()->getElementTypeLayout()->getSize() == sizeof(float) * 4);
 }
 
-auto createAbiPipelineLayout(
-    IDevice* device,
-    IShaderProgram* program,
-    IBindingSetLayout* setLayout,
-    bool inlineConstants
-) -> ComPtr<IPipelineLayout>
-{
-    const PipelineLayoutSetDesc sets[] = {{"resources", setLayout}};
-    const PipelineLayoutDesc desc{program, sets, 1, sizeof(Params)};
-    ComPtr<IPipelineLayout> layout;
-    REQUIRE_CALL(device->createPipelineLayout(desc, layout.writeRef()));
-    REQUIRE(layout != nullptr);
-    CHECK(layout->getConstantsSize() == sizeof(Params));
-    CHECK(layout->getConstantsProfile() == (inlineConstants ? ConstantsProfile::Inline : ConstantsProfile::Buffered));
-    CHECK(layout->getSetCount() == 1);
-    return layout;
-}
-
-// Exercise the same literal ABI oracle through flat compute and graphics bindings.
+// Exercise the same literal ABI oracle through parameter-block compute and graphics bindings.
 auto runBaseline(IDevice* device, bool inlineConstants, bool nonzeroRegister = false) -> void
 {
     auto session = createSession(device, inlineConstants, nonzeroRegister);
@@ -189,11 +171,6 @@ auto runBaseline(IDevice* device, bool inlineConstants, bool nonzeroRegister = f
     auto output = device->createBuffer(outputDesc);
     REQUIRE(output != nullptr);
     auto queue = device->getQueue(QueueType::Graphics);
-    const BindingSetLayoutEntry outputEntry{BindingKind::RWStructuredBuffer, 1, "output"};
-    const BindingSetLayoutDesc setLayoutDesc{&outputEntry, 1};
-    ComPtr<IBindingSetLayout> setLayout;
-    REQUIRE_CALL(device->createBindingSetLayout(setLayoutDesc, setLayout.writeRef()));
-
     ComPtr<IShaderProgram> computeProgram;
     slang::ProgramLayout* computeReflection = nullptr;
     REQUIRE_CALL(loadAndLinkProgram(
@@ -205,27 +182,17 @@ auto runBaseline(IDevice* device, bool inlineConstants, bool nonzeroRegister = f
         &computeReflection
     ));
     checkReflection(computeReflection, device->getDeviceType(), inlineConstants, false, nonzeroRegister);
-    auto computeLayout = createAbiPipelineLayout(device, computeProgram, setLayout, inlineConstants);
-    const BindingSetEntry outputBinding{.slot = 0, .resource = output};
-    const BindingSetDesc setDesc{.layout = setLayout, .entries = &outputBinding, .entryCount = 1};
-    ComPtr<IBindingSet> set;
-    REQUIRE_CALL(device->createBindingSet(setDesc, set.writeRef()));
-    IBindingSet* sets[] = {set};
-    const FlatBindingDesc bindings{
-        .constants = &params,
-        .constantsSize = sizeof(params),
-        .sets = sets,
-        .setCount = 1,
-    };
     ComputePipelineDesc computeDesc{};
     computeDesc.program = computeProgram;
-    computeDesc.layout = computeLayout;
     auto computePipeline = device->createComputePipeline(computeDesc);
     REQUIRE(computePipeline != nullptr);
     {
         auto encoder = queue->createCommandEncoder();
         auto pass = encoder->beginComputePass();
-        REQUIRE_CALL(pass->bindPipeline(computePipeline, bindings));
+        auto root = pass->bindPipeline(computePipeline);
+        REQUIRE(root != nullptr);
+        REQUIRE_CALL(ShaderCursor(root)["parameters"].getDereferenced().setData(&params, sizeof(params)));
+        REQUIRE_CALL(ShaderCursor(root)["resources"]["output"].setBinding(output));
         pass->dispatchCompute(2, 1, 1);
         pass->end();
         auto commands = encoder->finish();
@@ -246,12 +213,10 @@ auto runBaseline(IDevice* device, bool inlineConstants, bool nonzeroRegister = f
         &renderReflection
     ));
     checkReflection(renderReflection, device->getDeviceType(), inlineConstants, true, nonzeroRegister);
-    auto renderLayout = createAbiPipelineLayout(device, renderProgram, setLayout, inlineConstants);
     ColorTargetDesc target{};
     target.format = Format::RGBA32Float;
     RenderPipelineDesc renderDesc{};
     renderDesc.program = renderProgram;
-    renderDesc.layout = renderLayout;
     renderDesc.targets = &target;
     renderDesc.targetCount = 1;
     renderDesc.depthStencil.depthTestEnable = false;
@@ -279,7 +244,10 @@ auto runBaseline(IDevice* device, bool inlineConstants, bool nonzeroRegister = f
         passDesc.colorAttachments = &attachment;
         passDesc.colorAttachmentCount = 1;
         auto pass = encoder->beginRenderPass(passDesc);
-        REQUIRE_CALL(pass->bindPipeline(renderPipeline, bindings));
+        auto root = pass->bindPipeline(renderPipeline);
+        REQUIRE(root != nullptr);
+        REQUIRE_CALL(ShaderCursor(root)["parameters"].getDereferenced().setData(&params, sizeof(params)));
+        REQUIRE_CALL(ShaderCursor(root)["resources"]["output"].setBinding(output));
         RenderState state{};
         state.viewports[0] = Viewport::fromSize(2, 2);
         state.viewportCount = 1;
@@ -521,27 +489,27 @@ auto runBaseline(IDevice* device, bool inlineConstants) -> void
 } // namespace legacy
 } // namespace
 
-GPU_TEST_CASE("flat-binding-abi-global-buffered-flat", D3D12 | Vulkan)
+GPU_TEST_CASE("shader-object-abi-parameter-block-buffered", D3D12 | Vulkan)
 {
     runBaseline(device, false);
 }
 
-GPU_TEST_CASE("flat-binding-abi-global-inline-flat", Vulkan)
+GPU_TEST_CASE("shader-object-abi-parameter-block-inline", Vulkan)
 {
     runBaseline(device, true);
 }
 
-GPU_TEST_CASE("flat-binding-abi-global-buffered-nonzero-register-space", D3D12)
+GPU_TEST_CASE("shader-object-abi-global-buffered-nonzero-register-space", D3D12 | Vulkan)
 {
     runBaseline(device, false, true);
 }
 
-GPU_TEST_CASE("flat-binding-abi-global-buffered", D3D12 | Vulkan)
+GPU_TEST_CASE("shader-object-binding-abi-global-buffered", D3D12 | Vulkan)
 {
     legacy::runBaseline(device, false);
 }
 
-GPU_TEST_CASE("flat-binding-abi-global-inline", Vulkan)
+GPU_TEST_CASE("shader-object-binding-abi-global-inline", Vulkan)
 {
     legacy::runBaseline(device, true);
 }

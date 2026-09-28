@@ -28,7 +28,6 @@ Result DebugCommandQueue::createCommandEncoder(const CommandEncoderDesc& desc, I
     RefPtr<DebugCommandEncoder> encoder = new DebugCommandEncoder(ctx);
     encoder->m_queueType = baseObject->getType();
     SLANG_RETURN_ON_FAIL(baseObject->createCommandEncoder(desc, encoder->baseObject.writeRef()));
-    checked_cast<CommandEncoder*>(encoder->baseObject.get())->m_diagnoseFlatBindingTransitions = true;
 
     returnComPtr(outEncoder, encoder);
     return SLANG_OK;

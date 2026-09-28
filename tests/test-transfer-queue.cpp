@@ -87,7 +87,7 @@ GPU_TEST_CASE("transfer-queue-copy", D3D12 | Vulkan)
 }
 
 // Test using all three queues simultaneously.
-static void runTransferQueueAllQueues(IDevice* device, trivialCompute::BindingModel model)
+static void runTransferQueueAllQueues(IDevice* device)
 {
     auto graphicsQueue = device->getQueue(QueueType::Graphics);
     auto computeQueue = device->getQueue(QueueType::Compute);
@@ -96,7 +96,7 @@ static void runTransferQueueAllQueues(IDevice* device, trivialCompute::BindingMo
     REQUIRE(computeQueue != nullptr);
     REQUIRE(transferQueue != nullptr);
 
-    auto pipeline = trivialCompute::createPipeline(device, model);
+    auto pipeline = trivialCompute::createPipeline(device);
 
     const int numberCount = 4;
     float initialDataA[] = {0.0f, 1.0f, 2.0f, 3.0f};
@@ -198,12 +198,7 @@ static void runTransferQueueAllQueues(IDevice* device, trivialCompute::BindingMo
 
 GPU_TEST_CASE("transfer-queue-all-queues", D3D12 | Vulkan)
 {
-    runTransferQueueAllQueues(device, trivialCompute::BindingModel::Legacy);
-}
-
-GPU_TEST_CASE("transfer-queue-all-queues-flat", D3D12 | Vulkan)
-{
-    runTransferQueueAllQueues(device, trivialCompute::BindingModel::Flat);
+    runTransferQueueAllQueues(device);
 }
 
 // Test queue family ownership transfer workflow.
@@ -355,7 +350,7 @@ GPU_TEST_CASE("concurrent-resources-initial-data-three-queues", D3D12 | Vulkan)
     }
 
     // A non-default texture read layout must finish before a copy on another queue.
-    auto pipeline = trivialCompute::createPipeline(device, trivialCompute::BindingModel::Flat, "readTexture");
+    auto pipeline = trivialCompute::createPipeline(device, "readTexture");
     BufferDesc resultDesc = {};
     resultDesc.size = sizeof(float);
     resultDesc.elementSize = sizeof(float);
@@ -418,7 +413,7 @@ GPU_TEST_CASE("shader-resource-texture-default-compute-roundtrip", D3D12)
     }
     syncQueues(device, graphicsQueue, computeQueue);
 
-    auto pipeline = trivialCompute::createPipeline(device, trivialCompute::BindingModel::Flat, "writeTexture");
+    auto pipeline = trivialCompute::createPipeline(device, "writeTexture");
     {
         auto encoder = computeQueue->createCommandEncoder();
         REQUIRE(encoder);

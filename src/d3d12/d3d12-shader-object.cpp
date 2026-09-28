@@ -157,6 +157,7 @@ Result BindingDataBuilder::bindAsRoot(
     }
 #endif
 
+    SLANG_RETURN_ON_FAIL(finishSamplerTable(descriptorSet, specializedLayout));
     outBindingData = bindingData;
 
     return SLANG_OK;
@@ -205,32 +206,46 @@ Result BindingDataBuilder::allocateDescriptorSets(
     }
     if (auto descriptorCount = specializedLayout->getTotalSamplerDescriptorCount())
     {
-        // Check the sampler cache first to avoid exhausting the 2048-descriptor GPU sampler heap.
-        // Sampler bindings don't change between draw calls (only uniform data changes via setData),
-        // so we can safely reuse the same sampler descriptor range.
-        GPUDescriptorRange allocation = m_bindingCache->lookupSamplers(shaderObject->m_uid, specializedLayout);
-        if (!allocation.isValid())
-        {
-            allocation = m_samplerArena->allocate(descriptorCount);
-            if (!allocation.isValid())
-            {
-                auto* typeLayout = specializedLayout->getElementTypeLayout();
-                auto const* typeName = typeLayout ? typeLayout->getName() : nullptr;
-                m_device->printError(
-                    "D3D12 sampler descriptor allocation failed (count=%u, type=%s).",
-                    descriptorCount,
-                    typeName ? typeName : "<unknown>"
-                );
-                return SLANG_E_OUT_OF_MEMORY;
-            }
-            m_bindingCache->storeSamplers(shaderObject->m_uid, specializedLayout, allocation);
-        }
+        outDescriptorSet.samplerCount = descriptorCount;
+        outDescriptorSet.samplerDescriptors = m_allocator->allocate<D3D12_CPU_DESCRIPTOR_HANDLE>(descriptorCount);
+        for (uint32_t i = 0; i < descriptorCount; ++i)
+            outDescriptorSet.samplerDescriptors[i] = m_device->getNullSamplerDescriptor();
         SLANG_RHI_ASSERT(rootParamIndex < m_bindingData->rootParameterCount);
-        m_bindingData->rootParameters[rootParamIndex++] =
-            createRootDescriptorTable(rootParamIndex, allocation.firstGpuHandle);
-        outDescriptorSet.samplers = allocation;
+        outDescriptorSet.samplerRootParameter = rootParamIndex++;
     }
 
+    return SLANG_OK;
+}
+
+Result BindingDataBuilder::finishSamplerTable(const DescriptorSet& descriptorSet, ShaderObjectLayoutImpl* layout)
+{
+    uint32_t count = descriptorSet.samplerCount;
+    if (!count)
+        return SLANG_OK;
+    const auto* descriptors = descriptorSet.samplerDescriptors;
+    size_t hash = BindingCache::hashSamplers(descriptors, count);
+    GPUDescriptorRange allocation = m_bindingCache->lookupSamplers(layout, descriptors, count, hash);
+    if (!allocation.isValid())
+    {
+        allocation = m_samplerArena->allocate(count);
+        if (!allocation.isValid())
+        {
+            auto* typeLayout = layout->getElementTypeLayout();
+            m_device->printError(
+                "D3D12 sampler descriptor allocation failed (count=%u, type=%s).",
+                count,
+                typeLayout && typeLayout->getName() ? typeLayout->getName() : "<unknown>"
+            );
+            return SLANG_E_OUT_OF_MEMORY;
+        }
+        for (uint32_t i = 0; i < count; ++i)
+            m_device->m_device->CopyDescriptorsSimple(
+                1, allocation.getCpuHandle(i), descriptors[i], D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER
+            );
+        m_bindingCache->storeSamplers(layout, descriptors, count, hash, allocation);
+    }
+    uint32_t index = descriptorSet.samplerRootParameter;
+    m_bindingData->rootParameters[index] = createRootDescriptorTable(index, allocation.firstGpuHandle);
     return SLANG_OK;
 }
 
@@ -286,7 +301,7 @@ Result BindingDataBuilder::bindAsParameterBlock(
         bindAsConstantBuffer(shaderObject, descriptorSet, subOffset, rootParamIndex, specializedLayout)
     );
 
-    return SLANG_OK;
+    return finishSamplerTable(descriptorSet, specializedLayout);
 }
 
 Result BindingDataBuilder::bindAsValue(
@@ -376,7 +391,7 @@ Result BindingDataBuilder::bindAsValue(
                     textureDescriptor,
                     D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV
                 );
-                SLANG_RHI_ASSERT(samplerIndex + i < descriptorSet.samplers.count);
+                SLANG_RHI_ASSERT(samplerIndex + i < descriptorSet.samplerCount);
                 D3D12_CPU_DESCRIPTOR_HANDLE samplerDescriptor = {};
                 if (sampler)
                 {
@@ -386,12 +401,7 @@ Result BindingDataBuilder::bindAsValue(
                 {
                     samplerDescriptor = m_device->getNullSamplerDescriptor();
                 }
-                d3dDevice->CopyDescriptorsSimple(
-                    1,
-                    descriptorSet.samplers.getCpuHandle(samplerIndex + i),
-                    samplerDescriptor,
-                    D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER
-                );
+                descriptorSet.samplerDescriptors[samplerIndex + i] = samplerDescriptor;
             }
             break;
         }
@@ -402,7 +412,7 @@ Result BindingDataBuilder::bindAsValue(
             {
                 const ResourceSlot& slot = shaderObject->m_slots[slotIndex + i];
                 SamplerImpl* sampler = checked_cast<SamplerImpl*>(slot.resource.get());
-                SLANG_RHI_ASSERT(samplerIndex + i < descriptorSet.samplers.count);
+                SLANG_RHI_ASSERT(samplerIndex + i < descriptorSet.samplerCount);
                 D3D12_CPU_DESCRIPTOR_HANDLE descriptor = {};
                 if (sampler)
                 {
@@ -412,12 +422,7 @@ Result BindingDataBuilder::bindAsValue(
                 {
                     descriptor = m_device->getNullSamplerDescriptor();
                 }
-                d3dDevice->CopyDescriptorsSimple(
-                    1,
-                    descriptorSet.samplers.getCpuHandle(samplerIndex + i),
-                    descriptor,
-                    D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER
-                );
+                descriptorSet.samplerDescriptors[samplerIndex + i] = descriptor;
             }
             break;
         }

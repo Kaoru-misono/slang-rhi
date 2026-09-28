@@ -24,16 +24,9 @@ namespace rhi {
 
 struct BindingData
 {
-    // Enabled only by the debug wrapper, and only for formal flat bindings.
-    bool diagnoseStateTransitions = false;
 };
 
-void reportFlatBindingTransition(Device* device, Buffer* buffer, ResourceState state);
-void reportFlatBindingTransition(Device* device, Texture* texture, SubresourceRange range, ResourceState state);
 
-/// Upper bound on the inline constant block a pipeline can be bound with, matching the smallest
-/// push-constant budget the supported backends guarantee.
-constexpr size_t kMaxInlineConstantsSize = 128;
 
 class CommandQueue : public ICommandQueue, public DeviceChild
 {
@@ -114,7 +107,6 @@ public:
     CommandEncoder* m_commandEncoder;
     ComPtr<IRenderPipeline> m_pipeline;
     RefPtr<RootShaderObject> m_rootObject;
-    BindingData* m_fixedBindingData = nullptr;
     RenderState m_renderState;
     /// Command list, nullptr if pass encoder is not active.
     CommandList* m_commandList = nullptr;
@@ -125,10 +117,6 @@ public:
 
     // IRenderPassEncoder implementation
     virtual SLANG_NO_THROW IShaderObject* SLANG_MCALL bindPipeline(IRenderPipeline* pipeline) override;
-    virtual SLANG_NO_THROW Result SLANG_MCALL bindPipeline(
-        IRenderPipeline* pipeline,
-        const FlatBindingDesc& bindings
-    ) override;
     virtual SLANG_NO_THROW void SLANG_MCALL bindPipeline(IRenderPipeline* pipeline, IShaderObject* rootObject) override;
     virtual SLANG_NO_THROW void SLANG_MCALL setRenderState(const RenderState& state) override;
     virtual SLANG_NO_THROW void SLANG_MCALL draw(const DrawArguments& args) override;
@@ -172,16 +160,11 @@ public:
 
     ComputePassEncoder(CommandEncoder* commandEncoder);
 
-    BindingData* m_fixedBindingData = nullptr;
 
     bool writeComputeState();
 
     // IComputePassEncoder implementation
     virtual SLANG_NO_THROW IShaderObject* SLANG_MCALL bindPipeline(IComputePipeline* pipeline) override;
-    virtual SLANG_NO_THROW Result SLANG_MCALL bindPipeline(
-        IComputePipeline* pipeline,
-        const FlatBindingDesc& bindings
-    ) override;
     virtual SLANG_NO_THROW void SLANG_MCALL bindPipeline(
         IComputePipeline* pipeline,
         IShaderObject* rootObject
@@ -212,7 +195,6 @@ public:
     ComPtr<IRayTracingPipeline> m_pipeline;
     ComPtr<IShaderTable> m_shaderTable;
     RefPtr<RootShaderObject> m_rootObject;
-    BindingData* m_fixedBindingData = nullptr;
     /// Command list, nullptr if pass encoder is not active.
     CommandList* m_commandList;
 
@@ -229,11 +211,6 @@ public:
         IRayTracingPipeline* pipeline,
         IShaderTable* shaderTable,
         IShaderObject* rootObject
-    ) override;
-    virtual SLANG_NO_THROW Result SLANG_MCALL bindPipeline(
-        IRayTracingPipeline* pipeline,
-        IShaderTable* shaderTable,
-        const FlatBindingDesc& bindings
     ) override;
     virtual SLANG_NO_THROW void SLANG_MCALL dispatchRays(
         uint32_t rayGenShaderIndex,
@@ -261,15 +238,11 @@ public:
 public:
     CommandEncoderDesc m_desc;
     StructHolder m_descHolder;
-    bool m_diagnoseFlatBindingTransitions = false;
+    Result m_recordingResult = SLANG_OK;
 
     // Current command list to write to. Must be set by the derived class.
     CommandList* m_commandList = nullptr;
 
-    /// Scratch list reused by every flat bind: the accesses of the bound sets followed by the
-    /// caller's bindless accesses. The next bind overwrites it, so getFlatBindingData must copy
-    /// whatever it needs to keep.
-    std::vector<ResourceAccess> m_flatAccesses;
 
     RenderPassEncoder m_renderPassEncoder;
     ComputePassEncoder m_computePassEncoder;
@@ -290,24 +263,18 @@ public:
     }
 
     virtual Result getBindingData(RootShaderObject* rootObject, BindingData*& outBindingData) = 0;
-    /// Produces the backend binding data for a pipeline bound with a flat binding desc. The shared
-    /// layer has already checked `bindings` against the pipeline's layout, and `accesses` is the
-    /// assembled list of every resource the bind must keep alive and transition, in recording order.
-    virtual Result getFlatBindingData(
-        Pipeline* pipeline,
-        const FlatBindingDesc& bindings,
-        std::span<const ResourceAccess> accesses,
-        BindingData*& outBindingData
-    ) = 0;
 
-    /// Validates `bindings` against the pipeline's layout, assembles the access list and asks the
-    /// backend for the binding data. Shared by the render and compute pass encoders.
-    Result bindFlatPipeline(Pipeline* pipeline, const FlatBindingDesc& bindings, BindingData*& outBindingData);
 
     Result getPipelineSpecializationArgs(
         IPipeline* pipeline,
         IShaderObject* object,
         ExtendedShaderObjectTypeListObject*& outSpecializationArgs
+    );
+    Result getShaderObjectBindingData(
+        IPipeline* pipeline,
+        RootShaderObject* rootObject,
+        ExtendedShaderObjectTypeListObject*& outSpecializationArgs,
+        BindingData*& outBindingData
     );
     Result resolvePipelines(Device* device);
 
