@@ -677,14 +677,14 @@ Result ShaderObject::writeStructuredBuffer(
     return SLANG_OK;
 }
 
-void ShaderObject::trackResources(std::set<RefPtr<RefObject>>& resources)
+void ShaderObject::trackResources(std::vector<RefPtr<RefObject>>& resources)
 {
     for (const auto& slot : m_slots)
     {
         if (slot.resource)
-            resources.insert(slot.resource);
+            resources.emplace_back(slot.resource);
         if (slot.resource2)
-            resources.insert(slot.resource2);
+            resources.emplace_back(slot.resource2);
     }
     for (const auto& object : m_objects)
     {
@@ -929,7 +929,7 @@ Result RootShaderObject::collectSpecializationArgs(ExtendedShaderObjectTypeList&
     return SLANG_OK;
 }
 
-void RootShaderObject::trackResources(std::set<RefPtr<RefObject>>& resources)
+void RootShaderObject::trackResources(std::vector<RefPtr<RefObject>>& resources)
 {
     ShaderObject::trackResources(resources);
     for (const auto& entryPoint : m_entryPoints)

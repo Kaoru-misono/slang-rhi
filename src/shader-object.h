@@ -299,7 +299,7 @@ public:
         IBuffer** buffer
     );
 
-    void trackResources(std::set<RefPtr<RefObject>>& resources);
+    void trackResources(std::vector<RefPtr<RefObject>>& resources);
 
     /// Recursively compute a combined version hash for this object and all sub-objects.
     uint32_t getSubTreeVersion() const
@@ -369,7 +369,7 @@ public:
 
     virtual Result collectSpecializationArgs(ExtendedShaderObjectTypeList& args) override;
 
-    void trackResources(std::set<RefPtr<RefObject>>& resources);
+    void trackResources(std::vector<RefPtr<RefObject>>& resources);
 
 
 };

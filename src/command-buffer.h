@@ -496,7 +496,7 @@ public:
     CommandBufferDesc m_desc;
     StructHolder m_descHolder;
     ArenaAllocator m_allocator;
-    std::set<RefPtr<RefObject>> m_trackedObjects;
+    std::vector<RefPtr<RefObject>> m_trackedObjects;
     std::vector<ExecuteCallbackObjectRetainer> m_trackedExecuteCallbackObjects;
     CommandList m_commandList;
 
