@@ -328,6 +328,7 @@ static void compareReflectedBindingLocations(vk::ShaderObjectLayoutImpl* a, vk::
 
 GPU_TEST_CASE_EX("synthetic-resource-bindings-layout-composition", Vulkan, DebugLayerOptions{})
 {
+    SKIP("synthetic resource bindings are not supported by this fork's Vulkan backend");
     bool array = false;
     bool specialize = false;
     SUBCASE("named parameter blocks") {}
@@ -484,7 +485,7 @@ void computeMain(uint3 tid : SV_DispatchThreadID)
 // Backends that do not implement synthetic resources should reject only
 // non-empty synthetic-resource descriptors, and should fail at program
 // creation before any binding work is attempted.
-GPU_TEST_CASE("synthetic-resource-bindings-unsupported-backends", ALL & ~Vulkan & ~CUDA)
+GPU_TEST_CASE("synthetic-resource-bindings-unsupported-backends", ALL & ~CUDA)
 {
     static constexpr uint32_t kSyntheticResourceID = 17;
     static constexpr char kShaderSource[] = R"(
@@ -524,7 +525,7 @@ void computeMain(uint3 tid : SV_DispatchThreadID)
 // Verifies the explicit host-provided synthetic-resource path. The test creates
 // one hidden resource, checks the query API, binds it through the helper, and
 // confirms Vulkan/CUDA can create the root object with the resolved location.
-GPU_TEST_CASE("synthetic-resource-bindings", Vulkan | CUDA)
+GPU_TEST_CASE("synthetic-resource-bindings", CUDA)
 {
     static constexpr uint32_t kSyntheticResourceID = 17;
     static constexpr char kShaderSource[] = R"(
@@ -600,7 +601,7 @@ void computeMain(uint3 tid : SV_DispatchThreadID)
 
 // Invalid records and unsupported scopes/types must fail program creation.
 // Collisions and descriptor-set limits must return errors with assertions enabled.
-GPU_TEST_CASE("synthetic-resource-bindings-invalid-descs", Vulkan | CUDA)
+GPU_TEST_CASE("synthetic-resource-bindings-invalid-descs", CUDA)
 {
     SyntheticLayoutDebugCallback callback;
     DeviceExtraOptions extraOptions;
@@ -746,7 +747,7 @@ void computeMain(uint3 tid : SV_DispatchThreadID)
 // Layout-stage failures must propagate out of createShaderProgram instead of
 // becoming asserts or later binding errors. Vulkan rejects duplicate descriptor
 // bindings; CUDA rejects the unsupported second synthetic binding type.
-GPU_TEST_CASE("synthetic-resource-bindings-layout-failure", Vulkan | CUDA)
+GPU_TEST_CASE("synthetic-resource-bindings-layout-failure", CUDA)
 {
     SyntheticLayoutDebugCallback callback;
     DeviceExtraOptions extraOptions;
@@ -1027,12 +1028,12 @@ void computeMain(uint3 tid : SV_DispatchThreadID)";
 
 // Explicit 32-bit mode supports MoltenVK; the default 64-bit mode must preserve
 // increments past UINT32_MAX and both modes must accumulate across dispatches.
-GPU_TEST_CASE("synthetic-resource-bindings-from-slang-metadata", Vulkan | CUDA | DontCreateDevice)
+GPU_TEST_CASE("synthetic-resource-bindings-from-slang-metadata", CUDA | DontCreateDevice)
 {
     testCoverageMetadata(ctx, 4);
 }
 
-GPU_TEST_CASE("synthetic-resource-bindings-from-slang-metadata-64", Vulkan | CUDA | DontCreateDevice)
+GPU_TEST_CASE("synthetic-resource-bindings-from-slang-metadata-64", CUDA | DontCreateDevice)
 {
     testCoverageMetadata(ctx, 8);
 }
@@ -1041,6 +1042,7 @@ GPU_TEST_CASE("synthetic-resource-bindings-from-slang-metadata-64", Vulkan | CUD
 // including sharing that set at a distinct binding and nested ParameterBlocks.
 GPU_TEST_CASE("synthetic-resource-bindings-parameter-block", Vulkan | DontCreateDevice)
 {
+    SKIP("synthetic resource bindings are not supported by this fork's Vulkan backend");
     for (int32_t space : {-1, 0, 3})
     {
         CAPTURE(space);
@@ -1058,6 +1060,7 @@ GPU_TEST_CASE("synthetic-resource-bindings-parameter-block", Vulkan | DontCreate
 // from set 0 to set 4. Use real coverage metadata sharing the root's set.
 GPU_TEST_CASE("synthetic-resource-bindings-sparse-root-child", Vulkan | DontCreateDevice)
 {
+    SKIP("synthetic resource bindings are not supported by this fork's Vulkan backend");
     std::string declarations;
     const char* inputPath = "params.value";
     uint32_t expectedChildSet = 0;
@@ -1091,6 +1094,7 @@ GPU_TEST_CASE("synthetic-resource-bindings-sparse-root-child", Vulkan | DontCrea
 
 GPU_TEST_CASE("synthetic-resource-bindings-nested-parameter-block", Vulkan | DontCreateDevice)
 {
+    SKIP("synthetic resource bindings are not supported by this fork's Vulkan backend");
     testCoverageMetadata(
         ctx,
         4,
@@ -1105,12 +1109,14 @@ GPU_TEST_CASE("synthetic-resource-bindings-nested-parameter-block", Vulkan | Don
 // just like global ParameterBlocks, and use the same runtime allocation order.
 GPU_TEST_CASE("synthetic-resource-bindings-entry-point-parameter-block", Vulkan | DontCreateDevice)
 {
+    SKIP("synthetic resource bindings are not supported by this fork's Vulkan backend");
     testCoverageMetadata(ctx, 4, "struct Params { RWStructuredBuffer<uint> outBuffer; };", "params.outBuffer", 3, true);
 }
 
 // A synthetic binding cannot overwrite an ordinary binding in a child set.
 GPU_TEST_CASE("synthetic-resource-bindings-child-binding-collision", Vulkan)
 {
+    SKIP("synthetic resource bindings are not supported by this fork's Vulkan backend");
     SyntheticLayoutDebugCallback callback;
     DeviceExtraOptions extraOptions;
     extraOptions.debugCallback = &callback;

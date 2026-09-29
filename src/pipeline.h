@@ -26,6 +26,7 @@ public:
     Pipeline(Device* device);
     Pipeline(const Pipeline&) = delete;
     Pipeline& operator=(const Pipeline&) = delete;
+    virtual ~Pipeline() override;
 
     /// Identifies this pipeline lifetime in specialization caches, even after
     /// destruction allows another pipeline to reuse its memory address.

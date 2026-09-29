@@ -9,6 +9,8 @@ class RenderPipelineImpl : public RenderPipeline
 public:
     RefPtr<InputLayoutImpl> m_inputLayout;
     RefPtr<RootShaderObjectLayoutImpl> m_rootObjectLayout;
+    /// Root signature derived from the linked shader program.
+    ComPtr<ID3D12RootSignature> m_rootSignature;
     ComPtr<ID3D12PipelineState> m_pipelineState;
     D3D_PRIMITIVE_TOPOLOGY m_primitiveTopology;
 
@@ -22,6 +24,8 @@ class ComputePipelineImpl : public ComputePipeline
 {
 public:
     RefPtr<RootShaderObjectLayoutImpl> m_rootObjectLayout;
+    /// Root signature derived from the linked shader program.
+    ComPtr<ID3D12RootSignature> m_rootSignature;
     ComPtr<ID3D12PipelineState> m_pipelineState;
 
     ComputePipelineImpl(Device* device, const ComputePipelineDesc& desc);
@@ -34,6 +38,8 @@ class RayTracingPipelineImpl : public RayTracingPipeline
 {
 public:
     RefPtr<RootShaderObjectLayoutImpl> m_rootObjectLayout;
+    /// Global root signature derived from the linked shader program.
+    ComPtr<ID3D12RootSignature> m_rootSignature;
     ComPtr<ID3D12StateObject> m_stateObject;
     std::map<std::string, void*> m_shaderIdentifierByName;
 

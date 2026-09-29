@@ -1,4 +1,4 @@
-#include "testing.h"
+#include "test-compute-trivial.h"
 
 using namespace rhi;
 using namespace rhi::testing;
@@ -45,21 +45,14 @@ GPU_TEST_CASE("buffer-shared-cuda", D3D12 | Vulkan | DontCreateDevice)
     CHECK_EQ(testDesc.size, numberCount * sizeof(float));
     compareComputeResult(dstDevice, dstBuffer, makeArray<float>(0.0f, 1.0f, 2.0f, 3.0f));
 
-    ComPtr<IShaderProgram> shaderProgram;
-    REQUIRE_CALL(loadProgram(dstDevice, "test-compute-trivial", "computeMain", shaderProgram.writeRef()));
-
-    ComputePipelineDesc pipelineDesc = {};
-    pipelineDesc.program = shaderProgram.get();
-    ComPtr<IComputePipeline> pipeline;
-    REQUIRE_CALL(dstDevice->createComputePipeline(pipelineDesc, pipeline.writeRef()));
+    auto pipeline = trivialCompute::createPipeline(dstDevice);
 
     {
         auto queue = dstDevice->getQueue(QueueType::Graphics);
         auto commandEncoder = queue->createCommandEncoder();
 
         auto passEncoder = commandEncoder->beginComputePass();
-        auto rootObject = passEncoder->bindPipeline(pipeline);
-        ShaderCursor(rootObject)["buffer"].setBinding(dstBuffer);
+        trivialCompute::bindBuffer(dstDevice, passEncoder, pipeline, dstBuffer);
         passEncoder->dispatchCompute(1, 1, 1);
         passEncoder->end();
 

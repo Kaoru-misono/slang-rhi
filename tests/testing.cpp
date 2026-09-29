@@ -2,6 +2,7 @@
 #include "shader-cache.h"
 #include "core/platform.h"
 #include <algorithm>
+#include <atomic>
 #include <cctype>
 #include <cstdio>
 #include <ctime>
@@ -182,6 +183,18 @@ private:
 
 static CaptureDebugCallback sCaptureDebugCallback;
 
+static std::atomic<int> sExpectedErrorDepth{0};
+
+ExpectedErrorScope::ExpectedErrorScope()
+{
+    ++sExpectedErrorDepth;
+}
+
+ExpectedErrorScope::~ExpectedErrorScope()
+{
+    --sExpectedErrorDepth;
+}
+
 class DebugCallback : public IDebugCallback
 {
 public:
@@ -189,6 +202,9 @@ public:
     {
         if (type != DebugMessageType::Error)
             return false;
+
+        if (sExpectedErrorDepth.load(std::memory_order_relaxed) > 0)
+            return true;
 
         // These 2 messages pop up as the vulkan validation layer doesn't pick up on CoopVec yet
         if (strstr(message, "VK_NV_cooperative_vector is not supported by this layer"))

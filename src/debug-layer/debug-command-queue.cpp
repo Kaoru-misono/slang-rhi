@@ -1,4 +1,5 @@
 #include "debug-command-queue.h"
+#include "../command-buffer.h"
 #include "debug-command-buffer.h"
 #include "debug-fence.h"
 #include "debug-helper-functions.h"

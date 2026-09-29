@@ -674,7 +674,8 @@ struct TLAS
     ComPtr<IBuffer> tlasBuffer;
     ComPtr<IAccelerationStructure> tlas;
 
-    TLAS(IDevice* device, ICommandQueue* queue, IAccelerationStructure* blas, const float* transform = nullptr)
+    TLAS(IDevice* device, ICommandQueue* queue, IAccelerationStructure* blas, const float* transform = nullptr,
+         bool retainDependency = false)
     {
         AccelerationStructureInstanceDescType nativeInstanceDescType = getAccelerationStructureInstanceDescType(device);
         Size nativeInstanceDescSize = getAccelerationStructureInstanceDescSize(nativeInstanceDescType);
@@ -741,6 +742,12 @@ struct TLAS
         AccelerationStructureDesc createDesc{};
         createDesc.kind = AccelerationStructureKind::TopLevel;
         createDesc.size = sizes.accelerationStructureSize;
+
+        IAccelerationStructure* dependencies[]{blas};
+        AccelerationStructureDependenciesDesc dependencyDesc{};
+        dependencyDesc.structures = dependencies;
+        dependencyDesc.structureCount = 1;
+        if (retainDependency) createDesc.next = &dependencyDesc;
 
         REQUIRE_CALL(device->createAccelerationStructure(createDesc, tlas.writeRef()));
 

@@ -2,6 +2,24 @@
 
 // This is to verify that the slang-rhi can set correct buffer strides for structured buffer bindings.
 
+#if defined(UINT16_PARAMETER_BLOCK)
+struct Resources
+{
+    RWStructuredBuffer<uint16_t> buffer;
+};
+
+ParameterBlock<Resources> resources;
+
+[shader("compute")]
+[numthreads(4,1,1)]
+void computeMain(
+    uint3 sv_dispatchThreadID : SV_DispatchThreadID)
+{
+    var input = resources.buffer[sv_dispatchThreadID.x];
+    resources.buffer[sv_dispatchThreadID.x] = uint16_t(input + 1);
+}
+#else
+// Legacy shader-object layout: a loose global buffer.
 uniform RWStructuredBuffer<uint16_t> buffer;
 
 [shader("compute")]
@@ -12,3 +30,4 @@ void computeMain(
     var input = buffer[sv_dispatchThreadID.x];
     buffer[sv_dispatchThreadID.x] = uint16_t(input + 1);
 }
+#endif
