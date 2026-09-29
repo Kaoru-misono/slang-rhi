@@ -222,7 +222,10 @@ Result CommandRecorder::record(CommandBufferImpl* commandBuffer)
     commitBarriers();
     m_stateTracking.clear();
 
-    SLANG_D3D_RETURN_ON_FAIL_REPORT(m_cmdList->Close(), m_device);
+    {
+        SLANG_RHI_BINDING_TIMER(closeNs, closeCalls);
+        SLANG_D3D_RETURN_ON_FAIL_REPORT(m_cmdList->Close(), m_device);
+    }
 
     return SLANG_OK;
 }
@@ -1765,20 +1768,22 @@ void CommandRecorder::cmdExecuteCallback(const commands::ExecuteCallback& cmd)
 
 void CommandRecorder::setBindings(BindingDataImpl* bindingData, BindMode bindMode)
 {
-    // First, we transition all resources to the required states.
-    for (uint32_t i = 0; i < bindingData->bufferStateCount; ++i)
+    for (auto* slice = bindingData->stateSlices; slice; slice = slice->next)
     {
-        const auto& bufferState = bindingData->bufferStates[i];
-        m_stateTracking.requireBufferState(
-            bufferState.buffer, bufferState.state, getBufferReadStatePolicy(m_queueType)
-        );
-    }
-    for (uint32_t i = 0; i < bindingData->textureStateCount; ++i)
-    {
-        const auto& textureState = bindingData->textureStates[i];
-        m_stateTracking.setTextureState(
-            textureState.texture, textureState.range, textureState.state
-        );
+        SLANG_RHI_BINDING_COUNT(stateEntries, slice->buffers->size() + slice->textures->size());
+        // First, we transition all resources to the required states.
+        for (const auto& bufferState : *slice->buffers)
+        {
+            m_stateTracking.requireBufferState(
+                bufferState.buffer, bufferState.state, getBufferReadStatePolicy(m_queueType)
+            );
+        }
+        for (const auto& textureState : *slice->textures)
+        {
+            m_stateTracking.setTextureState(
+                textureState.texture, textureState.range, textureState.state
+            );
+        }
     }
 
     // We need barriers to be committed before setting root parameters.
@@ -2398,11 +2403,12 @@ Result CommandEncoderImpl::init()
 
 Result CommandEncoderImpl::getBindingData(RootShaderObject* rootObject, BindingData*& outBindingData)
 {
-    rootObject->trackResources(m_commandBuffer->m_trackedObjects);
+    SLANG_RHI_BINDING_SCOPE(m_commandBuffer);
     BindingDataBuilder builder;
     builder.m_device = getDevice<DeviceImpl>();
     builder.m_allocator = &m_commandBuffer->m_allocator;
     builder.m_bindingCache = &m_commandBuffer->m_bindingCache;
+    builder.m_retained = &m_commandBuffer->m_trackedObjects;
     builder.m_constantBufferArena = &m_commandBuffer->m_constantBufferArena;
     builder.m_cbvSrvUavArena = &m_commandBuffer->m_cbvSrvUavArena;
     builder.m_samplerArena = &m_commandBuffer->m_samplerArena;
@@ -2418,6 +2424,7 @@ Result CommandEncoderImpl::getBindingData(RootShaderObject* rootObject, BindingD
 
 Result CommandEncoderImpl::finish(const CommandBufferDesc& desc, ICommandBuffer** outCommandBuffer)
 {
+    SLANG_RHI_BINDING_FINISH(m_commandBuffer, "d3d12", m_queue->getType());
     if (SLANG_FAILED(m_recordingResult))
     {
         *outCommandBuffer = nullptr;
@@ -2434,12 +2441,19 @@ Result CommandEncoderImpl::finish(const CommandBufferDesc& desc, ICommandBuffer*
     {
         m_commandBuffer->m_d3dCommandList->SetName(string::to_wstring(desc.label).c_str());
     }
-    SLANG_RETURN_ON_FAIL(resolvePipelines(m_device));
+    {
+        SLANG_RHI_BINDING_TIMER(resolveNs, resolveCalls);
+        SLANG_RETURN_ON_FAIL(resolvePipelines(m_device));
+    }
     CommandRecorder recorder(getDevice<DeviceImpl>());
-    SLANG_RETURN_ON_FAIL(recorder.record(m_commandBuffer));
+    {
+        SLANG_RHI_BINDING_TIMER(recordInclusiveNs, recordCalls);
+        SLANG_RETURN_ON_FAIL(recorder.record(m_commandBuffer));
+    }
     returnComPtr(outCommandBuffer, m_commandBuffer);
     m_commandBuffer = nullptr;
     m_commandList = nullptr;
+    SLANG_RHI_BINDING_FINISH_SUCCESS();
     return SLANG_OK;
 }
 

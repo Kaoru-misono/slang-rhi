@@ -1,4 +1,8 @@
 #include "testing.h"
+#include "command-buffer.h"
+#include "debug-layer/debug-command-buffer.h"
+#include "debug-layer/debug-shader-object.h"
+#include "binding-table-cache.h"
 #include <array>
 #include <cstring>
 
@@ -9,6 +13,83 @@
 
 using namespace rhi;
 using namespace rhi::testing;
+
+GPU_TEST_CASE("shader-object-typed-descriptor-recorded-owners", D3D12 | Vulkan)
+{
+    const char* source = R"(
+struct Scene { ByteAddressBuffer.Handle input; uint bias; uint padding; };
+ParameterBlock<Scene> scene;
+RWStructuredBuffer<uint> output;
+[shader("compute")][numthreads(4, 1, 1)]
+void main(uint3 id : SV_DispatchThreadID) { output[id.x] = scene.input.Load<uint>(id.x * 4) + scene.bias; }
+)";
+    ComPtr<IShaderProgram> program;
+    REQUIRE_CALL(loadComputeProgramFromSource(device, source, program.writeRef()));
+    auto pipeline = device->createComputePipeline({.program = program});
+    REQUIRE(pipeline != nullptr);
+    auto root = device->createRootShaderObject(program);
+    REQUIRE(root != nullptr);
+    ShaderCursor cursor(root);
+    ComPtr<IShaderObject> child;
+    REQUIRE_CALL(device->createShaderObjectFromTypeLayout(
+        cursor["scene"].getTypeLayout()->getElementTypeLayout(), child.writeRef()));
+    REQUIRE_CALL(cursor["scene"].setObject(child));
+    ShaderCursor fields(child);
+    const uint32_t values[2][4]{{3, 11, 19, 31}, {101, 107, 127, 149}};
+    BufferDesc inputDesc{};
+    inputDesc.size = sizeof(values[0]);
+    inputDesc.usage = BufferUsage::ShaderResource | BufferUsage::CopyDestination;
+    inputDesc.defaultState = ResourceState::ShaderResource;
+    auto input = device->createBuffer(inputDesc, values[0]);
+    REQUIRE(input != nullptr);
+    BufferDesc outputDesc{};
+    outputDesc.size = sizeof(values[0]);
+    outputDesc.elementSize = sizeof(uint32_t);
+    outputDesc.usage = BufferUsage::UnorderedAccess | BufferUsage::CopySource | BufferUsage::CopyDestination;
+    std::array<ComPtr<IBuffer>, 2> outputs;
+    std::array<ComPtr<ICommandBuffer>, 2> commands;
+    auto queue = device->getQueue(QueueType::Graphics);
+    for (uint32_t batch = 0; batch < 2; ++batch)
+    {
+        if (batch)
+        {
+            input.setNull();
+            REQUIRE_CALL(queue->waitOnHost());
+            input = device->createBuffer(inputDesc, values[1]);
+            REQUIRE(input != nullptr);
+        }
+        const uint32_t initial[4]{0xdeadbeef, 0xdeadbeef, 0xdeadbeef, 0xdeadbeef};
+        outputs[batch] = device->createBuffer(outputDesc, initial);
+        REQUIRE(outputs[batch] != nullptr);
+        DescriptorHandle descriptor{};
+        REQUIRE_CALL(input->getDescriptorHandle(DescriptorHandleAccess::Read, Format::Undefined, kEntireBuffer, &descriptor));
+        REQUIRE_CALL(fields["input"].setDescriptorHandle(descriptor, input));
+        const uint32_t bias = batch ? 23 : 7;
+        REQUIRE_CALL(fields["bias"].setData(bias));
+        REQUIRE_CALL(cursor["output"].setBinding(outputs[batch]));
+        auto encoder = queue->createCommandEncoder();
+        auto* pass = encoder->beginComputePass();
+        pass->bindPipeline(pipeline, root);
+        pass->dispatchCompute(1, 1, 1);
+        pass->end();
+        REQUIRE_CALL(encoder->finish({}, commands[batch].writeRef()));
+    }
+    root.setNull();
+    child.setNull();
+    REQUIRE_CALL(queue->submit(commands[1]));
+    REQUIRE_CALL(queue->waitOnHost());
+    std::array<uint32_t, 4> expectedB{};
+    std::array<uint32_t, 4> expectedA{};
+    for (uint32_t i = 0; i < 4; ++i)
+    {
+        expectedA[i] = values[0][i] + 7;
+        expectedB[i] = values[1][i] + 23;
+    }
+    compareComputeResult(device, outputs[1], expectedB);
+    REQUIRE_CALL(queue->submit(commands[0]));
+    REQUIRE_CALL(queue->waitOnHost());
+    compareComputeResult(device, outputs[0], expectedA);
+}
 
 GPU_TEST_CASE("shader-object-sampler-table-constants-only", D3D12 | Vulkan)
 {
@@ -826,3 +907,409 @@ uint value = 0;
     compareComputeResult(device, output, expected);
 }
 #endif
+
+GPU_TEST_CASE("shader-object-table-cache-constant-rebind", D3D12 | Vulkan)
+{
+    bool entryConstants = false;
+    SUBCASE("global CB") {}
+    SUBCASE("entry-point uniforms") { entryConstants = true; }
+    std::string source = R"(
+struct Constants { uint index; uint bias; uint2 padding; };
+struct Resources { StructuredBuffer<uint> input[15]; RWStructuredBuffer<uint> output; };
+ConstantBuffer<Constants> constants;
+ParameterBlock<Resources> resources;
+[shader("compute")][numthreads(1,1,1)]
+void main() {
+    uint sum = 0;
+    for (uint i = 0; i < 15; ++i) sum += (i + 1) * resources.input[i][0];
+    resources.output[constants.index] = sum + constants.bias;
+}
+)";
+    if (entryConstants)
+    {
+        const std::string declaration = "ConstantBuffer<Constants> constants;";
+        source.erase(source.find(declaration), declaration.size());
+        source.replace(source.find("void main()"), 11, "void main(uniform Constants constants)");
+    }
+    ComPtr<IShaderProgram> program;
+    REQUIRE_CALL(loadComputeProgramFromSource(device, source, program.writeRef()));
+    ComputePipelineDesc pipelineDesc{};
+    pipelineDesc.program = program;
+    auto pipeline = device->createComputePipeline(pipelineDesc);
+    REQUIRE(pipeline);
+    uint32_t inputValue = 19;
+    BufferDesc desc{};
+    desc.size = sizeof(inputValue);
+    desc.elementSize = sizeof(uint32_t);
+    desc.usage = BufferUsage::ShaderResource | BufferUsage::CopyDestination;
+    std::array<ComPtr<IBuffer>, 15> inputs;
+    uint32_t inputSum = 0;
+    for (uint32_t i = 0; i < inputs.size(); ++i)
+    {
+        inputValue = 19 + i * 3;
+        REQUIRE_CALL(device->createBuffer(desc, &inputValue, inputs[i].writeRef()));
+        inputSum += (i + 1) * inputValue;
+    }
+    std::array<uint32_t, 256> initial{};
+    initial.fill(0xbaadf00d);
+    desc.size = sizeof(initial);
+    desc.usage = BufferUsage::UnorderedAccess | BufferUsage::CopySource | BufferUsage::CopyDestination;
+    auto output = device->createBuffer(desc, initial.data());
+    REQUIRE(output);
+    auto root = device->createRootShaderObject(program);
+    REQUIRE(root);
+    ShaderCursor cursor(root);
+    for (uint32_t i = 0; i < inputs.size(); ++i)
+        REQUIRE_CALL(cursor["resources"]["input"][i].setBinding(inputs[i]));
+    REQUIRE_CALL(cursor["resources"]["output"].setBinding(output));
+    auto queue = device->getQueue(QueueType::Graphics);
+    auto encoder = queue->createCommandEncoder();
+    auto* pass = encoder->beginComputePass();
+    pass->bindPipeline(pipeline, root);
+    std::array<uint32_t, 256> expected;
+    for (uint32_t i = 0; i < expected.size(); ++i)
+    {
+        uint32_t constants[]{i, 7 * i + 3, 0, 0};
+        auto constantsCursor = entryConstants
+            ? ShaderCursor(root->getEntryPoint(0))["constants"] : cursor["constants"].getDereferenced();
+        REQUIRE_CALL(constantsCursor.setData(constants, sizeof(constants)));
+        pass->dispatchCompute(1, 1, 1);
+        expected[i] = inputSum + 7 * i + 3;
+    }
+    pass->end();
+    inputs = {};
+    root.setNull();
+    pipeline.setNull();
+    program.setNull();
+    auto commands = encoder->finish();
+    REQUIRE(commands);
+#if SLANG_RHI_ENABLE_BINDING_COUNTERS
+    auto* wrapped = dynamic_cast<debug::DebugCommandBuffer*>(commands.get());
+    auto* internal = checked_cast<CommandBuffer*>(wrapped ? wrapped->baseObject.get() : commands.get());
+    CHECK(internal->m_bindingCounters.trackedRefs == 16);
+    CHECK(internal->m_bindingCounters.tableHits == 255);
+    CHECK(internal->m_bindingCounters.tableMisses == 257);
+    const uint64_t implicitNvapiDescriptors = device->getDeviceType() == DeviceType::D3D12 &&
+        device->hasCapability(Capability::hlsl_nvapi) ? expected.size() : 0;
+    const uint64_t ordinaryDescriptors = entryConstants && device->getDeviceType() == DeviceType::Vulkan ? 0 : 256;
+    CHECK(internal->m_bindingCounters.descriptorsWritten == 16 + ordinaryDescriptors + implicitNvapiDescriptors);
+#endif
+    REQUIRE_CALL(queue->submit(commands));
+    REQUIRE_CALL(queue->waitOnHost());
+    compareComputeResult(device, output, expected);
+}
+
+GPU_TEST_CASE("shader-object-table-cache-nested-relocation", D3D12 | Vulkan)
+{
+    bool rootDescriptors = false;
+    SUBCASE("descriptor tables") {}
+    SUBCASE("root descriptors") { rootDescriptors = true; }
+    std::string source = R"(
+struct Data { uint bias; uint3 padding; };
+struct Leaf { StructuredBuffer<uint> input; };
+struct Group { ConstantBuffer<Data> data; ParameterBlock<Leaf> leaf; };
+struct Params { uint index; uint3 padding; };
+ConstantBuffer<Params> params;
+ParameterBlock<Group> left;
+ParameterBlock<Group> right;
+RWStructuredBuffer<uint> output;
+[shader("compute")][numthreads(1,1,1)]
+void main() {
+    output[params.index] += left.data.bias + left.leaf.input[0]
+        + 7 * (right.data.bias + right.leaf.input[0]);
+}
+)";
+    if (rootDescriptors)
+    {
+        source.insert(0, "[__AttributeUsage(_AttributeTargets.Var)] struct rootAttribute {};\n");
+        auto pos = source.find("StructuredBuffer<uint> input;");
+        source.insert(pos, "[root] ");
+    }
+    ComPtr<IShaderProgram> program;
+    REQUIRE_CALL(loadComputeProgramFromSource(device, source, program.writeRef()));
+    ComputePipelineDesc desc{};
+    desc.program = program;
+    auto pipeline = device->createComputePipeline(desc);
+    REQUIRE(pipeline);
+    auto root = device->createRootShaderObject(program);
+    REQUIRE(root);
+    ShaderCursor cursor(root);
+    auto left = root->getObject(cursor["left"].m_offset);
+    auto right = root->getObject(cursor["right"].m_offset);
+    REQUIRE(left);
+    REQUIRE(right);
+    auto leaf = left->getObject(ShaderCursor(left)["leaf"].m_offset);
+    REQUIRE(leaf);
+    REQUIRE_CALL(ShaderCursor(right)["leaf"].setObject(leaf));
+    std::array<ComPtr<IBuffer>, 3> inputs;
+    const uint32_t values[]{11, 29, 47};
+    BufferDesc bufferDesc{};
+    bufferDesc.size = sizeof(uint32_t);
+    bufferDesc.elementSize = sizeof(uint32_t);
+    bufferDesc.usage = BufferUsage::ShaderResource | BufferUsage::CopyDestination;
+    for (uint32_t i = 0; i < inputs.size(); ++i)
+        REQUIRE_CALL(device->createBuffer(bufferDesc, &values[i], inputs[i].writeRef()));
+    std::array<ComPtr<IBuffer>, 2> outputs;
+    std::array<ComPtr<ICommandBuffer>, 2> commands;
+    std::array<std::array<uint32_t, 5>, 2> expected{};
+    auto queue = device->getQueue(QueueType::Graphics);
+    for (uint32_t batch = 0; batch < 2; ++batch)
+    {
+        bufferDesc.size = sizeof(expected[batch]);
+        bufferDesc.usage = BufferUsage::UnorderedAccess | BufferUsage::CopyDestination | BufferUsage::CopySource;
+        REQUIRE_CALL(device->createBuffer(bufferDesc, expected[batch].data(), outputs[batch].writeRef()));
+        REQUIRE_CALL(cursor["output"].setBinding(outputs[batch]));
+        REQUIRE_CALL(ShaderCursor(leaf)["input"].setBinding(inputs[batch]));
+        const uint32_t rightData[]{13 + batch, 0, 0, 0};
+        REQUIRE_CALL(ShaderCursor(right)["data"].getDereferenced().setData(rightData, sizeof(rightData)));
+        auto encoder = queue->createCommandEncoder();
+        auto* pass = encoder->beginComputePass();
+        pass->bindPipeline(pipeline, root);
+        uint32_t leftBias = 3 + batch;
+        uint32_t value = values[batch];
+        for (uint32_t step = 0; step < 5; ++step)
+        {
+            const uint32_t params[]{step, 0, 0, 0};
+            REQUIRE_CALL(cursor["params"].getDereferenced().setData(params, sizeof(params)));
+            if (step == 0 || step == 2)
+            {
+                if (step == 2) leftBias += 17;
+                const uint32_t data[]{leftBias, 0, 0, 0};
+                REQUIRE_CALL(ShaderCursor(left)["data"].getDereferenced().setData(data, sizeof(data)));
+            }
+            if (step == 3)
+            {
+                value = values[batch + 1];
+                REQUIRE_CALL(ShaderCursor(leaf)["input"].setBinding(inputs[batch + 1]));
+            }
+            for (uint32_t repeat = 0; repeat < 3; ++repeat)
+                pass->dispatchCompute(1, 1, 1);
+            expected[batch][step] = 3 * (leftBias + value + 7 * (rightData[0] + value));
+        }
+        pass->end();
+        REQUIRE_CALL(encoder->finish({}, commands[batch].writeRef()));
+#if SLANG_RHI_ENABLE_BINDING_COUNTERS
+        auto* wrapped = dynamic_cast<debug::DebugCommandBuffer*>(commands[batch].get());
+        auto* internal = checked_cast<CommandBuffer*>(wrapped ? wrapped->baseObject.get() : commands[batch].get());
+        CHECK(internal->m_bindingCounters.tableHits > 40);
+        CHECK(internal->m_bindingCounters.tableMisses > 0);
+#endif
+    }
+    REQUIRE_CALL(queue->submit(commands[1]));
+    REQUIRE_CALL(queue->waitOnHost());
+    inputs = {};
+    leaf.setNull(); left.setNull(); right.setNull(); root.setNull();
+    pipeline.setNull(); program.setNull();
+    commands[1].setNull();
+    REQUIRE_CALL(queue->submit(commands[0]));
+    REQUIRE_CALL(queue->waitOnHost());
+    for (uint32_t batch = 0; batch < 2; ++batch)
+        compareComputeResult(device, outputs[batch], expected[batch]);
+}
+
+GPU_TEST_CASE("shader-object-exact-closure-key", D3D12 | Vulkan)
+{
+    const char* source = R"(
+struct Data { uint value; uint3 pad; };
+struct Resources { RWStructuredBuffer<uint> output; };
+ConstantBuffer<Data> data;
+ParameterBlock<Resources> params;
+[shader("compute")][numthreads(1,1,1)] void main() { params.output[0] = data.value; }
+)";
+    ComPtr<IShaderProgram> program;
+    REQUIRE_CALL(loadComputeProgramFromSource(device, source, program.writeRef()));
+    auto root = device->createRootShaderObject(program);
+    REQUIRE(root);
+    auto* debugRoot = dynamic_cast<debug::DebugShaderObject*>(root.get());
+    auto* native = checked_cast<RootShaderObject*>(debugRoot ? debugRoot->baseObject.get() : root.get());
+    ShaderObjectLayout* specialized = nullptr;
+    REQUIRE_CALL(native->getSpecializedLayout(specialized));
+    BindingClosureKey key;
+    std::vector<RefPtr<RefObject>> retained;
+    key.capture(native, true, specialized, retained);
+    CHECK(key.matches(native, true));
+    const uint32_t data[]{19, 0, 0, 0};
+    REQUIRE_CALL(ShaderCursor(root)["data"].getDereferenced().setData(data, sizeof(data)));
+    CHECK_FALSE(key.matches(native, true));
+    key.objects.clear();
+    key.capture(native, true, specialized, retained);
+    BufferDesc desc{};
+    desc.size = 4; desc.elementSize = 4; desc.usage = BufferUsage::UnorderedAccess;
+    auto output = device->createBuffer(desc);
+    REQUIRE(output);
+    REQUIRE_CALL(ShaderCursor(root)["params"]["output"].setBinding(output));
+    CHECK(key.matches(native, true)); // PB contents are not the parent's closure.
+    auto replacementRoot = device->createRootShaderObject(program);
+    REQUIRE(replacementRoot);
+    auto replacement = replacementRoot->getObject(ShaderCursor(replacementRoot)["params"].m_offset);
+    REQUIRE_CALL(ShaderCursor(root)["params"].setObject(replacement));
+    CHECK_FALSE(key.matches(native, true)); // setObject still invalidates its parent.
+    key.objects.clear();
+    key.capture(native, true, specialized, retained);
+    REQUIRE(key.objects.size() >= 2);
+    // Construct a collision in the replaced hash-combine operation.
+    auto combine = [](uint32_t parent, uint32_t child)
+    {
+        return parent ^ (child + 0x9e3779b9u + (parent << 6) + (parent >> 2));
+    };
+    const uint32_t original = combine(key.objects[0].version, key.objects[1].version);
+    ++key.objects[0].version;
+    const uint32_t parent = key.objects[0].version;
+    key.objects[1].version = (original ^ parent) - 0x9e3779b9u - (parent << 6) - (parent >> 2);
+    CHECK(combine(parent, key.objects[1].version) == original);
+    CHECK_FALSE(key.matches(native, true));
+}
+
+GPU_TEST_CASE("shader-object-table-cache-resource2-cancel-reset", D3D12 | Vulkan)
+{
+    std::string source = R"(
+struct Resources { Sampler2D combined; RWStructuredBuffer<float4> output; StructuredBuffer<uint> inactive; };
+ParameterBlock<Resources> resources;
+[shader("compute")][numthreads(1,1,1)]
+void main() { resources.output[0] += resources.combined.SampleLevel(float2(0.5), 0); }
+)";
+    const bool combined = device->getDeviceType() == DeviceType::Vulkan;
+    if (!combined)
+    {
+        auto pos = source.find("Sampler2D combined;");
+        source.replace(pos, strlen("Sampler2D combined;"), "Texture2D<float4> texture; SamplerState sampler;");
+        pos = source.find("resources.combined.SampleLevel(float2(0.5), 0)");
+        source.replace(pos, strlen("resources.combined.SampleLevel(float2(0.5), 0)"),
+                       "resources.texture.SampleLevel(resources.sampler, float2(0.5), 0)");
+    }
+    ComPtr<IShaderProgram> program;
+    REQUIRE_CALL(loadComputeProgramFromSource(device, source.c_str(), program.writeRef()));
+    auto pipeline = device->createComputePipeline({.program = program});
+    REQUIRE(pipeline);
+    auto root = device->createRootShaderObject(program);
+    REQUIRE(root);
+    const float texel[]{1, 2, 3, 4};
+    TextureDesc textureDesc{};
+    textureDesc.size = {1, 1, 1}; textureDesc.format = Format::RGBA32Float;
+    textureDesc.usage = TextureUsage::ShaderResource | TextureUsage::CopyDestination;
+    const SubresourceData textureData{texel, sizeof(texel), 0};
+    auto texture = device->createTexture(textureDesc, &textureData);
+    auto sampler = device->createSampler({});
+    REQUIRE(texture); REQUIRE(sampler);
+    BufferDesc desc{};
+    desc.size = sizeof(texel); desc.elementSize = sizeof(texel);
+    desc.usage = BufferUsage::UnorderedAccess | BufferUsage::CopyDestination | BufferUsage::CopySource;
+    const std::array<float, 4> initial{};
+    auto output = device->createBuffer(desc, initial.data());
+    REQUIRE(output);
+    desc.size = desc.elementSize = sizeof(uint32_t);
+    desc.usage = BufferUsage::ShaderResource | BufferUsage::CopyDestination;
+    const uint32_t unused = 123;
+    auto inactive = device->createBuffer(desc, &unused);
+    REQUIRE(inactive);
+    ShaderCursor cursor(root);
+    if (combined)
+        REQUIRE_CALL(cursor["resources"]["combined"].setBinding(Binding(texture, sampler)));
+    else
+    {
+        REQUIRE_CALL(cursor["resources"]["texture"].setBinding(texture));
+        REQUIRE_CALL(cursor["resources"]["sampler"].setBinding(sampler));
+    }
+    REQUIRE_CALL(cursor["resources"]["output"].setBinding(output));
+    auto counter = device->createBuffer(desc, &unused);
+    REQUIRE(counter);
+    REQUIRE_CALL(cursor["resources"]["inactive"].setBinding(Binding(inactive, counter)));
+    auto queue = device->getQueue(QueueType::Graphics);
+    uint64_t previousId = 0;
+    for (uint32_t batch = 0; batch < 3; ++batch)
+    {
+        auto encoder = queue->createCommandEncoder();
+        auto* pass = encoder->beginComputePass();
+        pass->bindPipeline(pipeline, root);
+        for (uint32_t repeat = 0; repeat < 3; ++repeat) pass->dispatchCompute(1, 1, 1);
+        pass->end();
+        if (batch == 0) continue; // Cancel without finish/submit; no GPU writes are expected.
+        auto commands = encoder->finish();
+        REQUIRE(commands);
+#if SLANG_RHI_ENABLE_BINDING_COUNTERS
+        auto* wrapped = dynamic_cast<debug::DebugCommandBuffer*>(commands.get());
+        auto* internal = checked_cast<CommandBuffer*>(wrapped ? wrapped->baseObject.get() : commands.get());
+        CHECK(internal->m_bindingCounters.trackedRefs == 5);
+        CHECK(internal->m_bindingCounters.tableMisses == 2);
+        CHECK(internal->m_bindingCounters.tableHits == 4);
+        CHECK(internal->m_bindingCounters.commandBufferId != previousId);
+        previousId = internal->m_bindingCounters.commandBufferId;
+#endif
+        if (batch == 2)
+        {
+            texture.setNull(); sampler.setNull(); inactive.setNull(); counter.setNull();
+            root.setNull(); pipeline.setNull(); program.setNull();
+        }
+        REQUIRE_CALL(queue->submit(commands));
+        REQUIRE_CALL(queue->waitOnHost());
+        std::array<float, 4> expected;
+        for (uint32_t i = 0; i < expected.size(); ++i) expected[i] = float(batch * 3) * texel[i];
+        compareComputeResult(device, output, expected);
+    }
+    SLANG_UNUSED(previousId);
+}
+
+GPU_TEST_CASE("shader-object-table-cache-raygen-snapshot", D3D12 | Vulkan)
+{
+    REQUIRE(device->hasFeature(Feature::RayTracing));
+    ComPtr<IShaderProgram> program;
+    REQUIRE_CALL(loadAndLinkProgram(device, "test-binding-cache-sbt", {"raygenMain"}, program.writeRef()));
+    RayTracingPipelineDesc desc{};
+    desc.program = program;
+    auto pipeline = device->createRayTracingPipeline(desc);
+    REQUIRE(pipeline);
+    const char* entryNames[]{"raygenMain"};
+    ShaderTableDesc tableDesc{};
+    tableDesc.program = program;
+    tableDesc.rayGenShaderCount = 1;
+    tableDesc.rayGenShaderEntryPointNames = entryNames;
+    ComPtr<IShaderTable> table;
+    REQUIRE_CALL(device->createShaderTable(tableDesc, table.writeRef()));
+    REQUIRE(table);
+    auto root = device->createRootShaderObject(program);
+    REQUIRE(root);
+    std::array<ComPtr<IBuffer>, 2> outputs;
+    std::array<ComPtr<ICommandEncoder>, 2> encoders;
+    std::array<std::array<uint32_t, 4>, 2> expected{};
+    auto queue = device->getQueue(QueueType::Graphics);
+    for (uint32_t batch = 0; batch < 2; ++batch)
+    {
+        BufferDesc bufferDesc{};
+        bufferDesc.size = sizeof(expected[batch]);
+        bufferDesc.elementSize = sizeof(uint32_t);
+        bufferDesc.usage = BufferUsage::UnorderedAccess | BufferUsage::CopySource | BufferUsage::CopyDestination;
+        REQUIRE_CALL(device->createBuffer(bufferDesc, expected[batch].data(), outputs[batch].writeRef()));
+        REQUIRE_CALL(ShaderCursor(root)["resources"]["output"].setBinding(outputs[batch]));
+        encoders[batch] = queue->createCommandEncoder();
+        auto* pass = encoders[batch]->beginRayTracingPass();
+        pass->bindPipeline(pipeline, table, root);
+        for (uint32_t i = 0; i < 4; ++i)
+        {
+            const uint32_t data[]{i, 11 + batch * 17 + i * 3, 0, 0};
+            REQUIRE_CALL(ShaderCursor(root->getEntryPoint(0))["params"].setData(data, sizeof(data)));
+            for (uint32_t repeat = 0; repeat < 3; ++repeat)
+                pass->dispatchRays(0, 1, 1, 1);
+            expected[batch][i] = 3 * data[1];
+        }
+        pass->end();
+    }
+    auto commandsB = encoders[1]->finish();
+    REQUIRE(commandsB);
+    REQUIRE_CALL(queue->submit(commandsB));
+    REQUIRE_CALL(queue->waitOnHost());
+    root.setNull(); pipeline.setNull(); table.setNull(); program.setNull();
+    commandsB.setNull(); encoders[1].setNull();
+    auto commandsA = encoders[0]->finish();
+    REQUIRE(commandsA);
+#if SLANG_RHI_ENABLE_BINDING_COUNTERS
+    auto* wrapped = dynamic_cast<debug::DebugCommandBuffer*>(commandsA.get());
+    auto* internal = checked_cast<CommandBuffer*>(wrapped ? wrapped->baseObject.get() : commandsA.get());
+    CHECK(internal->m_bindingCounters.tableMisses == 5);
+    CHECK(internal->m_bindingCounters.tableHits == 19);
+#endif
+    encoders[0].setNull();
+    REQUIRE_CALL(queue->submit(commandsA));
+    REQUIRE_CALL(queue->waitOnHost());
+    for (uint32_t batch = 0; batch < 2; ++batch)
+        compareComputeResult(device, outputs[batch], expected[batch]);
+}

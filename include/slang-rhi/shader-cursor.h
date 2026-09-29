@@ -101,9 +101,9 @@ struct ShaderCursor
 
     Result setBinding(const Binding& binding) const { return m_baseObject->setBinding(m_offset, binding); }
 
-    Result setDescriptorHandle(const DescriptorHandle& handle) const
+    Result setDescriptorHandle(const DescriptorHandle& handle, IResource* owner = nullptr) const
     {
-        return m_baseObject->setDescriptorHandle(m_offset, handle);
+        return m_baseObject->setDescriptorHandle(m_offset, handle, owner);
     }
 
     Result setSpecializationArgs(const slang::SpecializationArg* args, uint32_t count) const

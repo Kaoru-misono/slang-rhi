@@ -3,6 +3,7 @@
 #include "d3d12-base.h"
 #include "d3d12-shader-object-layout.h"
 #include "../transient-buffer-heap.h"
+#include "../binding-table-cache.h"
 
 #include "core/short_vector.h"
 
@@ -21,12 +22,19 @@ struct DescriptorSet
 };
 
 
+struct BindingTableEntry;
+
 struct BindingDataBuilder
 {
     DeviceImpl* m_device;
     ArenaAllocator* m_allocator;
     BindingCache* m_bindingCache;
     BindingDataImpl* m_bindingData;
+    std::vector<RefPtr<RefObject>>* m_retained;
+    BindingTableEntry* m_table = nullptr;
+    bool m_tableHit = false;
+    uint32_t m_rootDescriptorCursor = 0;
+
     TransientBufferArena* m_constantBufferArena;
     GPUDescriptorArena* m_cbvSrvUavArena;
     GPUDescriptorArena* m_samplerArena;
@@ -55,6 +63,8 @@ struct BindingDataBuilder
         ShaderObjectLayoutImpl* specializedLayout,
         DescriptorSet& outDescriptorSet
     );
+
+    void writeRootParameter(uint32_t index, uint64_t address, bool uav);
 
     Result finishSamplerTable(const DescriptorSet& descriptorSet, ShaderObjectLayoutImpl* layout);
 
@@ -124,21 +134,32 @@ public:
         };
     };
 
-    /// Required buffer states.
-    BufferState* bufferStates;
-    uint32_t bufferStateCapacity;
-    uint32_t bufferStateCount;
-    /// Required texture states.
-    TextureState* textureStates;
-    uint32_t textureStateCapacity;
-    uint32_t textureStateCount;
+    struct StateSlice
+    {
+        const std::vector<BufferState>* buffers;
+        const std::vector<TextureState>* textures;
+        StateSlice* next;
+    };
+    StateSlice* stateSlices;
+    StateSlice* lastStateSlice;
+
     /// Root parameters.
     RootParameter* rootParameters;
     uint32_t rootParameterCount;
 };
 
+struct BindingTableEntry
+{
+    BindingClosureKey key;
+    std::vector<BindingDataImpl::BufferState> buffers;
+    std::vector<BindingDataImpl::TextureState> textures;
+    GPUDescriptorRange resources;
+    GPUDescriptorRange samplers;
+    std::vector<BindingDataImpl::RootParameter> rootDescriptors;
+};
+
 // Descriptor tables are immutable once referenced by a recorded draw.
-struct BindingCache
+struct BindingCache : BindingTableCache<BindingTableEntry>
 {
     struct SamplerEntry
     {
@@ -201,6 +222,7 @@ struct BindingCache
     void reset()
     {
         samplerEntries.clear();
+        BindingTableCache<BindingTableEntry>::reset();
     }
 };
 

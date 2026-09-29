@@ -3,6 +3,7 @@
 #include "vk-base.h"
 #include "vk-shader-object-layout.h"
 #include "../transient-buffer-heap.h"
+#include "../binding-table-cache.h"
 
 #include "core/short_vector.h"
 
@@ -10,16 +11,20 @@
 
 namespace rhi::vk {
 
+struct BindingTableEntry;
+
 struct BindingDataBuilder
 {
     DeviceImpl* m_device;
     ArenaAllocator* m_allocator;
     BindingCache* m_bindingCache;
     BindingDataImpl* m_bindingData;
+    std::vector<RefPtr<RefObject>>* m_retained;
+    BindingTableEntry* m_table = nullptr;
+    bool m_tableHit = false;
+
     TransientBufferArena* m_constantBufferArena;
     DescriptorSetAllocator* m_descriptorSetAllocator;
-    uint32_t* m_allocatedDescriptorSetIndices;
-    uint32_t m_allocatedDescriptorSetCount;
 
     void recordDescriptorSet(uint32_t setIndex, VkDescriptorSet set);
 
@@ -115,14 +120,14 @@ public:
         size_t size;
     };
 
-    /// Required buffer states.
-    BufferState* bufferStates;
-    uint32_t bufferStateCapacity;
-    uint32_t bufferStateCount;
-    /// Required texture states.
-    TextureState* textureStates;
-    uint32_t textureStateCapacity;
-    uint32_t textureStateCount;
+    struct StateSlice
+    {
+        const std::vector<BufferState>* buffers;
+        const std::vector<TextureState>* textures;
+        StateSlice* next;
+    };
+    StateSlice* stateSlices;
+    StateSlice* lastStateSlice;
 
     /// Pipeline layout.
     VkPipelineLayout pipelineLayout;
@@ -141,80 +146,16 @@ public:
     uint32_t entryPointCount;
 };
 
-/// Cache for parameter block descriptor sets to avoid redundant allocation and writing.
-/// Vulkan descriptor sets are live GPU objects — reusing a set that has already been bound
-/// to a command buffer and then writing new content is undefined behavior. Therefore we
-/// cache at the `bindAsParameterBlock` level: if the entire sub-object tree is unchanged
-/// (same `getSubTreeVersion()`), we skip allocation, descriptor writing, AND constant
-/// buffer creation, and reuse the exact same descriptor sets from the previous draw.
-struct BindingCache
+struct BindingTableEntry
 {
-    static constexpr uint32_t kMaxEntries = 16;
-    static constexpr uint32_t kMaxDescriptorSetsPerEntry = 4;
-
-    struct Entry
-    {
-        uint32_t objectUid;
-        uint32_t subTreeVersion;
-        ShaderObjectLayoutImpl* layout;
-        VkDescriptorSet descriptorSets[kMaxDescriptorSetsPerEntry];
-        uint32_t descriptorSetOffsets[kMaxDescriptorSetsPerEntry];
-        uint32_t descriptorSetCount;
-        BindingDataImpl::BufferState* bufferStates;
-        uint32_t bufferStateCount;
-        BindingDataImpl::TextureState* textureStates;
-        uint32_t textureStateCount;
-    };
-
-    Entry entries[kMaxEntries] = {};
-    uint32_t entryCount = 0;
-
-    Entry* lookup(uint32_t objectUid, uint32_t subTreeVersion, ShaderObjectLayoutImpl* layout)
-    {
-        for (uint32_t i = 0; i < entryCount; ++i)
-        {
-            if (entries[i].objectUid == objectUid && entries[i].subTreeVersion == subTreeVersion &&
-                entries[i].layout == layout)
-                return &entries[i];
-        }
-        return nullptr;
-    }
-
-    void store(
-        uint32_t objectUid,
-        uint32_t subTreeVersion,
-        ShaderObjectLayoutImpl* layout,
-        VkDescriptorSet* sets,
-        const uint32_t* indices,
-        uint32_t baseSet,
-        uint32_t count,
-        BindingDataImpl::BufferState* bufferStates,
-        uint32_t bufferStateCount,
-        BindingDataImpl::TextureState* textureStates,
-        uint32_t textureStateCount
-    )
-    {
-        if (entryCount < kMaxEntries && count <= kMaxDescriptorSetsPerEntry)
-        {
-            auto& entry = entries[entryCount++];
-            entry.objectUid = objectUid;
-            entry.subTreeVersion = subTreeVersion;
-            entry.layout = layout;
-            entry.descriptorSetCount = count;
-            // The state slices, like descriptor sets, live in this command buffer's arena.
-            entry.bufferStates = bufferStates;
-            entry.bufferStateCount = bufferStateCount;
-            entry.textureStates = textureStates;
-            entry.textureStateCount = textureStateCount;
-            for (uint32_t i = 0; i < count; ++i)
-            {
-                entry.descriptorSets[i] = sets[indices[i]];
-                entry.descriptorSetOffsets[i] = indices[i] - baseSet;
-            }
-        }
-    }
-
-    void reset() { entryCount = 0; }
+    BindingClosureKey key;
+    std::vector<BindingDataImpl::BufferState> buffers;
+    std::vector<BindingDataImpl::TextureState> textures;
+    struct Set { uint32_t offset; VkDescriptorSet set; };
+    std::vector<Set> sets;
 };
+
+struct BindingCache : BindingTableCache<BindingTableEntry>
+{};
 
 } // namespace rhi::vk

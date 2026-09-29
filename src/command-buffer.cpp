@@ -1089,6 +1089,7 @@ CommandBuffer::~CommandBuffer()
 
 Result CommandBuffer::reset()
 {
+    SLANG_RHI_BINDING_RESET();
     m_commandList.reset();
     resetCallbackObjects();
     m_allocator.reset();

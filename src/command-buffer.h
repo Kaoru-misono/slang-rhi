@@ -3,6 +3,7 @@
 #include <slang-rhi.h>
 
 #include "slang-context.h"
+#include "binding-counters.h"
 #include "shader-object.h"
 
 #include "core/common.h"
@@ -493,6 +494,9 @@ public:
     virtual SLANG_NO_THROW const CommandBufferDesc& SLANG_MCALL getDesc() override { return m_desc; }
 
 public:
+#if SLANG_RHI_ENABLE_BINDING_COUNTERS
+    BindingCounters m_bindingCounters;
+#endif
     CommandBufferDesc m_desc;
     StructHolder m_descHolder;
     ArenaAllocator m_allocator;

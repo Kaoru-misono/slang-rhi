@@ -59,7 +59,8 @@ public:
     virtual SLANG_NO_THROW Result SLANG_MCALL setBinding(const ShaderOffset& offset, const Binding& binding) override;
     virtual SLANG_NO_THROW Result SLANG_MCALL setDescriptorHandle(
         const ShaderOffset& offset,
-        const DescriptorHandle& handle
+        const DescriptorHandle& handle,
+        IResource* owner = nullptr
     ) override;
     virtual SLANG_NO_THROW Result SLANG_MCALL setSpecializationArgs(
         const ShaderOffset& offset,

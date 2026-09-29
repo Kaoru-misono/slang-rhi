@@ -1937,7 +1937,8 @@ public:
     virtual SLANG_NO_THROW Result SLANG_MCALL setBinding(const ShaderOffset& offset, const Binding& binding) = 0;
     virtual SLANG_NO_THROW Result SLANG_MCALL setDescriptorHandle(
         const ShaderOffset& offset,
-        const DescriptorHandle& handle
+        const DescriptorHandle& handle,
+        IResource* owner = nullptr
     ) = 0;
 
     /// Reserves a block of memory within the shader object's internal data buffer at the specified offset.
