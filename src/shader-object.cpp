@@ -409,7 +409,9 @@ Result ShaderObject::setDescriptorHandle(const ShaderOffset& offset, const Descr
         return SLANG_E_INVALID_ARG;
     }
 
-    RefPtr<Resource> retained = owner ? checked_cast<Resource*>(owner) : nullptr;
+    // Concrete resources derive from their interface and Resource separately, so reaching Resource
+    // from IResource is a cross cast that only dynamic_cast performs (release checked_cast is a static_cast).
+    RefPtr<Resource> retained = owner ? dynamic_cast<Resource*>(owner) : nullptr;
     clearDescriptorOwners(offset.uniformOffset, sizeof(uint64_t));
     if (retained)
         m_descriptorOwners.push_back({offset.uniformOffset, retained});
