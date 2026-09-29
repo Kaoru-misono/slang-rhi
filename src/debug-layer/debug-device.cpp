@@ -13,9 +13,15 @@
 #include <slang-rhi/cuda-driver-api.h>
 #endif
 
+#include <cstring>
+#include <set>
 #include <vector>
 
 namespace rhi::debug {
+
+namespace {
+
+} // namespace
 
 Result DebugDevice::queryInterface(const SlangUUID& uuid, void** outObject) noexcept
 {

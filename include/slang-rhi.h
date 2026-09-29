@@ -1942,7 +1942,8 @@ public:
     virtual SLANG_NO_THROW Result SLANG_MCALL setBinding(const ShaderOffset& offset, const Binding& binding) = 0;
     virtual SLANG_NO_THROW Result SLANG_MCALL setDescriptorHandle(
         const ShaderOffset& offset,
-        const DescriptorHandle& handle
+        const DescriptorHandle& handle,
+        IResource* owner = nullptr
     ) = 0;
 
     /// Reserves a block of memory within the shader object's internal data buffer at the specified offset.
@@ -1988,6 +1989,8 @@ public:
     }
 };
 
+/// Resource kinds named after the HLSL types they bind to. Each maps 1:1 to a reflected
+/// (resource shape, access) pair, so a binding set layout can be validated exactly.
 enum class StencilOp : uint8_t
 {
     Keep,
@@ -2725,6 +2728,7 @@ public:
     virtual SLANG_NO_THROW IShaderObject* SLANG_MCALL bindPipeline(IRenderPipeline* pipeline) = 0;
     virtual SLANG_NO_THROW void SLANG_MCALL bindPipeline(IRenderPipeline* pipeline, IShaderObject* rootObject) = 0;
 
+
     virtual SLANG_NO_THROW void SLANG_MCALL setRenderState(const RenderState& state) = 0;
     virtual SLANG_NO_THROW void SLANG_MCALL draw(const DrawArguments& args) = 0;
     virtual SLANG_NO_THROW void SLANG_MCALL drawIndexed(const DrawArguments& args) = 0;
@@ -2749,6 +2753,7 @@ public:
     virtual SLANG_NO_THROW IShaderObject* SLANG_MCALL bindPipeline(IComputePipeline* pipeline) = 0;
     virtual SLANG_NO_THROW void SLANG_MCALL bindPipeline(IComputePipeline* pipeline, IShaderObject* rootObject) = 0;
 
+
     virtual SLANG_NO_THROW void SLANG_MCALL dispatchCompute(uint32_t x, uint32_t y, uint32_t z) = 0;
     virtual SLANG_NO_THROW void SLANG_MCALL dispatchComputeIndirect(BufferOffsetPair argBuffer) = 0;
 };
@@ -2767,6 +2772,7 @@ public:
         IShaderTable* shaderTable,
         IShaderObject* rootObject
     ) = 0;
+
 
     virtual SLANG_NO_THROW void SLANG_MCALL dispatchRays(
         uint32_t rayGenShaderIndex,
@@ -3926,6 +3932,7 @@ public:
         desc.slangGlobalScope = linkedProgram;
         return createShaderProgram(desc, outDiagnosticBlob);
     }
+
 
     virtual SLANG_NO_THROW Result SLANG_MCALL createRenderPipeline(
         const RenderPipelineDesc& desc,

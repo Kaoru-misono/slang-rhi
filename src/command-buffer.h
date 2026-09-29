@@ -3,6 +3,7 @@
 #include <slang-rhi.h>
 
 #include "slang-context.h"
+#include "binding-counters.h"
 #include "shader-object.h"
 
 #include "core/common.h"
@@ -17,15 +18,16 @@
 
 #include <atomic>
 #include <set>
+#include <span>
+#include <vector>
 
 namespace rhi {
 
 struct BindingData
-{};
+{
+};
 
-/// Upper bound on the inline constant block a pipeline can be bound with, matching the smallest
-/// push-constant budget the supported backends guarantee.
-constexpr size_t kMaxInlineConstantsSize = 128;
+
 
 class CommandQueue : public ICommandQueue, public DeviceChild
 {
@@ -270,6 +272,9 @@ public:
         BindingData*& outBindingData
     );
 
+    /// Rejects a draw or dispatch without a bound pipeline and root object, so finish() fails.
+    Result rejectMissingPipeline();
+
     Result getPipelineSpecializationArgs(
         IPipeline* pipeline,
         IShaderObject* object,
@@ -489,10 +494,13 @@ public:
     virtual SLANG_NO_THROW const CommandBufferDesc& SLANG_MCALL getDesc() override { return m_desc; }
 
 public:
+#if SLANG_RHI_ENABLE_BINDING_COUNTERS
+    BindingCounters m_bindingCounters;
+#endif
     CommandBufferDesc m_desc;
     StructHolder m_descHolder;
     ArenaAllocator m_allocator;
-    std::set<InternalRefPtr<RefObject>> m_trackedObjects;
+    std::vector<InternalRefPtr<RefObject>> m_trackedObjects;
     std::vector<ExecuteCallbackObjectRetainer> m_trackedExecuteCallbackObjects;
     CommandList m_commandList;
 

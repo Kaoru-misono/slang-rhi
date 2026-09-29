@@ -657,6 +657,7 @@ Result Device::createInputLayout(const InputLayoutDesc& desc, IInputLayout** out
     return SLANG_E_NOT_AVAILABLE;
 }
 
+
 Result Device::createRenderPipeline(const RenderPipelineDesc& desc, IRenderPipeline** outPipeline)
 {
     ShaderProgram* program = checked_cast<ShaderProgram*>(desc.program);

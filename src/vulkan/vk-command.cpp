@@ -342,7 +342,10 @@ Result CommandRecorder::record(CommandBufferImpl* commandBuffer)
     commitBarriers();
     m_stateTracking.clear();
 
-    SLANG_VK_RETURN_ON_FAIL_REPORT(m_api.vkEndCommandBuffer(m_cmdBuffer), m_device);
+    {
+        SLANG_RHI_BINDING_TIMER(closeNs, closeCalls);
+        SLANG_VK_RETURN_ON_FAIL_REPORT(m_api.vkEndCommandBuffer(m_cmdBuffer), m_device);
+    }
 
     return SLANG_OK;
 }
@@ -1172,10 +1175,11 @@ void CommandRecorder::cmdSetComputeState(const commands::SetComputeState& cmd)
     if (updateBindings)
     {
         m_bindingData = static_cast<BindingDataImpl*>(cmd.bindingData);
-        requireBindingStates(m_bindingData);
         setBindings(m_bindingData, VK_PIPELINE_BIND_POINT_COMPUTE);
     }
 
+    // Reused fixed parameters still need UAV ordering between dispatches.
+    requireBindingStates(m_bindingData);
     commitBarriers();
 
     m_computeStateValid = true;
@@ -1982,16 +1986,24 @@ void CommandRecorder::setBindings(BindingDataImpl* bindingData, VkPipelineBindPo
         );
     }
 
-    // Bind descriptor sets.
-    if (bindingData->descriptorSetCount)
+    // Empty pipeline-layout slots reserve native indices but need no descriptor sets.
+    uint32_t setIndex = 0;
+    while (setIndex < bindingData->descriptorSetCount)
     {
+        while (setIndex < bindingData->descriptorSetCount && bindingData->descriptorSets[setIndex] == VK_NULL_HANDLE)
+            ++setIndex;
+        uint32_t firstSet = setIndex;
+        while (setIndex < bindingData->descriptorSetCount && bindingData->descriptorSets[setIndex] != VK_NULL_HANDLE)
+            ++setIndex;
+        if (firstSet == setIndex)
+            break;
         m_api.vkCmdBindDescriptorSets(
             m_cmdBuffer,
             bindPoint,
             bindingData->pipelineLayout,
-            0,
-            bindingData->descriptorSetCount,
-            bindingData->descriptorSets,
+            firstSet,
+            setIndex - firstSet,
+            bindingData->descriptorSets + firstSet,
             0,
             nullptr
         );
@@ -2000,21 +2012,21 @@ void CommandRecorder::setBindings(BindingDataImpl* bindingData, VkPipelineBindPo
 
 void CommandRecorder::requireBindingStates(BindingDataImpl* bindingData)
 {
-    for (uint32_t i = 0; i < bindingData->bufferStateCount; ++i)
+    for (auto* slice = bindingData->stateSlices; slice; slice = slice->next)
     {
-        const auto& bufferState = bindingData->bufferStates[i];
-        m_stateTracking.requireBufferState(
-            bufferState.buffer, bufferState.state, getBufferReadStatePolicy(m_queueType)
-        );
-    }
-    for (uint32_t i = 0; i < bindingData->textureStateCount; ++i)
-    {
-        const auto& textureState = bindingData->textureStates[i];
-        requireTextureState(
-            textureState.textureView->m_texture,
-            textureState.textureView->m_desc.subresourceRange,
-            textureState.state
-        );
+        SLANG_RHI_BINDING_COUNT(stateEntries, slice->buffers->size() + slice->textures->size());
+        for (const auto& bufferState : *slice->buffers)
+        {
+            m_stateTracking.requireBufferState(
+                bufferState.buffer, bufferState.state, getBufferReadStatePolicy(m_queueType)
+            );
+        }
+        for (const auto& textureState : *slice->textures)
+        {
+            m_stateTracking.setTextureState(
+                textureState.texture, textureState.subresourceRange, textureState.state
+            );
+        }
     }
 }
 
@@ -2618,11 +2630,12 @@ Result CommandEncoderImpl::init()
 
 Result CommandEncoderImpl::getBindingData(RootShaderObject* rootObject, BindingData*& outBindingData)
 {
-    rootObject->trackResources(m_commandBuffer->m_trackedObjects);
+    SLANG_RHI_BINDING_SCOPE(m_commandBuffer);
     BindingDataBuilder builder;
     builder.m_device = getDevice<DeviceImpl>();
     builder.m_allocator = &m_commandBuffer->m_allocator;
     builder.m_bindingCache = &m_commandBuffer->m_bindingCache;
+    builder.m_retained = &m_commandBuffer->m_trackedObjects;
     builder.m_constantBufferArena = &m_commandBuffer->m_constantBufferArena;
     builder.m_descriptorSetAllocator = &m_commandBuffer->m_descriptorSetAllocator;
     ShaderObjectLayout* specializedLayout = nullptr;
@@ -2637,6 +2650,7 @@ Result CommandEncoderImpl::getBindingData(RootShaderObject* rootObject, BindingD
 
 Result CommandEncoderImpl::finish(const CommandBufferDesc& desc, ICommandBuffer** outCommandBuffer)
 {
+    SLANG_RHI_BINDING_FINISH(m_commandBuffer, "vulkan", m_queue->getType());
     DeviceImpl* device = getDevice<DeviceImpl>();
     bool hadLabel = m_commandBuffer->m_desc.label != nullptr;
     m_commandBuffer->setDesc(desc);
@@ -2648,11 +2662,18 @@ Result CommandEncoderImpl::finish(const CommandBufferDesc& desc, ICommandBuffer*
             m_commandBuffer->m_desc.label
         );
     }
-    SLANG_RETURN_ON_FAIL(resolvePipelines(m_device));
+    {
+        SLANG_RHI_BINDING_TIMER(resolveNs, resolveCalls);
+        SLANG_RETURN_ON_FAIL(resolvePipelines(m_device));
+    }
     CommandRecorder recorder(getDevice<DeviceImpl>());
-    SLANG_RETURN_ON_FAIL(recorder.record(m_commandBuffer));
+    {
+        SLANG_RHI_BINDING_TIMER(recordInclusiveNs, recordCalls);
+        SLANG_RETURN_ON_FAIL(recorder.record(m_commandBuffer));
+    }
     returnComPtr(outCommandBuffer, m_commandBuffer);
     m_commandList = nullptr;
+    SLANG_RHI_BINDING_FINISH_SUCCESS();
     return SLANG_OK;
 }
 

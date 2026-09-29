@@ -4,6 +4,7 @@
 #include "device.h"
 #include "format-conversion.h"
 #include "pipeline-resolver.h"
+#include "enum-strings.h"
 
 namespace rhi {
 
@@ -48,6 +49,8 @@ RenderPassEncoder::RenderPassEncoder(CommandEncoder* commandEncoder)
 
 Result RenderPassEncoder::writeRenderState()
 {
+    if (!m_pipeline || !m_rootObject)
+        return m_commandEncoder->rejectMissingPipeline();
     commands::SetRenderState cmd;
     cmd.state = m_renderState;
     cmd.pipeline = m_pipeline;
@@ -208,6 +211,8 @@ void RenderPassEncoder::writeTimestamp(IQueryPool* queryPool, uint32_t queryInde
 
 void RenderPassEncoder::end()
 {
+    m_pipeline = nullptr;
+    m_rootObject = nullptr;
     if (m_commandList)
     {
         commands::EndRenderPass cmd;
@@ -234,6 +239,8 @@ ComputePassEncoder::ComputePassEncoder(CommandEncoder* commandEncoder)
 
 Result ComputePassEncoder::writeComputeState()
 {
+    if (!m_pipeline || !m_rootObject)
+        return m_commandEncoder->rejectMissingPipeline();
     commands::SetComputeState cmd;
     cmd.pipeline = m_pipeline;
     SLANG_RETURN_ON_FAIL(
@@ -335,6 +342,8 @@ void ComputePassEncoder::writeTimestamp(IQueryPool* queryPool, uint32_t queryInd
 
 void ComputePassEncoder::end()
 {
+    m_pipeline = nullptr;
+    m_rootObject = nullptr;
     if (m_commandList)
     {
         commands::EndComputePass cmd;
@@ -361,6 +370,8 @@ RayTracingPassEncoder::RayTracingPassEncoder(CommandEncoder* commandEncoder)
 
 Result RayTracingPassEncoder::writeRayTracingState()
 {
+    if (!m_pipeline || !m_rootObject)
+        return m_commandEncoder->rejectMissingPipeline();
     commands::SetRayTracingState cmd;
     cmd.pipeline = m_pipeline;
     cmd.shaderTable = m_shaderTable;
@@ -459,6 +470,9 @@ void RayTracingPassEncoder::writeTimestamp(IQueryPool* queryPool, uint32_t query
 
 void RayTracingPassEncoder::end()
 {
+    m_pipeline = nullptr;
+    m_shaderTable = nullptr;
+    m_rootObject = nullptr;
     if (m_commandList)
     {
         commands::EndRayTracingPass cmd;
@@ -1026,6 +1040,13 @@ Result CommandEncoder::prepareBindings(
     return m_recordingResult;
 }
 
+Result CommandEncoder::rejectMissingPipeline()
+{
+    if (SLANG_SUCCEEDED(m_recordingResult))
+        m_recordingResult = SLANG_E_INVALID_ARG;
+    return SLANG_E_INVALID_ARG;
+}
+
 Result CommandEncoder::getPipelineSpecializationArgs(
     IPipeline* pipeline,
     IShaderObject* object,
@@ -1071,6 +1092,7 @@ CommandBuffer::~CommandBuffer()
 
 Result CommandBuffer::reset()
 {
+    SLANG_RHI_BINDING_RESET();
     m_commandList.reset();
     resetCallbackObjects();
     m_allocator.reset();

@@ -98,7 +98,8 @@ static ComPtr<ITexture> createColorBuffer(IDevice* device)
     return colorBuffer;
 }
 
-GPU_TEST_CASE("cmd-draw-pipeline-switch-vertex-stride", D3D12 | Vulkan)
+
+static void runCmdDrawPipelineSwitchVertexStride(IDevice* device)
 {
     // Stride 16 visits rows 0,1,2; stride 32 visits rows 0,2,4.
     // These triangles cover complementary halves of the same render target.
@@ -202,6 +203,11 @@ GPU_TEST_CASE("cmd-draw-pipeline-switch-vertex-stride", D3D12 | Vulkan)
     }
 }
 
+GPU_TEST_CASE("cmd-draw-pipeline-switch-vertex-stride", D3D12 | Vulkan)
+{
+    runCmdDrawPipelineSwitchVertexStride(device);
+}
+
 class BaseDrawTest
 {
 public:
@@ -214,7 +220,11 @@ public:
     ComPtr<ITexture> colorBuffer;
     ComPtr<ITextureView> colorBufferView;
 
-    void init(IDevice* device_) { this->device = device_; }
+
+    void init(IDevice* device_)
+    {
+        this->device = device_;
+    }
 
     void createRequiredResources()
     {
@@ -315,7 +325,7 @@ struct DrawInstancedTest : BaseDrawTest
         renderPass.colorAttachmentCount = 1;
         auto passEncoder = commandEncoder->beginRenderPass(renderPass);
 
-        passEncoder->bindPipeline(pipeline);
+        REQUIRE(passEncoder->bindPipeline(pipeline) != nullptr);
 
         RenderState state;
         state.viewports[0] = Viewport::fromSize(kWidth, kHeight);
@@ -371,7 +381,7 @@ struct DrawIndexedInstancedTest : BaseDrawTest
         renderPass.colorAttachmentCount = 1;
         auto passEncoder = commandEncoder->beginRenderPass(renderPass);
 
-        passEncoder->bindPipeline(pipeline);
+        REQUIRE(passEncoder->bindPipeline(pipeline) != nullptr);
 
         RenderState state;
         state.vertexBuffers[0] = vertexBuffer;
@@ -456,7 +466,7 @@ struct DrawIndirectTest : BaseDrawTest
         renderPass.colorAttachmentCount = 1;
         auto passEncoder = commandEncoder->beginRenderPass(renderPass);
 
-        passEncoder->bindPipeline(pipeline);
+        REQUIRE(passEncoder->bindPipeline(pipeline) != nullptr);
 
         RenderState state;
         state.vertexBuffers[0] = vertexBuffer;
@@ -539,7 +549,7 @@ struct DrawIndexedIndirectTest : BaseDrawTest
         renderPass.colorAttachmentCount = 1;
         auto passEncoder = commandEncoder->beginRenderPass(renderPass);
 
-        passEncoder->bindPipeline(pipeline);
+        REQUIRE(passEncoder->bindPipeline(pipeline) != nullptr);
 
         RenderState state;
         state.vertexBuffers[0] = vertexBuffer;
@@ -587,24 +597,44 @@ void testDraw(IDevice* device)
     test.run();
 }
 
-GPU_TEST_CASE("cmd-draw-instanced", D3D11 | D3D12 | Vulkan | Metal | WGPU)
+static void runCmdDrawInstanced(IDevice* device)
 {
     testDraw<DrawInstancedTest>(device);
 }
 
-GPU_TEST_CASE("cmd-draw-indexed-instanced", D3D11 | D3D12 | Vulkan | Metal | WGPU)
+GPU_TEST_CASE("cmd-draw-instanced", D3D11 | D3D12 | Vulkan | Metal | WGPU)
+{
+    runCmdDrawInstanced(device);
+}
+
+static void runCmdDrawIndexedInstanced(IDevice* device)
 {
     testDraw<DrawIndexedInstancedTest>(device);
 }
 
-GPU_TEST_CASE("cmd-draw-indirect", D3D11 | D3D12 | Vulkan | WGPU)
+GPU_TEST_CASE("cmd-draw-indexed-instanced", D3D11 | D3D12 | Vulkan | Metal | WGPU)
+{
+    runCmdDrawIndexedInstanced(device);
+}
+
+static void runCmdDrawIndirect(IDevice* device)
 {
     testDraw<DrawIndirectTest>(device);
 }
 
-GPU_TEST_CASE("cmd-draw-indexed-indirect", D3D11 | D3D12 | Vulkan | WGPU)
+GPU_TEST_CASE("cmd-draw-indirect", D3D11 | D3D12 | Vulkan | WGPU)
+{
+    runCmdDrawIndirect(device);
+}
+
+static void runCmdDrawIndexedIndirect(IDevice* device)
 {
     testDraw<DrawIndexedIndirectTest>(device);
+}
+
+GPU_TEST_CASE("cmd-draw-indexed-indirect", D3D11 | D3D12 | Vulkan | WGPU)
+{
+    runCmdDrawIndexedIndirect(device);
 }
 
 namespace dynamicDrawStateTests {
@@ -620,7 +650,11 @@ ComPtr<ITexture> makeTarget(IDevice* device, bool depth = false)
     return texture;
 }
 
-ComPtr<IRenderPipeline> makePipeline(IDevice* device, const char* fragment, bool stencil, bool blend = false)
+ComPtr<IRenderPipeline> makePipeline(
+    IDevice* device,
+    const char* fragment,
+    bool stencil
+)
 {
     ComPtr<IShaderProgram> program;
     REQUIRE_CALL(loadAndLinkProgram(device, "test-dynamic-draw-state", {"vsMain", fragment}, program.writeRef()));
@@ -674,7 +708,7 @@ void checkPixels(IDevice* device, ITexture* texture, const std::array<float, 20>
     }
 }
 
-GPU_TEST_CASE("dynamic-stencil-reference-draw-pipeline-pass", D3D12 | Vulkan)
+static void runDynamicStencilReferenceDrawPipelinePass(IDevice* device)
 {
     auto first = makeTarget(device);
     auto second = makeTarget(device);
@@ -729,6 +763,11 @@ GPU_TEST_CASE("dynamic-stencil-reference-draw-pipeline-pass", D3D12 | Vulkan)
     checkPixels(device, second, {1,1,1,1, 1,1,1,1, 1,1,1,1, 1,1,1,1, 1,1,1,1});
 }
 
+GPU_TEST_CASE("dynamic-stencil-reference-draw-pipeline-pass", D3D12 | Vulkan)
+{
+    runDynamicStencilReferenceDrawPipelinePass(device);
+}
+
 GPU_TEST_CASE("input-layout-explicit-location-validation", Vulkan)
 {
     VertexStreamDesc stream{};
@@ -764,7 +803,7 @@ GPU_TEST_CASE("input-layout-explicit-location-validation", Vulkan)
     CHECK(layout == nullptr);
 }
 
-GPU_TEST_CASE("cmd-draw-pipeline-switch-unused-vertex-streams", D3D12 | Vulkan)
+static void runCmdDrawPipelineSwitchUnusedVertexStreams(IDevice* device)
 {
     auto target = makeTarget(device);
     auto vertexBuffer = createVertexBuffer(device);
@@ -829,6 +868,11 @@ GPU_TEST_CASE("cmd-draw-pipeline-switch-unused-vertex-streams", D3D12 | Vulkan)
     REQUIRE_CALL(queue->submit(commands));
     REQUIRE_CALL(queue->waitOnHost());
     checkPixels(device, target, {3,0,0,3, 3,0,0,3, 3,0,0,3, 3,0,0,3, 3,0,0,3});
+}
+
+GPU_TEST_CASE("cmd-draw-pipeline-switch-unused-vertex-streams", D3D12 | Vulkan)
+{
+    runCmdDrawPipelineSwitchUnusedVertexStreams(device);
 }
 
 } // namespace dynamicDrawStateTests

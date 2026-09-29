@@ -222,7 +222,10 @@ Result CommandRecorder::record(CommandBufferImpl* commandBuffer)
     commitBarriers();
     m_stateTracking.clear();
 
-    SLANG_D3D_RETURN_ON_FAIL_REPORT(m_cmdList->Close(), m_device);
+    {
+        SLANG_RHI_BINDING_TIMER(closeNs, closeCalls);
+        SLANG_D3D_RETURN_ON_FAIL_REPORT(m_cmdList->Close(), m_device);
+    }
 
     return SLANG_OK;
 }
@@ -893,7 +896,7 @@ void CommandRecorder::cmdSetRenderState(const commands::SetRenderState& cmd)
     if (updatePipeline)
     {
         m_renderPipeline = checked_cast<RenderPipelineImpl*>(cmd.pipeline);
-        m_cmdList->SetGraphicsRootSignature(m_renderPipeline->m_rootObjectLayout->m_rootSignature);
+        m_cmdList->SetGraphicsRootSignature(m_renderPipeline->m_rootSignature);
         m_cmdList->SetPipelineState(m_renderPipeline->m_pipelineState);
         m_cmdList->IASetPrimitiveTopology(m_renderPipeline->m_primitiveTopology);
     }
@@ -1112,20 +1115,17 @@ void CommandRecorder::cmdSetComputeState(const commands::SetComputeState& cmd)
         return;
 
     bool updatePipeline = !m_computeStateValid || cmd.pipeline != m_computePipeline;
-    bool updateBindings = updatePipeline || cmd.bindingData != m_bindingData;
 
     if (updatePipeline)
     {
         m_computePipeline = checked_cast<ComputePipelineImpl*>(cmd.pipeline);
-        m_cmdList->SetComputeRootSignature(m_computePipeline->m_rootObjectLayout->m_rootSignature);
+        m_cmdList->SetComputeRootSignature(m_computePipeline->m_rootSignature);
         m_cmdList->SetPipelineState(m_computePipeline->m_pipelineState);
     }
 
-    if (updateBindings)
-    {
-        m_bindingData = static_cast<BindingDataImpl*>(cmd.bindingData);
-        setBindings(m_bindingData, BindMode::Compute);
-    }
+    // setBindings also orders UAV accesses when fixed parameters are reused.
+    m_bindingData = static_cast<BindingDataImpl*>(cmd.bindingData);
+    setBindings(m_bindingData, BindMode::Compute);
 
     commitBarriers();
 
@@ -1185,7 +1185,7 @@ void CommandRecorder::cmdSetRayTracingState(const commands::SetRayTracingState& 
     if (updatePipeline)
     {
         m_rayTracingPipeline = checked_cast<RayTracingPipelineImpl*>(cmd.pipeline);
-        m_cmdList->SetComputeRootSignature(m_rayTracingPipeline->m_rootObjectLayout->m_rootSignature);
+        m_cmdList->SetComputeRootSignature(m_rayTracingPipeline->m_rootSignature);
         m_cmdList4->SetPipelineState1(m_rayTracingPipeline->m_stateObject);
     }
 
@@ -1763,22 +1763,22 @@ void CommandRecorder::cmdExecuteCallback(const commands::ExecuteCallback& cmd)
 
 void CommandRecorder::setBindings(BindingDataImpl* bindingData, BindMode bindMode)
 {
-    // First, we transition all resources to the required states.
-    for (uint32_t i = 0; i < bindingData->bufferStateCount; ++i)
+    for (auto* slice = bindingData->stateSlices; slice; slice = slice->next)
     {
-        const auto& bufferState = bindingData->bufferStates[i];
-        m_stateTracking.requireBufferState(
-            bufferState.buffer, bufferState.state, getBufferReadStatePolicy(m_queueType)
-        );
-    }
-    for (uint32_t i = 0; i < bindingData->textureStateCount; ++i)
-    {
-        const auto& textureState = bindingData->textureStates[i];
-        requireTextureState(
-            textureState.textureView->m_texture,
-            textureState.textureView->m_desc.subresourceRange,
-            textureState.state
-        );
+        SLANG_RHI_BINDING_COUNT(stateEntries, slice->buffers->size() + slice->textures->size());
+        // First, we transition all resources to the required states.
+        for (const auto& bufferState : *slice->buffers)
+        {
+            m_stateTracking.requireBufferState(
+                bufferState.buffer, bufferState.state, getBufferReadStatePolicy(m_queueType)
+            );
+        }
+        for (const auto& textureState : *slice->textures)
+        {
+            m_stateTracking.setTextureState(
+                textureState.texture, textureState.range, textureState.state
+            );
+        }
     }
 
     // We need barriers to be committed before setting root parameters.
@@ -2399,11 +2399,12 @@ Result CommandEncoderImpl::init()
 
 Result CommandEncoderImpl::getBindingData(RootShaderObject* rootObject, BindingData*& outBindingData)
 {
-    rootObject->trackResources(m_commandBuffer->m_trackedObjects);
+    SLANG_RHI_BINDING_SCOPE(m_commandBuffer);
     BindingDataBuilder builder;
     builder.m_device = getDevice<DeviceImpl>();
     builder.m_allocator = &m_commandBuffer->m_allocator;
     builder.m_bindingCache = &m_commandBuffer->m_bindingCache;
+    builder.m_retained = &m_commandBuffer->m_trackedObjects;
     builder.m_constantBufferArena = &m_commandBuffer->m_constantBufferArena;
     builder.m_cbvSrvUavArena = &m_commandBuffer->m_cbvSrvUavArena;
     builder.m_samplerArena = &m_commandBuffer->m_samplerArena;
@@ -2419,6 +2420,7 @@ Result CommandEncoderImpl::getBindingData(RootShaderObject* rootObject, BindingD
 
 Result CommandEncoderImpl::finish(const CommandBufferDesc& desc, ICommandBuffer** outCommandBuffer)
 {
+    SLANG_RHI_BINDING_FINISH(m_commandBuffer, "d3d12", m_queue->getType());
     m_commandBuffer->setDesc(desc);
     // Set the d3d command list debug name only when THIS finish provides a non-null
     // label. The previous logic derived `hadLabel` from the command buffer's prior
@@ -2430,11 +2432,18 @@ Result CommandEncoderImpl::finish(const CommandBufferDesc& desc, ICommandBuffer*
     {
         m_commandBuffer->m_d3dCommandList->SetName(string::to_wstring(desc.label).c_str());
     }
-    SLANG_RETURN_ON_FAIL(resolvePipelines(m_device));
+    {
+        SLANG_RHI_BINDING_TIMER(resolveNs, resolveCalls);
+        SLANG_RETURN_ON_FAIL(resolvePipelines(m_device));
+    }
     CommandRecorder recorder(getDevice<DeviceImpl>());
-    SLANG_RETURN_ON_FAIL(recorder.record(m_commandBuffer));
+    {
+        SLANG_RHI_BINDING_TIMER(recordInclusiveNs, recordCalls);
+        SLANG_RETURN_ON_FAIL(recorder.record(m_commandBuffer));
+    }
     returnComPtr(outCommandBuffer, m_commandBuffer);
     m_commandList = nullptr;
+    SLANG_RHI_BINDING_FINISH_SUCCESS();
     return SLANG_OK;
 }
 

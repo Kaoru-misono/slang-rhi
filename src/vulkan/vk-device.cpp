@@ -2844,6 +2844,10 @@ Result DeviceImpl::createShaderProgram(
 {
     RefPtr<ShaderProgramImpl> shaderProgram = new ShaderProgramImpl(this, desc);
     SLANG_RETURN_ON_FAIL(shaderProgram->init());
+    // Synthetic resources are not supported yet: upstream composes their descriptor sets at the
+    // root, while this fork's binding-table cache allocates each parameter block's sets itself.
+    if (shaderProgram->getSyntheticResourceBindingState())
+        return SLANG_E_NOT_IMPLEMENTED;
     SLANG_RETURN_ON_FAIL(
         RootShaderObjectLayoutImpl::create(
             this,

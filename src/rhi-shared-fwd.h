@@ -10,6 +10,7 @@ class Micromap;
 class Buffer;
 class Resource;
 class Texture;
+class Sampler;
 class TextureView;
 class QueryPool;
 class InputLayout;

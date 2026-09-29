@@ -152,6 +152,9 @@ Entry-point-scoped descriptors return `SLANG_E_NOT_IMPLEMENTED` at program creat
 
 ## `IShaderTable` interface
 
+
+
+
 ## `IPipeline` interface
 
 | API               | CPU | CUDA | D3D11 | D3D12 | Vulkan | Metal | WGPU |
@@ -275,6 +278,20 @@ for WebGPU recording errors and asynchronous validation.
 | `bindPipeline`            | yes | yes  | yes   | yes   | yes    | yes   | yes  |
 | `dispatchCompute`         | yes | yes  | yes   | yes   | yes    | yes   | yes  |
 | `dispatchComputeIndirect` | :x: | yes  | yes   | yes   | yes    | yes   | yes  |
+
+Shader-object parameters are materialized when draw/dispatch is recorded. Recorded commands
+retain the resource dependencies and constant snapshots. Raw descriptor handles require explicit
+resource state commands before the pass; copying a handle alone does not retain its resource.
+D3D12 sampler tables are cached by complete descriptor sequence and layout, independently of
+ordinary constant changes. Failed legacy materialization is reported by `finish`, without publishing
+a partial command buffer.
+
+### Vulkan allocation failures
+
+Native descriptor and constant-buffer allocation failures propagate without allocation-failure assertions.
+Failed allocations do not evict descriptors or overwrite existing constant data. Partially successful
+allocations from a failed bind remain owned until normal reset/release. Command buffers whose native
+reset fails are isolated instead of being returned to the reusable pool.
 
 ## `IRayTracingPassEncoder` interface
 

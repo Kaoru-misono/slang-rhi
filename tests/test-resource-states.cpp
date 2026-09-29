@@ -5,10 +5,11 @@
 using namespace rhi;
 using namespace rhi::testing;
 
-GPU_TEST_CASE("buffer-resource-states", D3D12 | Vulkan)
+static void runBufferResourceStates(IDevice* device)
 {
     ComPtr<IShaderProgram> shaderProgram;
     REQUIRE_CALL(loadProgram(device, "test-dummy", "computeMain", shaderProgram.writeRef()));
+
 
     ComputePipelineDesc pipelineDesc = {};
     pipelineDesc.program = shaderProgram.get();
@@ -50,19 +51,25 @@ GPU_TEST_CASE("buffer-resource-states", D3D12 | Vulkan)
         auto commandEncoder = queue->createCommandEncoder();
         commandEncoder->setBufferState(buffer, state);
         auto passEncoder = commandEncoder->beginComputePass();
-        passEncoder->bindPipeline(pipeline);
+        REQUIRE(passEncoder->bindPipeline(pipeline) != nullptr);
         passEncoder->dispatchCompute(1, 1, 1);
         passEncoder->end();
-        queue->submit(commandEncoder->finish());
+        REQUIRE_CALL(queue->submit(commandEncoder->finish()));
     }
 
-    queue->waitOnHost();
+    REQUIRE_CALL(queue->waitOnHost());
 }
 
-GPU_TEST_CASE("texture-resource-states", D3D12 | Vulkan)
+GPU_TEST_CASE("buffer-resource-states", D3D12 | Vulkan)
+{
+    runBufferResourceStates(device);
+}
+
+static void runTextureResourceStates(IDevice* device)
 {
     ComPtr<IShaderProgram> shaderProgram;
     REQUIRE_CALL(loadProgram(device, "test-dummy", "computeMain", shaderProgram.writeRef()));
+
 
     ComputePipelineDesc pipelineDesc = {};
     pipelineDesc.program = shaderProgram.get();
@@ -127,12 +134,17 @@ GPU_TEST_CASE("texture-resource-states", D3D12 | Vulkan)
             auto commandEncoder = queue->createCommandEncoder();
             commandEncoder->setTextureState(texture, state);
             auto passEncoder = commandEncoder->beginComputePass();
-            passEncoder->bindPipeline(pipeline);
+            REQUIRE(passEncoder->bindPipeline(pipeline) != nullptr);
             passEncoder->dispatchCompute(1, 1, 1);
             passEncoder->end();
-            queue->submit(commandEncoder->finish());
+            REQUIRE_CALL(queue->submit(commandEncoder->finish()));
         }
 
-        queue->waitOnHost();
+        REQUIRE_CALL(queue->waitOnHost());
     }
+}
+
+GPU_TEST_CASE("texture-resource-states", D3D12 | Vulkan)
+{
+    runTextureResourceStates(device);
 }

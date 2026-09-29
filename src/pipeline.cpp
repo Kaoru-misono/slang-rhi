@@ -17,6 +17,8 @@ Pipeline::Pipeline(Device* device)
     SLANG_RHI_ASSERT(m_specializationCacheId != 0);
 }
 
+Pipeline::~Pipeline() = default;
+
 // ----------------------------------------------------------------------------
 // RenderPipeline
 // ----------------------------------------------------------------------------

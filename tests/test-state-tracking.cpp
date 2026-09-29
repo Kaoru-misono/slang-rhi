@@ -1,4 +1,4 @@
-#include "testing.h"
+#include "test-compute-trivial.h"
 
 using namespace rhi;
 using namespace rhi::testing;
@@ -10,15 +10,9 @@ using namespace rhi::testing;
 // exercise both barrier merging (redundant transitions collapsed)
 // and split barriers (D3D12 BEGIN_ONLY/END_ONLY at pass boundaries).
 // ------------------------------------------------------------------
-GPU_TEST_CASE("state-tracking-multi-pass", D3D12 | Vulkan)
+static void runStateTrackingMultiPass(IDevice* device)
 {
-    ComPtr<IShaderProgram> shaderProgram;
-    REQUIRE_CALL(loadProgram(device, "test-compute-trivial", "computeMain", shaderProgram.writeRef()));
-
-    ComputePipelineDesc pipelineDesc = {};
-    pipelineDesc.program = shaderProgram.get();
-    ComPtr<IComputePipeline> pipeline;
-    REQUIRE_CALL(device->createComputePipeline(pipelineDesc, pipeline.writeRef()));
+    auto pipeline = trivialCompute::createPipeline(device);
 
     const int numberCount = 4;
     float initialA[] = {0.0f, 1.0f, 2.0f, 3.0f};
@@ -48,11 +42,8 @@ GPU_TEST_CASE("state-tracking-multi-pass", D3D12 | Vulkan)
         // Pass 1: buffer[i] = buffer[i] + 1 + value(10) → A becomes {11, 12, 13, 14}
         {
             auto pass = encoder->beginComputePass();
-            auto rootObject = pass->bindPipeline(pipeline);
-            ShaderCursor cursor(rootObject);
-            cursor["buffer"].setBinding(bufferA);
             float value = 10.0f;
-            cursor["value"].setData(value);
+            trivialCompute::bindBuffer(device, pass, pipeline, bufferA, value);
             pass->dispatchCompute(1, 1, 1);
             pass->end();
         }
@@ -60,11 +51,8 @@ GPU_TEST_CASE("state-tracking-multi-pass", D3D12 | Vulkan)
         // Pass 2: buffer[i] = buffer[i] + 1 + value(5) → B becomes {106, 206, 306, 406}
         {
             auto pass = encoder->beginComputePass();
-            auto rootObject = pass->bindPipeline(pipeline);
-            ShaderCursor cursor(rootObject);
-            cursor["buffer"].setBinding(bufferB);
             float value = 5.0f;
-            cursor["value"].setData(value);
+            trivialCompute::bindBuffer(device, pass, pipeline, bufferB, value);
             pass->dispatchCompute(1, 1, 1);
             pass->end();
         }
@@ -75,6 +63,11 @@ GPU_TEST_CASE("state-tracking-multi-pass", D3D12 | Vulkan)
 
     compareComputeResult(device, bufferA, makeArray<float>(11.0f, 12.0f, 13.0f, 14.0f));
     compareComputeResult(device, bufferB, makeArray<float>(106.0f, 206.0f, 306.0f, 406.0f));
+}
+
+GPU_TEST_CASE("state-tracking-multi-pass", D3D12 | Vulkan)
+{
+    runStateTrackingMultiPass(device);
 }
 
 // ------------------------------------------------------------------
@@ -134,15 +127,9 @@ GPU_TEST_CASE("state-tracking-copy-chain", D3D12 | Vulkan)
 // Compute writes to buffer, then copy reads it — exercises the
 // UAV → CopySrc transition with barrier merging and split barriers.
 // ------------------------------------------------------------------
-GPU_TEST_CASE("state-tracking-compute-then-copy", D3D12 | Vulkan)
+static void runStateTrackingComputeThenCopy(IDevice* device)
 {
-    ComPtr<IShaderProgram> shaderProgram;
-    REQUIRE_CALL(loadProgram(device, "test-compute-trivial", "computeMain", shaderProgram.writeRef()));
-
-    ComputePipelineDesc pipelineDesc = {};
-    pipelineDesc.program = shaderProgram.get();
-    ComPtr<IComputePipeline> pipeline;
-    REQUIRE_CALL(device->createComputePipeline(pipelineDesc, pipeline.writeRef()));
+    auto pipeline = trivialCompute::createPipeline(device);
 
     const int count = 4;
     Size dataSize = count * sizeof(float);
@@ -177,11 +164,8 @@ GPU_TEST_CASE("state-tracking-compute-then-copy", D3D12 | Vulkan)
         // Compute pass: buffer[i] += 1 + value(0) → {2, 3, 4, 5}
         {
             auto pass = encoder->beginComputePass();
-            auto rootObject = pass->bindPipeline(pipeline);
-            ShaderCursor cursor(rootObject);
-            cursor["buffer"].setBinding(computeBuffer);
             float value = 0.0f;
-            cursor["value"].setData(value);
+            trivialCompute::bindBuffer(device, pass, pipeline, computeBuffer, value);
             pass->dispatchCompute(1, 1, 1);
             pass->end();
         }
@@ -199,19 +183,18 @@ GPU_TEST_CASE("state-tracking-compute-then-copy", D3D12 | Vulkan)
     compareComputeResult(device, copyDst, makeArray<float>(2.0f, 3.0f, 4.0f, 5.0f));
 }
 
+GPU_TEST_CASE("state-tracking-compute-then-copy", D3D12 | Vulkan)
+{
+    runStateTrackingComputeThenCopy(device);
+}
+
 // ------------------------------------------------------------------
 // Test: Repeated UAV dispatches — same buffer written multiple times.
 // Exercises UAV→UAV barrier handling (must not be merged away).
 // ------------------------------------------------------------------
-GPU_TEST_CASE("state-tracking-repeated-uav", D3D12 | Vulkan)
+static void runStateTrackingRepeatedUav(IDevice* device)
 {
-    ComPtr<IShaderProgram> shaderProgram;
-    REQUIRE_CALL(loadProgram(device, "test-compute-trivial", "computeMain", shaderProgram.writeRef()));
-
-    ComputePipelineDesc pipelineDesc = {};
-    pipelineDesc.program = shaderProgram.get();
-    ComPtr<IComputePipeline> pipeline;
-    REQUIRE_CALL(device->createComputePipeline(pipelineDesc, pipeline.writeRef()));
+    auto pipeline = trivialCompute::createPipeline(device);
 
     const int count = 4;
     float initial[] = {0.0f, 0.0f, 0.0f, 0.0f};
@@ -242,11 +225,8 @@ GPU_TEST_CASE("state-tracking-repeated-uav", D3D12 | Vulkan)
 
         for (int i = 0; i < 3; ++i)
         {
-            auto rootObject = pass->bindPipeline(pipeline);
-            ShaderCursor cursor(rootObject);
-            cursor["buffer"].setBinding(buffer);
             float value = 0.0f;
-            cursor["value"].setData(value);
+            trivialCompute::bindBuffer(device, pass, pipeline, buffer, value);
             pass->dispatchCompute(1, 1, 1);
         }
 
@@ -256,6 +236,11 @@ GPU_TEST_CASE("state-tracking-repeated-uav", D3D12 | Vulkan)
     }
 
     compareComputeResult(device, buffer, makeArray<float>(3.0f, 3.0f, 3.0f, 3.0f));
+}
+
+GPU_TEST_CASE("state-tracking-repeated-uav", D3D12 | Vulkan)
+{
+    runStateTrackingRepeatedUav(device);
 }
 
 // ------------------------------------------------------------------

@@ -1,4 +1,4 @@
-#include "testing.h"
+#include "test-compute-trivial.h"
 
 using namespace rhi;
 using namespace rhi::testing;
@@ -87,7 +87,7 @@ GPU_TEST_CASE("transfer-queue-copy", D3D12 | Vulkan)
 }
 
 // Test using all three queues simultaneously.
-GPU_TEST_CASE("transfer-queue-all-queues", D3D12 | Vulkan)
+static void runTransferQueueAllQueues(IDevice* device)
 {
     auto graphicsQueue = device->getQueue(QueueType::Graphics);
     auto computeQueue = device->getQueue(QueueType::Compute);
@@ -96,13 +96,7 @@ GPU_TEST_CASE("transfer-queue-all-queues", D3D12 | Vulkan)
     REQUIRE(computeQueue != nullptr);
     REQUIRE(transferQueue != nullptr);
 
-    ComPtr<IShaderProgram> shaderProgram;
-    REQUIRE_CALL(loadProgram(device, "test-compute-trivial", "computeMain", shaderProgram.writeRef()));
-
-    ComputePipelineDesc pipelineDesc = {};
-    pipelineDesc.program = shaderProgram.get();
-    ComPtr<IComputePipeline> pipeline;
-    REQUIRE_CALL(device->createComputePipeline(pipelineDesc, pipeline.writeRef()));
+    auto pipeline = trivialCompute::createPipeline(device);
 
     const int numberCount = 4;
     float initialDataA[] = {0.0f, 1.0f, 2.0f, 3.0f};
@@ -151,11 +145,8 @@ GPU_TEST_CASE("transfer-queue-all-queues", D3D12 | Vulkan)
     {
         auto encoder = graphicsQueue->createCommandEncoder();
         auto pass = encoder->beginComputePass();
-        auto rootObject = pass->bindPipeline(pipeline);
-        ShaderCursor shaderCursor(rootObject);
-        shaderCursor["buffer"].setBinding(bufferA);
         float value = 10.f;
-        shaderCursor["value"].setData(value);
+        trivialCompute::bindBuffer(device, pass, pipeline, bufferA, value);
         pass->dispatchCompute(1, 1, 1);
         pass->end();
         graphicsQueue->submit(encoder->finish());
@@ -166,11 +157,8 @@ GPU_TEST_CASE("transfer-queue-all-queues", D3D12 | Vulkan)
         auto encoder = computeQueue->createCommandEncoder();
         encoder->acquireBufferFromQueue(bufferB, ResourceState::UnorderedAccess, QueueType::Graphics);
         auto pass = encoder->beginComputePass();
-        auto rootObject = pass->bindPipeline(pipeline);
-        ShaderCursor shaderCursor(rootObject);
-        shaderCursor["buffer"].setBinding(bufferB);
         float value = 5.f;
-        shaderCursor["value"].setData(value);
+        trivialCompute::bindBuffer(device, pass, pipeline, bufferB, value);
         pass->dispatchCompute(1, 1, 1);
         pass->end();
         encoder->releaseBufferForQueue(bufferB, ResourceState::UnorderedAccess, QueueType::Graphics);
@@ -206,6 +194,11 @@ GPU_TEST_CASE("transfer-queue-all-queues", D3D12 | Vulkan)
     compareComputeResult(device, bufferA, makeArray<float>(11.0f, 12.0f, 13.0f, 14.0f));
     compareComputeResult(device, bufferB, makeArray<float>(16.0f, 26.0f, 36.0f, 46.0f));
     compareComputeResult(device, copyDst, makeArray<float>(100.0f, 200.0f, 300.0f, 400.0f));
+}
+
+GPU_TEST_CASE("transfer-queue-all-queues", D3D12 | Vulkan)
+{
+    runTransferQueueAllQueues(device);
 }
 
 // Test queue family ownership transfer workflow.
@@ -357,7 +350,7 @@ GPU_TEST_CASE("concurrent-resources-initial-data-three-queues", D3D12 | Vulkan)
     }
 
     // A non-default texture read layout must finish before a copy on another queue.
-    auto pipeline = trivialCompute::createPipeline(device, trivialCompute::BindingModel::Flat, "readTexture");
+    auto pipeline = trivialCompute::createPipeline(device, "readTexture");
     BufferDesc resultDesc = {};
     resultDesc.size = sizeof(float);
     resultDesc.elementSize = sizeof(float);
@@ -443,7 +436,7 @@ GPU_TEST_CASE("shader-resource-texture-default-compute-roundtrip", D3D12)
     }
     syncQueues(device, graphicsQueue, computeQueue);
 
-    auto pipeline = trivialCompute::createPipeline(device, trivialCompute::BindingModel::Flat, "writeTexture");
+    auto pipeline = trivialCompute::createPipeline(device, "writeTexture");
     {
         auto encoder = computeQueue->createCommandEncoder();
         REQUIRE(encoder);
