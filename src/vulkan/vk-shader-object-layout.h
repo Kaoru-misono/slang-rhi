@@ -33,6 +33,9 @@ struct SimpleBindingOffset
     /// The descriptor `set` that the `binding` field should be understood as an index into
     uint32_t bindingSet = 0;
 
+    // ParameterBlock spaces are independent of ordinary descriptor-table offsets.
+    uint32_t parameterBlockSet = 0;
+
     /// The offset in push-constant ranges (not bytes)
     uint32_t pushConstantRange = 0;
 
@@ -46,6 +49,7 @@ struct SimpleBindingOffset
         {
             bindingSet = (uint32_t)varLayout->getBindingSpace(SLANG_PARAMETER_CATEGORY_DESCRIPTOR_TABLE_SLOT);
             binding = (uint32_t)varLayout->getOffset(SLANG_PARAMETER_CATEGORY_DESCRIPTOR_TABLE_SLOT);
+            parameterBlockSet = (uint32_t)varLayout->getOffset(SLANG_PARAMETER_CATEGORY_SUB_ELEMENT_REGISTER_SPACE);
             pushConstantRange = (uint32_t)varLayout->getOffset(SLANG_PARAMETER_CATEGORY_PUSH_CONSTANT_BUFFER);
         }
     }
@@ -55,6 +59,7 @@ struct SimpleBindingOffset
     {
         binding += offset.binding;
         bindingSet += offset.bindingSet;
+        parameterBlockSet += offset.parameterBlockSet;
         pushConstantRange += offset.pushConstantRange;
     }
 };
@@ -155,6 +160,8 @@ public:
 
         /// Stride between consecutive objects in this range
         SubObjectRangeStride stride;
+
+        uint32_t childSetOffset;
     };
 
     struct DescriptorSetInfo
@@ -462,10 +469,12 @@ protected:
     Result addAllDescriptorSets();
 
     /// Recurisvely add descriptor sets defined by `layout` and sub-objects
-    Result addAllDescriptorSetsRec(ShaderObjectLayoutImpl* layout);
+    Result addAllDescriptorSetsRec(ShaderObjectLayoutImpl* layout, const BindingOffset& offset);
 
     /// Recurisvely add descriptor sets defined by sub-objects of `layout`
-    Result addChildDescriptorSetsRec(ShaderObjectLayoutImpl* layout);
+    Result addChildDescriptorSetsRec(ShaderObjectLayoutImpl* layout, const BindingOffset& offset);
+
+    Result addDescriptorSetLayout(uint64_t setIndex, VkDescriptorSetLayout layout);
 
     /// Add all the push-constant ranges implied by this root object and sub-objects
     Result addAllPushConstantRanges();
@@ -481,6 +490,8 @@ public:
     slang::ProgramLayout* m_programLayout = nullptr;
     std::vector<EntryPointInfo> m_entryPoints;
     VkPipelineLayout m_pipelineLayout = VK_NULL_HANDLE;
+    VkDescriptorSetLayout m_emptyDescriptorSetLayout = VK_NULL_HANDLE;
+    uint32_t m_bindlessSetIndex = UINT32_MAX;
     static_vector<VkDescriptorSetLayout, kMaxDescriptorSets> m_vkDescriptorSetLayouts;
     std::vector<VkPushConstantRange> m_allPushConstantRanges;
     uint32_t m_totalPushConstantSize = 0;

@@ -1937,7 +1937,8 @@ public:
     virtual SLANG_NO_THROW Result SLANG_MCALL setBinding(const ShaderOffset& offset, const Binding& binding) = 0;
     virtual SLANG_NO_THROW Result SLANG_MCALL setDescriptorHandle(
         const ShaderOffset& offset,
-        const DescriptorHandle& handle
+        const DescriptorHandle& handle,
+        IResource* owner = nullptr
     ) = 0;
 
     /// Reserves a block of memory within the shader object's internal data buffer at the specified offset.
@@ -1985,156 +1986,6 @@ public:
 
 /// Resource kinds named after the HLSL types they bind to. Each maps 1:1 to a reflected
 /// (resource shape, access) pair, so a binding set layout can be validated exactly.
-enum class BindingKind
-{
-    SamplerState,
-    SamplerComparisonState,
-    Texture1D,
-    Texture2D,
-    Texture2DArray,
-    Texture3D,
-    TextureCube,
-    TextureCubeArray,
-    RWTexture1D,
-    RWTexture2D,
-    RWTexture2DArray,
-    RWTexture3D,
-    /// Typed (formatted) buffers.
-    Buffer,
-    RWBuffer,
-    /// Structured buffers; the element stride comes from the reflected element type.
-    StructuredBuffer,
-    RWStructuredBuffer,
-    /// Raw buffers.
-    ByteAddressBuffer,
-    RWByteAddressBuffer,
-    RaytracingAccelerationStructure,
-};
-
-struct BindingSetLayoutEntry
-{
-    BindingKind kind = BindingKind::SamplerState;
-    /// Fixed array length, 1 for a non-array binding.
-    uint32_t count = 1;
-    /// Optional; a mismatch against the reflected field name is only warned about.
-    const char* name = nullptr;
-};
-
-struct BindingSetLayoutDesc
-{
-    const BindingSetLayoutEntry* entries = nullptr;
-    uint32_t entryCount = 0;
-    const char* label = nullptr;
-};
-
-/// Layout of one ParameterBlock. Object identity is the compatibility rule: a binding set can
-/// only be used with the layout object it was created from.
-class IBindingSetLayout : public ISlangUnknown
-{
-    SLANG_COM_INTERFACE(0xe37c2db7, 0xb8ed, 0x4bf8, {0xad, 0x41, 0xe2, 0x78, 0x9a, 0xc7, 0x1b, 0xa4});
-
-public:
-    virtual SLANG_NO_THROW const BindingSetLayoutDesc& SLANG_MCALL getDesc() = 0;
-};
-
-/// One resolved binding. The layout entry at `slot` fixes which interface `resource` must expose:
-/// ISampler, ITextureView, IBuffer or IAccelerationStructure.
-struct BindingSetEntry
-{
-    uint32_t slot = 0;
-    uint32_t arrayIndex = 0;
-    ISlangUnknown* resource = nullptr;
-    /// Only meaningful for a buffer kind; must be kEntireBuffer for any other kind.
-    BufferRange bufferRange = kEntireBuffer;
-};
-
-/// A StructuredBuffer entry takes its stride from the reflected element type, which the layout
-/// only learns when a pipeline layout validates it. Create the pipeline layout first, or give the
-/// buffer an elementSize to fall back on.
-struct BindingSetDesc
-{
-    IBindingSetLayout* layout = nullptr;
-    const BindingSetEntry* entries = nullptr;
-    uint32_t entryCount = 0;
-    const char* label = nullptr;
-};
-
-/// Immutable once created: every slot of its layout is filled at creation time and there are no setters.
-class IBindingSet : public ISlangUnknown
-{
-    SLANG_COM_INTERFACE(0xececafdd, 0x7d3b, 0x4b7b, {0xac, 0x17, 0xfa, 0xdd, 0xbb, 0x3b, 0x7c, 0x05});
-
-public:
-    virtual SLANG_NO_THROW IBindingSetLayout* SLANG_MCALL getLayout() = 0;
-};
-
-/// Binds one reflected ParameterBlock, addressed by its dotted path in the program
-/// (for example "scene" or "scene.materials").
-struct PipelineLayoutSetDesc
-{
-    const char* path = nullptr;
-    IBindingSetLayout* layout = nullptr;
-};
-
-struct PipelineLayoutDesc
-{
-    /// Fully specialized program the layout is validated against.
-    IShaderProgram* program = nullptr;
-    /// The program's parameter blocks, in reflection order, which is also the order FlatBindingDesc
-    /// binds them in. Creation fails when the paths do not match the reflection exactly.
-    const PipelineLayoutSetDesc* sets = nullptr;
-    uint32_t setCount = 0;
-    /// Byte size of the execution constant block the caller will supply, which must equal the size
-    /// the program reflects. Zero requires the program to contain no ordinary data at all.
-    size_t constantsSize = 0;
-    const char* label = nullptr;
-};
-
-/// How the execution constants of a pipeline layout reach the shader.
-enum class ConstantsProfile
-{
-    None,
-    /// Push constants or entry-point uniforms, written inline when the pipeline is bound.
-    Inline,
-    /// A ConstantBuffer in its own space, sourced from a transient buffer when the pipeline is bound.
-    Buffered,
-};
-
-/// The complete parameter shape of a pipeline: an ordered list of binding set layouts plus at most
-/// one execution constant block.
-class IPipelineLayout : public ISlangUnknown
-{
-    SLANG_COM_INTERFACE(0x45eb467d, 0x18cc, 0x4ed8, {0x97, 0x7f, 0x42, 0xfb, 0x71, 0xfd, 0xc3, 0xe1});
-
-public:
-    virtual SLANG_NO_THROW const PipelineLayoutDesc& SLANG_MCALL getDesc() = 0;
-    virtual SLANG_NO_THROW ConstantsProfile SLANG_MCALL getConstantsProfile() = 0;
-    virtual SLANG_NO_THROW uint32_t SLANG_MCALL getConstantsSize() = 0;
-    virtual SLANG_NO_THROW uint32_t SLANG_MCALL getSetCount() = 0;
-};
-
-/// A resource reached through a descriptor handle instead of a binding set. Listing it keeps the
-/// resource alive for the submission and declares the state it must be transitioned to.
-struct ResourceAccess
-{
-    IBuffer* buffer = nullptr;
-    ITexture* texture = nullptr;
-    SubresourceRange subresourceRange = kEntireTexture;
-    ResourceState state = ResourceState::Undefined;
-};
-
-/// Everything a pipeline needs for one bind: the constant bytes, the binding sets in the order the
-/// pipeline layout declares them, and the bindless accesses to track.
-struct FlatBindingDesc
-{
-    const void* constants = nullptr;
-    size_t constantsSize = 0;
-    IBindingSet* const* sets = nullptr;
-    uint32_t setCount = 0;
-    const ResourceAccess* accesses = nullptr;
-    uint32_t accessCount = 0;
-};
-
 enum class StencilOp : uint8_t
 {
     Keep,
@@ -2300,9 +2151,6 @@ struct RenderPipelineDesc
 
     IShaderProgram* program = nullptr;
     IInputLayout* inputLayout = nullptr;
-    /// Optional. When set, the pipeline is created with this layout and is bound with a
-    /// FlatBindingDesc instead of a shader object.
-    IPipelineLayout* layout = nullptr;
     PrimitiveTopology primitiveTopology = PrimitiveTopology::TriangleList;
     const ColorTargetDesc* targets = nullptr;
     uint32_t targetCount = 0;
@@ -2323,9 +2171,6 @@ struct ComputePipelineDesc
     const void* next = nullptr;
 
     IShaderProgram* program = nullptr;
-    /// Optional. When set, the pipeline is created with this layout and is bound with a
-    /// FlatBindingDesc instead of a shader object.
-    IPipelineLayout* layout = nullptr;
     void* d3d12RootSignatureOverride = nullptr;
 
     /// Controls when target code and the backend pipeline are compiled.
@@ -2362,9 +2207,6 @@ struct RayTracingPipelineDesc
     const void* next = nullptr;
 
     IShaderProgram* program = nullptr;
-    /// Optional. When set, the pipeline is created with this layout and is bound with a
-    /// FlatBindingDesc instead of a shader object.
-    IPipelineLayout* layout = nullptr;
     uint32_t hitGroupCount = 0;
     const HitGroupDesc* hitGroups = nullptr;
     uint32_t maxRecursion = 0;
@@ -2857,12 +2699,6 @@ public:
     virtual SLANG_NO_THROW IShaderObject* SLANG_MCALL bindPipeline(IRenderPipeline* pipeline) = 0;
     virtual SLANG_NO_THROW void SLANG_MCALL bindPipeline(IRenderPipeline* pipeline, IShaderObject* rootObject) = 0;
 
-    /// Binds a pipeline created with an IPipelineLayout, without a shader object. The constant bytes
-    /// are copied immediately; `sets` must match the pipeline layout set for set.
-    virtual SLANG_NO_THROW Result SLANG_MCALL bindPipeline(
-        IRenderPipeline* pipeline,
-        const FlatBindingDesc& bindings
-    ) = 0;
 
     virtual SLANG_NO_THROW void SLANG_MCALL setRenderState(const RenderState& state) = 0;
     virtual SLANG_NO_THROW void SLANG_MCALL draw(const DrawArguments& args) = 0;
@@ -2888,12 +2724,6 @@ public:
     virtual SLANG_NO_THROW IShaderObject* SLANG_MCALL bindPipeline(IComputePipeline* pipeline) = 0;
     virtual SLANG_NO_THROW void SLANG_MCALL bindPipeline(IComputePipeline* pipeline, IShaderObject* rootObject) = 0;
 
-    /// Binds a pipeline created with an IPipelineLayout, without a shader object. The constant bytes
-    /// are copied immediately; `sets` must match the pipeline layout set for set.
-    virtual SLANG_NO_THROW Result SLANG_MCALL bindPipeline(
-        IComputePipeline* pipeline,
-        const FlatBindingDesc& bindings
-    ) = 0;
 
     virtual SLANG_NO_THROW void SLANG_MCALL dispatchCompute(uint32_t x, uint32_t y, uint32_t z) = 0;
     virtual SLANG_NO_THROW void SLANG_MCALL dispatchComputeIndirect(BufferOffsetPair argBuffer) = 0;
@@ -2914,13 +2744,6 @@ public:
         IShaderObject* rootObject
     ) = 0;
 
-    /// Binds a pipeline created with an IPipelineLayout, without a shader object. The constant bytes
-    /// are copied immediately; `sets` must match the pipeline layout set for set.
-    virtual SLANG_NO_THROW Result SLANG_MCALL bindPipeline(
-        IRayTracingPipeline* pipeline,
-        IShaderTable* shaderTable,
-        const FlatBindingDesc& bindings
-    ) = 0;
 
     virtual SLANG_NO_THROW void SLANG_MCALL dispatchRays(
         uint32_t rayGenShaderIndex,
@@ -4085,41 +3908,6 @@ public:
         return createShaderProgram(desc, outDiagnosticBlob);
     }
 
-    virtual SLANG_NO_THROW Result SLANG_MCALL createBindingSetLayout(
-        const BindingSetLayoutDesc& desc,
-        IBindingSetLayout** outLayout
-    ) = 0;
-
-    inline ComPtr<IBindingSetLayout> createBindingSetLayout(const BindingSetLayoutDesc& desc)
-    {
-        ComPtr<IBindingSetLayout> layout;
-        SLANG_RETURN_NULL_ON_FAIL(createBindingSetLayout(desc, layout.writeRef()));
-        return layout;
-    }
-
-    virtual SLANG_NO_THROW Result SLANG_MCALL createBindingSet(
-        const BindingSetDesc& desc,
-        IBindingSet** outBindingSet
-    ) = 0;
-
-    inline ComPtr<IBindingSet> createBindingSet(const BindingSetDesc& desc)
-    {
-        ComPtr<IBindingSet> bindingSet;
-        SLANG_RETURN_NULL_ON_FAIL(createBindingSet(desc, bindingSet.writeRef()));
-        return bindingSet;
-    }
-
-    virtual SLANG_NO_THROW Result SLANG_MCALL createPipelineLayout(
-        const PipelineLayoutDesc& desc,
-        IPipelineLayout** outLayout
-    ) = 0;
-
-    inline ComPtr<IPipelineLayout> createPipelineLayout(const PipelineLayoutDesc& desc)
-    {
-        ComPtr<IPipelineLayout> layout;
-        SLANG_RETURN_NULL_ON_FAIL(createPipelineLayout(desc, layout.writeRef()));
-        return layout;
-    }
 
     virtual SLANG_NO_THROW Result SLANG_MCALL createRenderPipeline(
         const RenderPipelineDesc& desc,

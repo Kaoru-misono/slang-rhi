@@ -4,6 +4,7 @@
 #include <array>
 #include <cstring>
 #include <vector>
+#include <memory>
 
 using namespace rhi;
 using namespace rhi::testing;
@@ -36,19 +37,6 @@ auto loadRtProgram(IDevice* device, bool multipleRaygen = false) -> ComPtr<IShad
     ));
     REQUIRE(program != nullptr);
     return program;
-}
-
-auto createRtSetLayout(IDevice* device) -> ComPtr<IBindingSetLayout>
-{
-    const BindingSetLayoutEntry entries[]{
-        {BindingKind::RaytracingAccelerationStructure, 1, "tlas"},
-        {BindingKind::RWTexture2D, 1, "output"},
-    };
-    const BindingSetLayoutDesc desc{.entries = entries, .entryCount = 2, .label = "scene"};
-    ComPtr<IBindingSetLayout> layout;
-    REQUIRE_CALL(device->createBindingSetLayout(desc, layout.writeRef()));
-    REQUIRE(layout != nullptr);
-    return layout;
 }
 
 auto createRtOutputTexture(IDevice* device) -> ComPtr<ITexture>
@@ -86,7 +74,7 @@ auto createRtShaderTable(IDevice* device, IShaderProgram* program, bool multiple
     return shaderTable;
 }
 
-auto createRtPipeline(IDevice* device, IShaderProgram* program, IPipelineLayout* layout)
+auto createRtPipeline(IDevice* device, IShaderProgram* program)
     -> ComPtr<IRayTracingPipeline>
 {
     HitGroupDesc hitGroup{};
@@ -94,7 +82,6 @@ auto createRtPipeline(IDevice* device, IShaderProgram* program, IPipelineLayout*
     hitGroup.closestHitEntryPoint = "closestHitMain";
     RayTracingPipelineDesc desc{};
     desc.program = program;
-    desc.layout = layout;
     desc.hitGroupCount = 1;
     desc.hitGroups = &hitGroup;
     desc.maxRayPayloadSize = 16;
@@ -126,7 +113,79 @@ auto rtExpectedTexels() -> std::array<float, kRtSize * kRtSize * 4>
 
 } // namespace
 
-GPU_TEST_CASE("flat-binding-ray-tracing", D3D12 | Vulkan)
+GPU_TEST_CASE("shader-object-recorded-ray-tracing-snapshots", D3D12 | Vulkan)
+{
+    bool inlineConstants = false;
+    bool sparseSets = false;
+    SUBCASE("buffered constants") {}
+    SUBCASE("inline constants and parameter block") { inlineConstants = true; }
+    SUBCASE("buffered constants and parameter block in set 3") { sparseSets = true; }
+    REQUIRE(device->hasFeature(Feature::RayTracing));
+    auto queue = device->getQueue(QueueType::Graphics);
+    auto blas = std::make_unique<SingleTriangleBLAS>(device, queue);
+    auto tlas = std::make_unique<TLAS>(device, queue, blas->blas, nullptr, true);
+    ComPtr<IShaderProgram> program;
+    const char* moduleName = sparseSets ? "test-shader-object-sparse-rt"
+        : inlineConstants ? "test-flat-binding-rt" : "test-shader-object-retained-rt";
+    REQUIRE_CALL(loadAndLinkProgram(device, moduleName,
+        {"rayGenMain", "rayGenAlternate", "missMain", "closestHitMain"}, program.writeRef()));
+    auto pipeline = createRtPipeline(device, program);
+    auto root = device->createRootShaderObject(program);
+    REQUIRE(root != nullptr);
+    std::array<ComPtr<ITexture>, 4> outputs;
+    std::array<ComPtr<ICommandEncoder>, 2> encoders;
+    for (uint32_t batch = 0; batch < 2; ++batch)
+    {
+        // The same raygen index selects a different shader after table reordering.
+        auto table = createRtShaderTable(device, program, true, batch == 1);
+        encoders[batch] = queue->createCommandEncoder();
+        auto* pass = encoders[batch]->beginRayTracingPass();
+        pass->bindPipeline(pipeline, table, root);
+        for (uint32_t draw = 0; draw < 2; ++draw)
+        {
+            const uint32_t index = batch * 2 + draw;
+            outputs[index] = createRtOutputTexture(device);
+            const RtParams params{{kRtSize, kRtSize}, 0.75f + float(index), 0.25f + float(index)};
+            ShaderCursor cursor(root);
+            REQUIRE_CALL(cursor["params"].getDereferenced().setData(&params, sizeof(params)));
+            REQUIRE_CALL(cursor["scene"]["tlas"].setBinding(tlas->tlas));
+            REQUIRE_CALL(cursor["scene"]["output"].setBinding(outputs[index]->getDefaultView()));
+            pass->dispatchRays(draw, kRtSize, kRtSize, 1);
+        }
+        pass->end();
+        table.setNull();
+    }
+    auto commandsB = encoders[1]->finish();
+    REQUIRE(commandsB != nullptr);
+    REQUIRE_CALL(queue->submit(commandsB));
+    REQUIRE_CALL(queue->waitOnHost());
+    encoders[1].setNull();
+    commandsB.setNull();
+    root.setNull();
+    pipeline.setNull();
+    program.setNull();
+    blas.reset();
+    tlas.reset();
+    // Only recorded native dependencies now own the old TLAS/BLAS, pipeline and table.
+    auto commandsA = encoders[0]->finish();
+    REQUIRE(commandsA != nullptr);
+    encoders[0].setNull();
+    REQUIRE_CALL(queue->submit(commandsA));
+    REQUIRE_CALL(queue->waitOnHost());
+    for (uint32_t index = 0; index < outputs.size(); ++index)
+    {
+        auto expected = rtExpectedTexels();
+        const bool alternate = ((index % 2) == 1) != ((index / 2) == 1);
+        for (uint32_t pixel = 0; pixel < kRtSize * kRtSize; ++pixel)
+            for (uint32_t c = 0; c < 3; ++c)
+                expected[pixel * 4 + c] += float(index) + (alternate ? 0.125f : 0.f);
+        std::array<uint32_t, kRtSize * kRtSize * 4> expectedBits{};
+        std::memcpy(expectedBits.data(), expected.data(), sizeof(expected));
+        compareComputeResult(device, outputs[index], 0, 0, expectedBits);
+    }
+}
+
+GPU_TEST_CASE("shader-object-ray-tracing", D3D12 | Vulkan)
 {
     if (!device->hasFeature(Feature::RayTracing))
         SKIP("ray tracing not supported");
@@ -136,43 +195,19 @@ GPU_TEST_CASE("flat-binding-ray-tracing", D3D12 | Vulkan)
     TLAS tlas(device, queue, blas.blas);
 
     auto program = loadRtProgram(device);
-    auto setLayout = createRtSetLayout(device);
-    const PipelineLayoutSetDesc sets[]{{"scene", setLayout}};
-    const PipelineLayoutDesc layoutDesc{program, sets, 1, sizeof(RtParams), "ray tracing"};
-    ComPtr<IPipelineLayout> layout;
-    REQUIRE_CALL(device->createPipelineLayout(layoutDesc, layout.writeRef()));
-    CHECK(layout->getSetCount() == 1);
-    CHECK(layout->getConstantsSize() == sizeof(RtParams));
-    // `[[vk::push_constant]]` exists only on Vulkan; D3D12 reflects the same block as an ordinary
-    // constant buffer, which the fork sources from a root CBV.
-    const auto expectedProfile =
-        device->getDeviceType() == DeviceType::Vulkan ? ConstantsProfile::Inline : ConstantsProfile::Buffered;
-    CHECK(layout->getConstantsProfile() == expectedProfile);
-
     auto output = createRtOutputTexture(device);
-    const BindingSetEntry entries[]{
-        {.slot = 0, .resource = tlas.tlas},
-        {.slot = 1, .resource = output->getDefaultView()},
-    };
-    const BindingSetDesc setDesc{.layout = setLayout, .entries = entries, .entryCount = 2, .label = "scene"};
-    ComPtr<IBindingSet> set;
-    REQUIRE_CALL(device->createBindingSet(setDesc, set.writeRef()));
 
-    auto pipeline = createRtPipeline(device, program, layout);
+    auto pipeline = createRtPipeline(device, program);
     auto shaderTable = createRtShaderTable(device, program);
 
     const RtParams params{.dims = {kRtSize, kRtSize}, .hitValue = kRtHitValue, .missValue = kRtMissValue};
-    IBindingSet* const boundSets[]{set};
-    const FlatBindingDesc bindings{
-        .constants = &params,
-        .constantsSize = sizeof(params),
-        .sets = boundSets,
-        .setCount = 1,
-    };
-
     auto encoder = queue->createCommandEncoder();
     auto pass = encoder->beginRayTracingPass();
-    REQUIRE_CALL(pass->bindPipeline(pipeline, shaderTable, bindings));
+    auto root = pass->bindPipeline(pipeline, shaderTable);
+    REQUIRE(root != nullptr);
+    REQUIRE_CALL(ShaderCursor(root)["params"].getDereferenced().setData(&params, sizeof(params)));
+    REQUIRE_CALL(ShaderCursor(root)["scene"]["tlas"].setBinding(tlas.tlas));
+    REQUIRE_CALL(ShaderCursor(root)["scene"]["output"].setBinding(output));
     pass->dispatchRays(0, kRtSize, kRtSize, 1);
     pass->end();
     auto commands = encoder->finish();
@@ -183,7 +218,7 @@ GPU_TEST_CASE("flat-binding-ray-tracing", D3D12 | Vulkan)
     compareComputeResult(device, output, 0, 0, rtExpectedTexels());
 }
 
-GPU_TEST_CASE("flat-binding-ray-tracing-multiple-raygen-table-retention", D3D12 | Vulkan)
+GPU_TEST_CASE("shader-object-ray-tracing-multiple-raygen-table-retention", D3D12 | Vulkan)
 {
     REQUIRE(device->hasFeature(Feature::RayTracing));
     bool releaseAfterSubmit = false;
@@ -194,12 +229,7 @@ GPU_TEST_CASE("flat-binding-ray-tracing-multiple-raygen-table-retention", D3D12 
     SingleTriangleBLAS blas(device, queue);
     TLAS tlas(device, queue, blas.blas);
     auto program = loadRtProgram(device, true);
-    auto setLayout = createRtSetLayout(device);
-    const PipelineLayoutSetDesc sets[]{{"scene", setLayout}};
-    const PipelineLayoutDesc layoutDesc{program, sets, 1, sizeof(RtParams), "multiple raygen"};
-    ComPtr<IPipelineLayout> layout;
-    REQUIRE_CALL(device->createPipelineLayout(layoutDesc, layout.writeRef()));
-    auto pipeline = createRtPipeline(device, program, layout);
+    auto pipeline = createRtPipeline(device, program);
 
     constexpr std::array<uint32_t, 3> indices{0, 1, 0};
     std::array<ComPtr<ITexture>, 6> outputs;
@@ -215,21 +245,11 @@ GPU_TEST_CASE("flat-binding-ray-tracing-multiple-raygen-table-retention", D3D12 
         {
             auto& output = outputs[tableIndex * indices.size() + dispatch];
             output = createRtOutputTexture(device);
-            const BindingSetEntry entries[]{
-                {.slot = 0, .resource = tlas.tlas},
-                {.slot = 1, .resource = output->getDefaultView()},
-            };
-            const BindingSetDesc setDesc{.layout = setLayout, .entries = entries, .entryCount = 2, .label = "scene"};
-            ComPtr<IBindingSet> set;
-            REQUIRE_CALL(device->createBindingSet(setDesc, set.writeRef()));
-            IBindingSet* const boundSets[]{set};
-            const FlatBindingDesc bindings{
-                .constants = &params,
-                .constantsSize = sizeof(params),
-                .sets = boundSets,
-                .setCount = 1,
-            };
-            REQUIRE_CALL(pass->bindPipeline(pipeline, table, bindings));
+            auto root = pass->bindPipeline(pipeline, table);
+            REQUIRE(root != nullptr);
+            REQUIRE_CALL(ShaderCursor(root)["params"].getDereferenced().setData(&params, sizeof(params)));
+            REQUIRE_CALL(ShaderCursor(root)["scene"]["tlas"].setBinding(tlas.tlas));
+            REQUIRE_CALL(ShaderCursor(root)["scene"]["output"].setBinding(output));
             pass->dispatchRays(indices[dispatch], kRtSize, kRtSize, 1);
         }
         pass->end();
@@ -243,9 +263,8 @@ GPU_TEST_CASE("flat-binding-ray-tracing-multiple-raygen-table-retention", D3D12 
         table.setNull();
     }
 
-    // Drop all caller-side program owners, including the pipeline layout, before waiting.
+    // Drop all caller-side program owners, before waiting.
     pipeline.setNull();
-    layout.setNull();
     program.setNull();
     if (!releaseAfterSubmit)
     {
@@ -293,55 +312,5 @@ GPU_TEST_CASE("flat-binding-ray-tracing-multiple-raygen-table-retention", D3D12 
                 CHECK(std::memcmp(actual, expected.data() + row * kRtSize * 4, rowBytes) == 0);
             }
         }
-    }
-}
-
-GPU_TEST_CASE("flat-binding-ray-tracing-layout-rejections", D3D12 | Vulkan)
-{
-    if (!device->hasFeature(Feature::RayTracing))
-        SKIP("ray tracing not supported");
-
-    auto program = loadRtProgram(device);
-    ExpectedErrorScope expectedErrors;
-    {
-        INFO("binding kinds in the wrong order");
-        const BindingSetLayoutEntry entries[]{
-            {BindingKind::RWTexture2D, 1, "output"},
-            {BindingKind::RaytracingAccelerationStructure, 1, "tlas"},
-        };
-        const BindingSetLayoutDesc desc{.entries = entries, .entryCount = 2, .label = "swapped"};
-        ComPtr<IBindingSetLayout> setLayout;
-        REQUIRE_CALL(device->createBindingSetLayout(desc, setLayout.writeRef()));
-        const PipelineLayoutSetDesc sets[]{{"scene", setLayout}};
-        const PipelineLayoutDesc layoutDesc{program, sets, 1, sizeof(RtParams), "swapped"};
-        ComPtr<IPipelineLayout> layout;
-        CHECK(SLANG_FAILED(device->createPipelineLayout(layoutDesc, layout.writeRef())));
-    }
-    {
-        INFO("set layout missing the parameter block's last entry");
-        const BindingSetLayoutEntry entries[]{{BindingKind::RaytracingAccelerationStructure, 1, "tlas"}};
-        const BindingSetLayoutDesc desc{.entries = entries, .entryCount = 1, .label = "short"};
-        ComPtr<IBindingSetLayout> setLayout;
-        REQUIRE_CALL(device->createBindingSetLayout(desc, setLayout.writeRef()));
-        const PipelineLayoutSetDesc sets[]{{"scene", setLayout}};
-        const PipelineLayoutDesc layoutDesc{program, sets, 1, sizeof(RtParams), "short"};
-        ComPtr<IPipelineLayout> layout;
-        CHECK(SLANG_FAILED(device->createPipelineLayout(layoutDesc, layout.writeRef())));
-    }
-    {
-        INFO("set path the program does not have");
-        auto setLayout = createRtSetLayout(device);
-        const PipelineLayoutSetDesc sets[]{{"missing", setLayout}};
-        const PipelineLayoutDesc layoutDesc{program, sets, 1, sizeof(RtParams), "missing path"};
-        ComPtr<IPipelineLayout> layout;
-        CHECK(SLANG_FAILED(device->createPipelineLayout(layoutDesc, layout.writeRef())));
-    }
-    {
-        INFO("layout omits the execution constants the program declares");
-        auto setLayout = createRtSetLayout(device);
-        const PipelineLayoutSetDesc sets[]{{"scene", setLayout}};
-        const PipelineLayoutDesc layoutDesc{program, sets, 1, 0, "no constants"};
-        ComPtr<IPipelineLayout> layout;
-        CHECK(SLANG_FAILED(device->createPipelineLayout(layoutDesc, layout.writeRef())));
     }
 }

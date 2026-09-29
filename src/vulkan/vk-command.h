@@ -62,12 +62,6 @@ public:
     Result init();
 
     virtual Result getBindingData(RootShaderObject* rootObject, BindingData*& outBindingData) override;
-    virtual Result getFlatBindingData(
-        Pipeline* pipeline,
-        const FlatBindingDesc& bindings,
-        std::span<const ResourceAccess> accesses,
-        BindingData*& outBindingData
-    ) override;
 
     // ICommandEncoder implementation
 

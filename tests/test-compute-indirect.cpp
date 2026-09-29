@@ -7,8 +7,8 @@ using namespace rhi::testing;
 
 struct IndirectComputePipeline
 {
-    ComPtr<IBindingSetLayout> setLayout;
-    ComPtr<IPipelineLayout> layout;
+    std::vector<const char*> names;
+    size_t constantsSize;
     ComPtr<IComputePipeline> pipeline;
 };
 
@@ -46,7 +46,7 @@ static ComPtr<slang::ISession> createIndirectSession(IDevice* device, const char
 static IndirectComputePipeline createIndirectPipeline(
     IDevice* device,
     const char* entryPoint,
-    std::initializer_list<BindingSetLayoutEntry> entries,
+    std::initializer_list<const char*> names,
     size_t constantsSize
 )
 {
@@ -54,74 +54,52 @@ static IndirectComputePipeline createIndirectPipeline(
     ComPtr<IShaderProgram> program;
     REQUIRE_CALL(loadProgram(device, session, "test-compute-indirect", entryPoint, program.writeRef()));
     IndirectComputePipeline result;
-    BindingSetLayoutDesc setDesc = {};
-    setDesc.entries = entries.begin();
-    setDesc.entryCount = uint32_t(entries.size());
-    REQUIRE_CALL(device->createBindingSetLayout(setDesc, result.setLayout.writeRef()));
-    PipelineLayoutSetDesc set = {"resources", result.setLayout};
-    PipelineLayoutDesc layoutDesc = {program, &set, 1, (constantsSize + 15) & ~size_t(15)};
-    REQUIRE_CALL(device->createPipelineLayout(layoutDesc, result.layout.writeRef()));
-    REQUIRE(result.layout->getDesc().constantsSize == layoutDesc.constantsSize);
-    REQUIRE(result.layout->getConstantsSize() == layoutDesc.constantsSize);
+    result.names = names;
+    result.constantsSize = (constantsSize + 15) & ~size_t(15);
     ComputePipelineDesc pipelineDesc = {};
     pipelineDesc.program = program;
-    pipelineDesc.layout = result.layout;
     REQUIRE_CALL(device->createComputePipeline(pipelineDesc, result.pipeline.writeRef()));
     return result;
 }
 
-static ComPtr<IBindingSet> createIndirectSet(
-    IDevice* device,
-    const IndirectComputePipeline& pipeline,
-    std::initializer_list<IBuffer*> buffers
-)
+static ComPtr<IShaderObject> createIndirectSet(
+    IDevice* device, const IndirectComputePipeline& pipeline, std::initializer_list<IBuffer*> buffers)
 {
-    std::vector<BindingSetEntry> entries;
+    auto root = device->createRootShaderObject(pipeline.pipeline->getProgram());
+    REQUIRE(root != nullptr);
+    ComPtr<IShaderObject> entry;
+    REQUIRE_CALL(root->getEntryPoint(0, entry.writeRef()));
+    auto resources = ShaderCursor(entry)["resources"];
+    uint32_t index = 0;
     for (auto* buffer : buffers)
-        entries.push_back({.slot = uint32_t(entries.size()), .resource = buffer});
-    BindingSetDesc desc = {};
-    desc.layout = pipeline.setLayout;
-    desc.entries = entries.data();
-    desc.entryCount = uint32_t(entries.size());
-    ComPtr<IBindingSet> result;
-    REQUIRE_CALL(device->createBindingSet(desc, result.writeRef()));
-    return result;
+        REQUIRE_CALL(resources[pipeline.names[index++]].setBinding(buffer));
+    return root;
 }
 
 static void bindIndirectPipeline(
-    IComputePassEncoder* encoder,
-    const IndirectComputePipeline& pipeline,
-    IBindingSet* set,
-    const void* constants = nullptr,
-    size_t constantsSize = 0
-)
+    IComputePassEncoder* encoder, const IndirectComputePipeline& pipeline, IShaderObject* root,
+    const void* constants = nullptr, size_t constantsSize = 0)
 {
-    size_t paddedSize = pipeline.layout->getDesc().constantsSize;
-    REQUIRE(paddedSize == ((constantsSize + 15) & ~size_t(15)));
-    std::vector<uint8_t> paddedConstants(paddedSize, 0);
-    if (constantsSize != 0)
+    REQUIRE(pipeline.constantsSize == ((constantsSize + 15) & ~size_t(15)));
+    if (constantsSize)
     {
-        REQUIRE(constants != nullptr);
-        std::memcpy(paddedConstants.data(), constants, constantsSize);
+        std::vector<uint8_t> padded(pipeline.constantsSize, 0);
+        std::memcpy(padded.data(), constants, constantsSize);
+        REQUIRE_CALL(ShaderCursor(root)["constants"].getDereferenced().setData(padded.data(), padded.size()));
     }
-    FlatBindingDesc binding = {};
-    binding.constants = paddedConstants.empty() ? nullptr : paddedConstants.data();
-    binding.constantsSize = paddedSize;
-    binding.sets = &set;
-    binding.setCount = 1;
-    REQUIRE_CALL(encoder->bindPipeline(pipeline.pipeline, binding));
+    encoder->bindPipeline(pipeline.pipeline, root);
 }
 
 // Test dispatchComputeIndirect with a simple compute shader.
 // The test sets up an indirect argument buffer with dispatch dimensions written by the GPU,
 // then verifies the compute shader ran with the correct number of threads.
-GPU_TEST_CASE("compute-indirect-flat", D3D12 | Vulkan)
+GPU_TEST_CASE("compute-indirect-shader-object", D3D12 | Vulkan)
 {
     auto pipeline = createIndirectPipeline(
-        device, "computeMain", {{BindingKind::RWByteAddressBuffer, 1, "outputBuffer"}}, sizeof(uint32_t));
+        device, "computeMain", {"outputBuffer"}, sizeof(uint32_t));
     auto writeArgsPipeline = createIndirectPipeline(
         device, "writeDispatchArgs",
-        {{BindingKind::RWStructuredBuffer, 1, "dispatchArgsBuffer"}}, 4 * sizeof(uint32_t));
+        {"dispatchArgsBuffer"}, 4 * sizeof(uint32_t));
 
     // Create output buffer to count how many threads ran for each dispatch
     const int dispatchCount = 4;
@@ -211,13 +189,13 @@ GPU_TEST_CASE("compute-indirect-flat", D3D12 | Vulkan)
 
 // Test dispatchComputeIndirect with zero dispatch dimensions.
 // This verifies the implementation handles edge cases correctly.
-GPU_TEST_CASE("compute-indirect-zero-flat", D3D12 | Vulkan)
+GPU_TEST_CASE("compute-indirect-zero-shader-object", D3D12 | Vulkan)
 {
     auto pipeline = createIndirectPipeline(
-        device, "computeMain", {{BindingKind::RWByteAddressBuffer, 1, "outputBuffer"}}, sizeof(uint32_t));
+        device, "computeMain", {"outputBuffer"}, sizeof(uint32_t));
     auto writeArgsPipeline = createIndirectPipeline(
         device, "writeDispatchArgs",
-        {{BindingKind::RWStructuredBuffer, 1, "dispatchArgsBuffer"}}, 4 * sizeof(uint32_t));
+        {"dispatchArgsBuffer"}, 4 * sizeof(uint32_t));
 
     // Create output buffer
     BufferDesc outputBufferDesc = {};
@@ -280,13 +258,13 @@ GPU_TEST_CASE("compute-indirect-zero-flat", D3D12 | Vulkan)
 
 // Test dispatchComputeIndirect with non-zero buffer offset.
 // This verifies the offset parameter is handled correctly.
-GPU_TEST_CASE("compute-indirect-offset-flat", D3D12 | Vulkan)
+GPU_TEST_CASE("compute-indirect-offset-shader-object", D3D12 | Vulkan)
 {
     auto pipeline = createIndirectPipeline(
-        device, "computeMain", {{BindingKind::RWByteAddressBuffer, 1, "outputBuffer"}}, sizeof(uint32_t));
+        device, "computeMain", {"outputBuffer"}, sizeof(uint32_t));
     auto writeArgsPipeline = createIndirectPipeline(
         device, "writeDispatchArgs",
-        {{BindingKind::RWStructuredBuffer, 1, "dispatchArgsBuffer"}}, 4 * sizeof(uint32_t));
+        {"dispatchArgsBuffer"}, 4 * sizeof(uint32_t));
 
     // Create output buffer
     BufferDesc outputBufferDesc = {};
@@ -354,11 +332,11 @@ static void runComputeIndirectShaderReadFlat(IDevice* device, QueueType queueTyp
 {
     auto writePipeline = createIndirectPipeline(
         device, "writeDispatchRecord",
-        {{BindingKind::RWStructuredBuffer, 1, "dispatchRecords"}}, 2 * sizeof(uint32_t));
+        {"dispatchRecords"}, 2 * sizeof(uint32_t));
     auto consumePipeline = createIndirectPipeline(
         device, "consumeDispatchRecord",
-        {{BindingKind::StructuredBuffer, 1, "dispatchRecords"},
-         {BindingKind::RWStructuredBuffer, 1, "outputBuffer"}}, 0);
+        {"dispatchRecords",
+         "outputBuffer"}, 0);
 
     BufferDesc recordDesc = {};
     recordDesc.size = 8 * sizeof(uint32_t);
@@ -431,12 +409,12 @@ static void runComputeIndirectShaderReadFlat(IDevice* device, QueueType queueTyp
     }
 }
 
-GPU_TEST_CASE("compute-indirect-shader-read-flat", D3D12 | Vulkan)
+GPU_TEST_CASE("compute-indirect-shader-read-shader-object", D3D12 | Vulkan)
 {
     runComputeIndirectShaderReadFlat(device, QueueType::Graphics);
 }
 
-GPU_TEST_CASE("compute-indirect-shader-read-compute-queue-flat", D3D12 | Vulkan)
+GPU_TEST_CASE("compute-indirect-shader-read-compute-queue-shader-object", D3D12 | Vulkan)
 {
     runComputeIndirectShaderReadFlat(device, QueueType::Compute);
 }

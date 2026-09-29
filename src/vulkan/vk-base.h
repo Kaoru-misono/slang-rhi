@@ -14,9 +14,6 @@ namespace rhi::vk {
 class BackendImpl;
 class AdapterImpl;
 class DeviceImpl;
-class BindingSetLayoutImpl;
-class BindingSetImpl;
-class PipelineLayoutImpl;
 class InputLayoutImpl;
 class BufferImpl;
 class FenceImpl;

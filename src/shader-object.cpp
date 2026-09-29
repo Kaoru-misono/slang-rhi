@@ -3,6 +3,7 @@
 #include "rhi-shared.h"
 
 #include <atomic>
+#include <algorithm>
 
 namespace rhi {
 
@@ -90,6 +91,7 @@ Result ShaderObject::setData(const ShaderOffset& offset, const void* data, Size 
         dataSize = availableSize - dataOffset;
     }
 
+    clearDescriptorOwners(dataOffset, dataSize);
     ::memcpy(dest + dataOffset, data, dataSize);
 
     incrementVersion();
@@ -113,6 +115,7 @@ Result ShaderObject::reserveData(const ShaderOffset& offset, Size size, void** o
         return SLANG_E_INVALID_ARG;
     }
 
+    clearDescriptorOwners(dataOffset, dataSize);
     *outData = dest + dataOffset;
 
     incrementVersion();
@@ -384,16 +387,33 @@ Result ShaderObject::setBinding(const ShaderOffset& offset, const Binding& bindi
     return SLANG_OK;
 }
 
-Result ShaderObject::setDescriptorHandle(const ShaderOffset& offset, const DescriptorHandle& handle)
+void ShaderObject::clearDescriptorOwners(size_t offset, size_t size)
+{
+    if (!size)
+        return;
+    m_descriptorOwners.erase(
+        std::remove_if(m_descriptorOwners.begin(), m_descriptorOwners.end(), [&](const DescriptorOwner& entry)
+        {
+            return entry.uniformOffset >= offset ? entry.uniformOffset - offset < size
+                                                 : offset - entry.uniformOffset < sizeof(uint64_t);
+        }),
+        m_descriptorOwners.end());
+}
+
+Result ShaderObject::setDescriptorHandle(const ShaderOffset& offset, const DescriptorHandle& handle, IResource* owner)
 {
     SLANG_RETURN_ON_FAIL(checkFinalized());
 
-    if (offset.uniformOffset + 8 > m_data.size())
+    if (offset.uniformOffset > m_data.size() || m_data.size() - offset.uniformOffset < sizeof(uint64_t))
     {
         return SLANG_E_INVALID_ARG;
     }
 
-    ::memcpy(m_data.data() + offset.uniformOffset, &handle.value, 8);
+    RefPtr<Resource> retained = owner ? checked_cast<Resource*>(owner) : nullptr;
+    clearDescriptorOwners(offset.uniformOffset, sizeof(uint64_t));
+    if (retained)
+        m_descriptorOwners.push_back({offset.uniformOffset, retained});
+    ::memcpy(m_data.data() + offset.uniformOffset, &handle.value, sizeof(uint64_t));
 
     incrementVersion();
 
@@ -677,22 +697,6 @@ Result ShaderObject::writeStructuredBuffer(
     return SLANG_OK;
 }
 
-void ShaderObject::trackResources(std::set<RefPtr<RefObject>>& resources)
-{
-    for (const auto& slot : m_slots)
-    {
-        if (slot.resource)
-            resources.insert(slot.resource);
-        if (slot.resource2)
-            resources.insert(slot.resource2);
-    }
-    for (const auto& object : m_objects)
-    {
-        if (object)
-            object->trackResources(resources);
-    }
-}
-
 Result ShaderObject::getSpecializedShaderObjectType(ExtendedShaderObjectType* outType)
 {
     if (m_shaderObjectType.slangType)
@@ -927,16 +931,6 @@ Result RootShaderObject::collectSpecializationArgs(ExtendedShaderObjectTypeList&
         SLANG_RETURN_ON_FAIL(entryPoint->collectSpecializationArgs(args));
     }
     return SLANG_OK;
-}
-
-void RootShaderObject::trackResources(std::set<RefPtr<RefObject>>& resources)
-{
-    ShaderObject::trackResources(resources);
-    for (const auto& entryPoint : m_entryPoints)
-    {
-        if (entryPoint)
-            entryPoint->trackResources(resources);
-    }
 }
 
 bool _doesValueFitInExistentialPayload(

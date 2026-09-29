@@ -10,9 +10,9 @@ using namespace rhi::testing;
 // exercise both barrier merging (redundant transitions collapsed)
 // and split barriers (D3D12 BEGIN_ONLY/END_ONLY at pass boundaries).
 // ------------------------------------------------------------------
-static void runStateTrackingMultiPass(IDevice* device, trivialCompute::BindingModel model)
+static void runStateTrackingMultiPass(IDevice* device)
 {
-    auto pipeline = trivialCompute::createPipeline(device, model);
+    auto pipeline = trivialCompute::createPipeline(device);
 
     const int numberCount = 4;
     float initialA[] = {0.0f, 1.0f, 2.0f, 3.0f};
@@ -67,12 +67,7 @@ static void runStateTrackingMultiPass(IDevice* device, trivialCompute::BindingMo
 
 GPU_TEST_CASE("state-tracking-multi-pass", D3D12 | Vulkan)
 {
-    runStateTrackingMultiPass(device, trivialCompute::BindingModel::Legacy);
-}
-
-GPU_TEST_CASE("state-tracking-multi-pass-flat", D3D12 | Vulkan)
-{
-    runStateTrackingMultiPass(device, trivialCompute::BindingModel::Flat);
+    runStateTrackingMultiPass(device);
 }
 
 // ------------------------------------------------------------------
@@ -132,9 +127,9 @@ GPU_TEST_CASE("state-tracking-copy-chain", D3D12 | Vulkan)
 // Compute writes to buffer, then copy reads it — exercises the
 // UAV → CopySrc transition with barrier merging and split barriers.
 // ------------------------------------------------------------------
-static void runStateTrackingComputeThenCopy(IDevice* device, trivialCompute::BindingModel model)
+static void runStateTrackingComputeThenCopy(IDevice* device)
 {
-    auto pipeline = trivialCompute::createPipeline(device, model);
+    auto pipeline = trivialCompute::createPipeline(device);
 
     const int count = 4;
     Size dataSize = count * sizeof(float);
@@ -190,21 +185,16 @@ static void runStateTrackingComputeThenCopy(IDevice* device, trivialCompute::Bin
 
 GPU_TEST_CASE("state-tracking-compute-then-copy", D3D12 | Vulkan)
 {
-    runStateTrackingComputeThenCopy(device, trivialCompute::BindingModel::Legacy);
-}
-
-GPU_TEST_CASE("state-tracking-compute-then-copy-flat", D3D12 | Vulkan)
-{
-    runStateTrackingComputeThenCopy(device, trivialCompute::BindingModel::Flat);
+    runStateTrackingComputeThenCopy(device);
 }
 
 // ------------------------------------------------------------------
 // Test: Repeated UAV dispatches — same buffer written multiple times.
 // Exercises UAV→UAV barrier handling (must not be merged away).
 // ------------------------------------------------------------------
-static void runStateTrackingRepeatedUav(IDevice* device, trivialCompute::BindingModel model)
+static void runStateTrackingRepeatedUav(IDevice* device)
 {
-    auto pipeline = trivialCompute::createPipeline(device, model);
+    auto pipeline = trivialCompute::createPipeline(device);
 
     const int count = 4;
     float initial[] = {0.0f, 0.0f, 0.0f, 0.0f};
@@ -250,12 +240,7 @@ static void runStateTrackingRepeatedUav(IDevice* device, trivialCompute::Binding
 
 GPU_TEST_CASE("state-tracking-repeated-uav", D3D12 | Vulkan)
 {
-    runStateTrackingRepeatedUav(device, trivialCompute::BindingModel::Legacy);
-}
-
-GPU_TEST_CASE("state-tracking-repeated-uav-flat", D3D12 | Vulkan)
-{
-    runStateTrackingRepeatedUav(device, trivialCompute::BindingModel::Flat);
+    runStateTrackingRepeatedUav(device);
 }
 
 // ------------------------------------------------------------------

@@ -4,7 +4,7 @@
 using namespace rhi;
 using namespace rhi::testing;
 
-static void runDeviceFromHandle(IDevice* device, trivialCompute::BindingModel model)
+static void runDeviceFromHandle(IDevice* device)
 {
     DeviceNativeHandles handles;
     CHECK_CALL(device->getNativeDeviceHandles(&handles));
@@ -24,7 +24,7 @@ static void runDeviceFromHandle(IDevice* device, trivialCompute::BindingModel mo
     newDeviceDesc.slang.searchPathCount = searchPaths.size();
     CHECK_CALL(getRHI()->createDevice(newDeviceDesc, newDevice.writeRef()));
 
-    auto pipeline = trivialCompute::createPipeline(newDevice, model);
+    auto pipeline = trivialCompute::createPipeline(newDevice);
 
     const int numberCount = 4;
     float initialData[] = {0.0f, 1.0f, 2.0f, 3.0f};
@@ -60,20 +60,15 @@ static void runDeviceFromHandle(IDevice* device, trivialCompute::BindingModel mo
 
 GPU_TEST_CASE("device-from-handle", D3D12 | Vulkan | CUDA)
 {
-    runDeviceFromHandle(device, trivialCompute::BindingModel::Legacy);
+    runDeviceFromHandle(device);
 }
 
-GPU_TEST_CASE("device-from-handle-flat", D3D12 | Vulkan)
-{
-    runDeviceFromHandle(device, trivialCompute::BindingModel::Flat);
-}
-
-GPU_TEST_CASE("device-final-release-flat-dependencies", D3D12 | Vulkan | DontCreateDevice)
+GPU_TEST_CASE("device-final-release-shader-object-dependencies", D3D12 | Vulkan | DontCreateDevice)
 {
     auto localDevice = createTestingDevice(ctx, ctx->deviceType, false);
     REQUIRE(localDevice != nullptr);
     {
-        auto pipeline = trivialCompute::createPipeline(localDevice, trivialCompute::BindingModel::Flat);
+        auto pipeline = trivialCompute::createPipeline(localDevice);
         BufferDesc bufferDesc{};
         bufferDesc.size = 4 * sizeof(float);
         bufferDesc.elementSize = sizeof(float);
@@ -82,14 +77,9 @@ GPU_TEST_CASE("device-final-release-flat-dependencies", D3D12 | Vulkan | DontCre
         ComPtr<IBuffer> buffer;
         REQUIRE_CALL(localDevice->createBuffer(bufferDesc, nullptr, buffer.writeRef()));
 
-        const BindingSetEntry entry{.slot = 0, .resource = buffer};
-        BindingSetDesc setDesc{};
-        setDesc.layout = pipeline.setLayout;
-        setDesc.entries = &entry;
-        setDesc.entryCount = 1;
-        ComPtr<IBindingSet> set;
-        REQUIRE_CALL(localDevice->createBindingSet(setDesc, set.writeRef()));
-        REQUIRE(set != nullptr);
+        auto root = localDevice->createRootShaderObject(pipeline.pipeline->getProgram());
+        REQUIRE(root != nullptr);
+        REQUIRE_CALL(ShaderCursor(root)["buffer"].setBinding(buffer));
     }
     // No fixture device or cached owner may collect the deferred dependency graph for us.
     // The process's live-device check must succeed after this final release alone.

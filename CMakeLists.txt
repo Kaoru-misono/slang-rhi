@@ -45,6 +45,8 @@ option(SLANG_RHI_BUILD_SHARED "Build shared library" OFF)
 option(SLANG_RHI_BUILD_TESTS "Build tests" ${SLANG_RHI_MASTER_PROJECT})
 option(SLANG_RHI_BUILD_TESTS_WITH_GLFW "Build tests that require GLFW" ${SLANG_RHI_MASTER_PROJECT})
 option(SLANG_RHI_BUILD_EXAMPLES "Build examples" ${SLANG_RHI_MASTER_PROJECT})
+option(SLANG_RHI_ENABLE_BINDING_COUNTERS "Enable internal binding diagnostics" OFF)
+set(SLANG_RHI_BINDING_COUNTERS_PATH "" CACHE FILEPATH "New JSONL file for binding diagnostics")
 option(SLANG_RHI_ENABLE_COVERAGE "Enable code coverage (clang only)" OFF)
 option(SLANG_RHI_ENABLE_ASAN "Enable AddressSanitizer (clang only)" OFF)
 option(SLANG_RHI_ENABLE_UBSAN "Enable UndefinedBehaviorSanitizer (clang only)" OFF)
@@ -795,8 +797,8 @@ if(NOT EMSCRIPTEN)
 endif()
 
 target_sources(slang-rhi PRIVATE
+    src/binding-counters.cpp
     src/aftermath.cpp
-    src/binding-set.cpp
     src/command-buffer.cpp
     src/command-list.cpp
     src/cuda-driver-api.cpp
@@ -806,7 +808,6 @@ target_sources(slang-rhi PRIVATE
     src/format-conversion.cpp
     src/heap.cpp
     src/pipeline.cpp
-    src/pipeline-layout.cpp
     src/pipeline-resolver.cpp
     src/resource-desc-utils.cpp
     src/rhi-shared.cpp
@@ -891,7 +892,6 @@ if(SLANG_RHI_ENABLE_D3D12)
     target_sources(slang-rhi PRIVATE
         src/d3d12/d3d12-acceleration-structure.cpp
         src/d3d12/d3d12-backend.cpp
-        src/d3d12/d3d12-binding-set.cpp
         src/d3d12/d3d12-bindless-descriptor-set.cpp
         src/d3d12/d3d12-buffer.cpp
         src/d3d12/d3d12-command.cpp
@@ -918,7 +918,6 @@ if(SLANG_RHI_ENABLE_VULKAN)
         src/vulkan/vk-acceleration-structure.cpp
         src/vulkan/vk-api.cpp
         src/vulkan/vk-backend.cpp
-        src/vulkan/vk-binding-set.cpp
         src/vulkan/vk-bindless-descriptor-set.cpp
         src/vulkan/vk-buffer.cpp
         src/vulkan/vk-command.cpp
@@ -1075,6 +1074,7 @@ if(SLANG_RHI_BUILD_TESTS AND NOT SLANG_RHI_BUILD_SHARED AND NOT EMSCRIPTEN)
         tests/test-bind-pointers.cpp
         tests/test-blob.cpp
         tests/test-buffer.cpp
+        tests/test-binding-counters.cpp
         tests/test-buffer-barrier.cpp
         tests/test-buffer-from-handle.cpp
         tests/test-buffer-shared.cpp
@@ -1175,6 +1175,7 @@ if(SLANG_RHI_BUILD_TESTS AND NOT SLANG_RHI_BUILD_SHARED AND NOT EMSCRIPTEN)
     target_compile_definitions(slang-rhi-tests
         PRIVATE
         SLANG_RHI_DEBUG=$<BOOL:$<CONFIG:Debug>>
+        SLANG_RHI_ENABLE_BINDING_COUNTERS=$<BOOL:${SLANG_RHI_ENABLE_BINDING_COUNTERS}>
         SLANG_RHI_TESTS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests"
         SLANG_RHI_NVAPI_INCLUDE_DIR="${SLANG_RHI_NVAPI_INCLUDE_DIR}"
         SLANG_RHI_OPTIX_DEVICE_HEADER_INCLUDE_DIR="${SLANG_RHI_OPTIX_DEVICE_HEADER_INCLUDE_DIR}"
@@ -1310,5 +1311,13 @@ if(SLANG_RHI_INSTALL)
     install(
         FILES ${CMAKE_CURRENT_BINARY_DIR}/include/slang-rhi-config.h
         DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
+    )
+endif()
+
+if(SLANG_RHI_ENABLE_BINDING_COUNTERS)
+    file(TO_CMAKE_PATH "${SLANG_RHI_BINDING_COUNTERS_PATH}" binding_counters_path)
+    target_compile_definitions(slang-rhi PRIVATE
+        SLANG_RHI_ENABLE_BINDING_COUNTERS=1
+        SLANG_RHI_BINDING_COUNTERS_PATH="${binding_counters_path}"
     )
 endif()

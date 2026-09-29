@@ -1,4 +1,5 @@
 #include "vk-shader-object.h"
+#include "../binding-counters.h"
 #include "vk-device.h"
 #include "vk-buffer.h"
 #include "vk-texture.h"
@@ -16,6 +17,7 @@ namespace rhi::vk {
 inline void writeDescriptor(DeviceImpl* device, const VkWriteDescriptorSet& write)
 {
     device->m_api.vkUpdateDescriptorSets(device->m_device, 1, &write, 0, nullptr);
+    SLANG_RHI_BINDING_COUNT(descriptorsWritten, write.descriptorCount);
 }
 
 inline void writePlainBufferDescriptor(
@@ -192,46 +194,66 @@ inline void writeSamplerDescriptor(
     writeDescriptor(device, write);
 }
 
+struct TableScope
+{
+    BindingDataBuilder& builder;
+    BindingTableEntry* previous;
+    bool previousHit;
+    std::unique_ptr<BindingTableEntry> pending;
+    ShaderObject* object;
+    ShaderObjectLayoutImpl* layout;
+    bool root;
+
+    TableScope(BindingDataBuilder& b, ShaderObject* o, ShaderObjectLayoutImpl* l, bool isRoot)
+        : builder(b), previous(b.m_table), previousHit(b.m_tableHit),
+          object(o), layout(l), root(isRoot)
+    {
+        b.m_table = b.m_bindingCache->lookup(o, isRoot, l);
+        b.m_tableHit = b.m_table != nullptr;
+        if (!b.m_tableHit)
+        {
+            pending = std::make_unique<BindingTableEntry>();
+            b.m_table = pending.get();
+        }
+        SLANG_RHI_BINDING_COUNT(tableHits, b.m_tableHit ? 1 : 0);
+        SLANG_RHI_BINDING_COUNT(tableMisses, b.m_tableHit ? 0 : 1);
+        auto* slice = b.m_allocator->allocate<BindingDataImpl::StateSlice>();
+        *slice = {&b.m_table->buffers, &b.m_table->textures, nullptr};
+        if (b.m_bindingData->lastStateSlice)
+            b.m_bindingData->lastStateSlice->next = slice;
+        else
+            b.m_bindingData->stateSlices = slice;
+        b.m_bindingData->lastStateSlice = slice;
+    }
+    void publish()
+    {
+        if (pending)
+        {
+            pending->key.capture(object, root, layout, *builder.m_retained);
+            builder.m_bindingCache->publish(std::move(pending));
+        }
+    }
+    ~TableScope()
+    {
+        builder.m_table = previous;
+        builder.m_tableHit = previousHit;
+    }
+};
+
 inline void writeBufferState(BindingDataBuilder* builder, BufferImpl* buffer, ResourceState state)
 {
-    BindingDataImpl* bindingData = builder->m_bindingData;
-    if (bindingData->bufferStateCount >= bindingData->bufferStateCapacity)
-    {
-        bindingData->bufferStateCapacity *= 2;
-        BindingDataImpl::BufferState* newBufferStates =
-            builder->m_allocator->allocate<BindingDataImpl::BufferState>(bindingData->bufferStateCapacity);
-        std::memcpy(
-            newBufferStates,
-            bindingData->bufferStates,
-            bindingData->bufferStateCount * sizeof(BindingDataImpl::BufferState)
-        );
-        bindingData->bufferStates = newBufferStates;
-    }
-    bindingData->bufferStates[bindingData->bufferStateCount++] = {buffer, state};
+    builder->m_table->buffers.push_back({buffer, state});
+}
+
+inline void writeTextureState(BindingDataBuilder* builder, const BindingDataImpl::TextureState& state)
+{
+    builder->m_table->textures.push_back(state);
 }
 
 inline void writeTextureState(BindingDataBuilder* builder, TextureViewImpl* textureView, ResourceState state)
 {
-    BindingDataImpl* bindingData = builder->m_bindingData;
-    if (bindingData->textureStateCount >= bindingData->textureStateCapacity)
-    {
-        bindingData->textureStateCapacity *= 2;
-        BindingDataImpl::TextureState* newTextureStates =
-            builder->m_allocator->allocate<BindingDataImpl::TextureState>(bindingData->textureStateCapacity);
-        std::memcpy(
-            newTextureStates,
-            bindingData->textureStates,
-            bindingData->textureStateCount * sizeof(BindingDataImpl::TextureState)
-        );
-        bindingData->textureStates = newTextureStates;
-    }
-    bindingData->textureStates[bindingData->textureStateCount++] = {
-        textureView->m_texture,
-        textureView->m_desc.subresourceRange,
-        state
-    };
+    builder->m_table->textures.push_back({textureView->m_texture, textureView->m_desc.subresourceRange, state});
 }
-
 
 Result BindingDataBuilder::bindAsRoot(
     RootShaderObject* shaderObject,
@@ -241,28 +263,17 @@ Result BindingDataBuilder::bindAsRoot(
 {
     m_bindingData = m_allocator->allocate<BindingDataImpl>();
 
-    // TODO(shaderobject): we should count number of buffers/textures in the layout and allocate appropriately
-    // For now we use a fixed starting capacity and grow as needed.
-    m_bindingData->bufferStateCapacity = 1024;
-    m_bindingData->bufferStates =
-        m_allocator->allocate<BindingDataImpl::BufferState>(m_bindingData->bufferStateCapacity);
-    m_bindingData->bufferStateCount = 0;
-    m_bindingData->textureStateCapacity = 1024;
-    m_bindingData->textureStates =
-        m_allocator->allocate<BindingDataImpl::TextureState>(m_bindingData->textureStateCapacity);
-    m_bindingData->textureStateCount = 0;
+    m_bindingData->stateSlices = nullptr;
+    m_bindingData->lastStateSlice = nullptr;
+    TableScope table(*this, shaderObject, specializedLayout, true);
 
     m_bindingData->pipelineLayout = specializedLayout->m_pipelineLayout;
 
-    uint32_t totalDescriptorSetCount = specializedLayout->getTotalDescriptorSetCount();
-    if (m_device->m_bindlessDescriptorSet)
-    {
-        // The bindless descriptor set is always the last descriptor set in the pipeline layout.
-        // We need to add one more descriptor set to the count to account for it.
-        totalDescriptorSetCount++;
-    }
+    uint32_t totalDescriptorSetCount = uint32_t(specializedLayout->m_vkDescriptorSetLayouts.size());
     m_bindingData->descriptorSets = m_allocator->allocate<VkDescriptorSet>(totalDescriptorSetCount);
-    m_bindingData->descriptorSetCount = 0;
+    m_bindingData->descriptorSetCount = totalDescriptorSetCount;
+    for (uint32_t i = 0; i < totalDescriptorSetCount; ++i)
+        m_bindingData->descriptorSets[i] = VK_NULL_HANDLE;
 
     m_pushConstantRanges = specializedLayout->getAllPushConstantRanges();
 
@@ -324,13 +335,11 @@ Result BindingDataBuilder::bindAsRoot(
         SLANG_RETURN_ON_FAIL(bindAsEntryPoint(entryPoint, entryPointInfo.offset, entryPointLayout, (uint32_t)i));
     }
 
-    // Assign bindless descriptor set to the last slot if available.
-    if (m_device->m_bindlessDescriptorSet)
-    {
-        m_bindingData->descriptorSets[m_bindingData->descriptorSetCount++] =
+    if (specializedLayout->m_bindlessSetIndex != UINT32_MAX)
+        m_bindingData->descriptorSets[specializedLayout->m_bindlessSetIndex] =
             m_device->m_bindlessDescriptorSet->m_descriptorSet;
-    }
 
+    table.publish();
     outBindingData = m_bindingData;
 
     return SLANG_OK;
@@ -407,6 +416,11 @@ Result BindingDataBuilder::bindOrdinaryDataBufferIfNeeded(
     ShaderObjectLayoutImpl* specializedLayout
 )
 {
+    if (m_tableHit)
+    {
+        if (specializedLayout->getTotalOrdinaryDataSize()) ioOffset.binding++;
+        return SLANG_OK;
+    }
     uint32_t size = specializedLayout->getTotalOrdinaryDataSize();
     if (size == 0)
     {
@@ -415,6 +429,7 @@ Result BindingDataBuilder::bindOrdinaryDataBufferIfNeeded(
 
     TransientBufferArena::Allocation allocation;
     SLANG_RETURN_ON_FAIL(m_constantBufferArena->allocate(size, &allocation));
+    SLANG_RHI_BINDING_COUNT(cbAllocations, 1);
     SLANG_RETURN_ON_FAIL(shaderObject->writeOrdinaryData(allocation.mappedData, size, specializedLayout));
 
     // If we did indeed need/create a buffer, then we must bind it into
@@ -447,6 +462,7 @@ Result BindingDataBuilder::bindAsValue(
     //
     for (auto bindingRangeInfo : specializedLayout->getBindingRanges())
     {
+        if (m_tableHit) continue;
         BindingOffset rangeOffset = offset;
         rangeOffset.bindingSet += bindingRangeInfo.setOffset;
         rangeOffset.binding += bindingRangeInfo.bindingOffset;
@@ -614,6 +630,8 @@ Result BindingDataBuilder::bindAsValue(
         //
         BindingOffset rangeOffset = offset;
         rangeOffset += subObjectRange.offset;
+        uint32_t parameterBlockSet = rangeOffset.parameterBlockSet;
+        rangeOffset.parameterBlockSet += subObjectRange.childSetOffset;
 
         BindingOffset rangeStride = subObjectRange.stride;
 
@@ -643,6 +661,7 @@ Result BindingDataBuilder::bindAsValue(
         case slang::BindingType::ParameterBlock:
         {
             BindingOffset objOffset = rangeOffset;
+            objOffset.bindingSet = parameterBlockSet;
             for (uint32_t i = 0; i < count; ++i)
             {
                 // The case for `ParameterBlock<X>` is not that different
@@ -651,6 +670,7 @@ Result BindingDataBuilder::bindAsValue(
                 //
                 ShaderObject* subObject = shaderObject->m_objects[subObjectIndex + i];
                 SLANG_RETURN_ON_FAIL(bindAsParameterBlock(subObject, objOffset, subObjectLayout));
+                objOffset += rangeStride;
             }
         }
         break;
@@ -694,31 +714,32 @@ Result BindingDataBuilder::bindAsValue(
     return SLANG_OK;
 }
 
+void BindingDataBuilder::recordDescriptorSet(uint32_t setIndex, VkDescriptorSet set)
+{
+    SLANG_RHI_ASSERT(setIndex < m_bindingData->descriptorSetCount);
+    SLANG_RHI_ASSERT(m_bindingData->descriptorSets[setIndex] == VK_NULL_HANDLE);
+    m_bindingData->descriptorSets[setIndex] = set;
+}
+
 Result BindingDataBuilder::allocateDescriptorSets(
     ShaderObject* shaderObject,
     const BindingOffset& offset,
     ShaderObjectLayoutImpl* specializedLayout
 )
 {
-    SLANG_RHI_ASSERT(specializedLayout->getOwnDescriptorSets().size() <= 1);
-    // The number of sets to allocate and their layouts was already pre-computed
-    // as part of the shader object layout, so we use that information here.
-    //
-    for (auto descriptorSetInfo : specializedLayout->getOwnDescriptorSets())
+    if (m_tableHit)
     {
-        VulkanDescriptorSet descriptorSet;
-        SLANG_RETURN_ON_FAIL(m_descriptorSetAllocator->allocate(descriptorSetInfo.descriptorSetLayout, &descriptorSet));
-        auto descriptorSetHandle = descriptorSet.handle;
-
-        // For each set, we need to write it into the set of descriptor sets
-        // being used for binding. This is done both so that other steps
-        // in binding can find the set to fill it in, but also so that
-        // we can bind all the descriptor sets to the pipeline when the
-        // time comes.
-        //
-        m_bindingData->descriptorSets[m_bindingData->descriptorSetCount++] = descriptorSetHandle;
+        for (const auto& set : m_table->sets)
+            recordDescriptorSet(offset.bindingSet + set.offset, set.set);
+        return SLANG_OK;
     }
-
+    for (const auto& info : specializedLayout->getOwnDescriptorSets())
+    {
+        VulkanDescriptorSet set;
+        SLANG_RETURN_ON_FAIL(m_descriptorSetAllocator->allocate(info.descriptorSetLayout, &set));
+        recordDescriptorSet(offset.bindingSet + uint32_t(info.space), set.handle);
+        m_table->sets.push_back({uint32_t(info.space), set.handle});
+    }
     return SLANG_OK;
 }
 
@@ -728,52 +749,12 @@ Result BindingDataBuilder::bindAsParameterBlock(
     ShaderObjectLayoutImpl* specializedLayout
 )
 {
-    // Check cache for unchanged parameter block sub-objects.
-    // If the entire sub-object tree hasn't changed, we can reuse the previous
-    // descriptor sets without reallocating or rewriting any descriptors.
-    uint32_t subTreeVersion = shaderObject->getSubTreeVersion();
-    auto* cached = m_bindingCache->lookup(shaderObject->m_uid, subTreeVersion, specializedLayout);
-    if (cached)
-    {
-        for (uint32_t i = 0; i < cached->descriptorSetCount; ++i)
-            m_bindingData->descriptorSets[m_bindingData->descriptorSetCount++] = cached->descriptorSets[i];
-        return SLANG_OK;
-    }
-
-    uint32_t startSetCount = m_bindingData->descriptorSetCount;
-
-    // Because we are binding into a nested parameter block,
-    // any texture/buffer/sampler bindings will now want to
-    // write into the sets we allocate for this object and
-    // not the sets for any parent object(s).
-    //
+    TableScope table(*this, shaderObject, specializedLayout, false);
     BindingOffset offset = inOffset;
-    offset.bindingSet = m_bindingData->descriptorSetCount;
     offset.binding = 0;
-
-    // Note: Interface-type binding handling has been simplified
-    // now that pending data layout APIs have been removed.
-
-    // Writing the bindings for a parameter block is relatively easy:
-    // we just need to allocate the descriptor set(s) needed for this
-    // object and then fill it in like a `ConstantBuffer<X>`.
-    //
     SLANG_RETURN_ON_FAIL(allocateDescriptorSets(shaderObject, offset, specializedLayout));
-
-    SLANG_RHI_ASSERT(offset.bindingSet < m_bindingData->descriptorSetCount);
     SLANG_RETURN_ON_FAIL(bindAsConstantBuffer(shaderObject, offset, specializedLayout));
-
-    // Cache all descriptor sets allocated during this parameter block bind
-    // (including nested parameter blocks).
-    uint32_t addedCount = m_bindingData->descriptorSetCount - startSetCount;
-    m_bindingCache->store(
-        shaderObject->m_uid,
-        subTreeVersion,
-        specializedLayout,
-        &m_bindingData->descriptorSets[startSetCount],
-        addedCount
-    );
-
+    table.publish();
     return SLANG_OK;
 }
 

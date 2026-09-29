@@ -1,4 +1,5 @@
 #include "d3d12-shader-object.h"
+#include "../binding-counters.h"
 #include "d3d12-buffer.h"
 #include "d3d12-texture.h"
 #include "d3d12-device.h"
@@ -36,42 +37,72 @@ inline BindingDataImpl::RootParameter createRootUAV(UINT index, D3D12_GPU_VIRTUA
     return result;
 }
 
+struct TableScope
+{
+    BindingDataBuilder& builder;
+    BindingTableEntry* previous;
+    bool previousHit;
+    uint32_t previousCursor;
+    std::unique_ptr<BindingTableEntry> pending;
+    ShaderObject* object;
+    ShaderObjectLayoutImpl* layout;
+    bool root;
+
+    TableScope(BindingDataBuilder& b, ShaderObject* o, ShaderObjectLayoutImpl* l, bool isRoot)
+        : builder(b), previous(b.m_table), previousHit(b.m_tableHit),
+          previousCursor(b.m_rootDescriptorCursor),
+          object(o), layout(l), root(isRoot)
+    {
+        b.m_table = b.m_bindingCache->lookup(o, isRoot, l);
+        b.m_tableHit = b.m_table != nullptr;
+        b.m_rootDescriptorCursor = 0;
+        if (!b.m_tableHit)
+        {
+            pending = std::make_unique<BindingTableEntry>();
+            b.m_table = pending.get();
+        }
+        SLANG_RHI_BINDING_COUNT(tableHits, b.m_tableHit ? 1 : 0);
+        SLANG_RHI_BINDING_COUNT(tableMisses, b.m_tableHit ? 0 : 1);
+        auto* slice = b.m_allocator->allocate<BindingDataImpl::StateSlice>();
+        *slice = {&b.m_table->buffers, &b.m_table->textures, nullptr};
+        if (b.m_bindingData->lastStateSlice)
+            b.m_bindingData->lastStateSlice->next = slice;
+        else
+            b.m_bindingData->stateSlices = slice;
+        b.m_bindingData->lastStateSlice = slice;
+    }
+    void publish()
+    {
+        if (pending)
+        {
+            pending->key.capture(object, root, layout, *builder.m_retained);
+            builder.m_bindingCache->publish(std::move(pending));
+        }
+    }
+    ~TableScope()
+    {
+        builder.m_table = previous;
+        builder.m_tableHit = previousHit;
+        builder.m_rootDescriptorCursor = previousCursor;
+    }
+};
+
 inline void writeBufferState(BindingDataBuilder* builder, BufferImpl* buffer, ResourceState state)
 {
-    BindingDataImpl* bindingData = builder->m_bindingData;
-    if (bindingData->bufferStateCount >= bindingData->bufferStateCapacity)
-    {
-        bindingData->bufferStateCapacity *= 2;
-        BindingDataImpl::BufferState* newBufferStates =
-            builder->m_allocator->allocate<BindingDataImpl::BufferState>(bindingData->bufferStateCapacity);
-        std::memcpy(
-            newBufferStates,
-            bindingData->bufferStates,
-            bindingData->bufferStateCount * sizeof(BindingDataImpl::BufferState)
-        );
-        bindingData->bufferStates = newBufferStates;
-    }
-    bindingData->bufferStates[bindingData->bufferStateCount++] = {buffer, state};
+    builder->m_table->buffers.push_back({buffer, state});
 }
 
 inline void writeTextureState(BindingDataBuilder* builder, TextureViewImpl* textureView, ResourceState state)
 {
-    BindingDataImpl* bindingData = builder->m_bindingData;
-    if (bindingData->textureStateCount >= bindingData->textureStateCapacity)
-    {
-        bindingData->textureStateCapacity *= 2;
-        BindingDataImpl::TextureState* newTextureStates =
-            builder->m_allocator->allocate<BindingDataImpl::TextureState>(bindingData->textureStateCapacity);
-        std::memcpy(
-            newTextureStates,
-            bindingData->textureStates,
-            bindingData->textureStateCount * sizeof(BindingDataImpl::TextureState)
-        );
-        bindingData->textureStates = newTextureStates;
-    }
-    bindingData->textureStates[bindingData->textureStateCount++] = {
-        textureView->m_texture, textureView->m_desc.subresourceRange, state
-    };
+    builder->m_table->textures.push_back({textureView->m_texture, textureView->m_desc.subresourceRange, state});
+}
+
+void BindingDataBuilder::writeRootParameter(uint32_t index, uint64_t address, bool uav)
+{
+    auto parameter = uav ? createRootUAV(index, address) : createRootSRV(index, address);
+    m_bindingData->rootParameters[index] = parameter;
+    parameter.index = 0;
+    m_table->rootDescriptors.push_back(parameter);
 }
 
 Result BindingDataBuilder::bindAsRoot(
@@ -83,16 +114,9 @@ Result BindingDataBuilder::bindAsRoot(
     BindingDataImpl* bindingData = m_allocator->allocate<BindingDataImpl>();
     m_bindingData = bindingData;
 
-    // TODO(shaderobject): allocate actual number of buffer/texture resources
-    // For now we use a fixed starting capacity and grow as needed.
-    m_bindingData->bufferStateCapacity = 1024;
-    m_bindingData->bufferStates =
-        m_allocator->allocate<BindingDataImpl::BufferState>(m_bindingData->bufferStateCapacity);
-    m_bindingData->bufferStateCount = 0;
-    m_bindingData->textureStateCapacity = 1024;
-    m_bindingData->textureStates =
-        m_allocator->allocate<BindingDataImpl::TextureState>(m_bindingData->textureStateCapacity);
-    m_bindingData->textureStateCount = 0;
+    m_bindingData->stateSlices = nullptr;
+    m_bindingData->lastStateSlice = nullptr;
+    TableScope table(*this, shaderObject, specializedLayout, true);
 
     uint32_t rootParameterCount = specializedLayout->m_rootSignatureTotalParameterCount;
     m_bindingData->rootParameters = m_allocator->allocate<BindingDataImpl::RootParameter>(rootParameterCount);
@@ -137,7 +161,7 @@ Result BindingDataBuilder::bindAsRoot(
 
 #if SLANG_RHI_ENABLE_NVAPI
     // Bind null-descriptor to implicit descriptor range for the NVAPI UAV descriptor if needed.
-    if (specializedLayout->m_hasImplicitDescriptorRangeForNVAPI)
+    if (!m_tableHit && specializedLayout->m_hasImplicitDescriptorRangeForNVAPI)
     {
         SLANG_RHI_ASSERT(descriptorSet.resources.count > 0);
 
@@ -148,15 +172,20 @@ Result BindingDataBuilder::bindAsRoot(
         D3D12_CPU_DESCRIPTOR_HANDLE nullUavDescriptor =
             m_device->getNullDescriptor(slang::BindingType::MutableRawBuffer, SLANG_STRUCTURED_BUFFER);
 
-        m_device->m_device->CopyDescriptorsSimple(
-            1,
-            descriptorSet.resources.getCpuHandle(nvapiDescriptorIndex),
-            nullUavDescriptor,
-            D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV
-        );
+        {
+            m_device->m_device->CopyDescriptorsSimple(
+                1,
+                descriptorSet.resources.getCpuHandle(nvapiDescriptorIndex),
+                nullUavDescriptor,
+                D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV
+            );
+            SLANG_RHI_BINDING_COUNT(descriptorsWritten, 1);
+        }
     }
 #endif
 
+    SLANG_RETURN_ON_FAIL(finishSamplerTable(descriptorSet, specializedLayout));
+    table.publish();
     outBindingData = bindingData;
 
     return SLANG_OK;
@@ -185,7 +214,7 @@ Result BindingDataBuilder::allocateDescriptorSets(
 
     if (uint32_t descriptorCount = specializedLayout->getTotalResourceDescriptorCount())
     {
-        auto allocation = m_cbvSrvUavArena->allocate(descriptorCount);
+        auto allocation = m_tableHit ? m_table->resources : m_cbvSrvUavArena->allocate(descriptorCount);
         if (!allocation.isValid())
         {
             auto* typeLayout = specializedLayout->getElementTypeLayout();
@@ -202,35 +231,65 @@ Result BindingDataBuilder::allocateDescriptorSets(
         m_bindingData->rootParameters[rootParamIndex++] =
             createRootDescriptorTable(rootParamIndex, allocation.firstGpuHandle);
         outDescriptorSet.resources = allocation;
+        if (!m_tableHit) m_table->resources = allocation;
     }
     if (auto descriptorCount = specializedLayout->getTotalSamplerDescriptorCount())
     {
-        // Check the sampler cache first to avoid exhausting the 2048-descriptor GPU sampler heap.
-        // Sampler bindings don't change between draw calls (only uniform data changes via setData),
-        // so we can safely reuse the same sampler descriptor range.
-        GPUDescriptorRange allocation = m_bindingCache->lookupSamplers(shaderObject->m_uid, specializedLayout);
-        if (!allocation.isValid())
+        outDescriptorSet.samplerCount = descriptorCount;
+        if (!m_tableHit)
         {
-            allocation = m_samplerArena->allocate(descriptorCount);
-            if (!allocation.isValid())
-            {
-                auto* typeLayout = specializedLayout->getElementTypeLayout();
-                auto const* typeName = typeLayout ? typeLayout->getName() : nullptr;
-                m_device->printError(
-                    "D3D12 sampler descriptor allocation failed (count=%u, type=%s).",
-                    descriptorCount,
-                    typeName ? typeName : "<unknown>"
-                );
-                return SLANG_E_OUT_OF_MEMORY;
-            }
-            m_bindingCache->storeSamplers(shaderObject->m_uid, specializedLayout, allocation);
+            outDescriptorSet.samplerDescriptors = m_allocator->allocate<D3D12_CPU_DESCRIPTOR_HANDLE>(descriptorCount);
+            for (uint32_t i = 0; i < descriptorCount; ++i)
+                outDescriptorSet.samplerDescriptors[i] = m_device->getNullSamplerDescriptor();
         }
         SLANG_RHI_ASSERT(rootParamIndex < m_bindingData->rootParameterCount);
-        m_bindingData->rootParameters[rootParamIndex++] =
-            createRootDescriptorTable(rootParamIndex, allocation.firstGpuHandle);
-        outDescriptorSet.samplers = allocation;
+        outDescriptorSet.samplerRootParameter = rootParamIndex++;
     }
 
+    return SLANG_OK;
+}
+
+Result BindingDataBuilder::finishSamplerTable(const DescriptorSet& descriptorSet, ShaderObjectLayoutImpl* layout)
+{
+    uint32_t count = descriptorSet.samplerCount;
+    if (!count)
+        return SLANG_OK;
+    if (m_tableHit)
+    {
+        uint32_t index = descriptorSet.samplerRootParameter;
+        m_bindingData->rootParameters[index] = createRootDescriptorTable(index, m_table->samplers.firstGpuHandle);
+        return SLANG_OK;
+    }
+    const auto* descriptors = descriptorSet.samplerDescriptors;
+    size_t hash = BindingCache::hashSamplers(descriptors, count);
+    GPUDescriptorRange allocation = m_bindingCache->lookupSamplers(layout, descriptors, count, hash);
+    SLANG_RHI_BINDING_COUNT(samplerHits, allocation.isValid() ? 1 : 0);
+    SLANG_RHI_BINDING_COUNT(samplerMisses, allocation.isValid() ? 0 : 1);
+    if (!allocation.isValid())
+    {
+        allocation = m_samplerArena->allocate(count);
+        if (!allocation.isValid())
+        {
+            auto* typeLayout = layout->getElementTypeLayout();
+            m_device->printError(
+                "D3D12 sampler descriptor allocation failed (count=%u, type=%s).",
+                count,
+                typeLayout && typeLayout->getName() ? typeLayout->getName() : "<unknown>"
+            );
+            return SLANG_E_OUT_OF_MEMORY;
+        }
+        for (uint32_t i = 0; i < count; ++i)
+            {
+                m_device->m_device->CopyDescriptorsSimple(
+                    1, allocation.getCpuHandle(i), descriptors[i], D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER
+                );
+                SLANG_RHI_BINDING_COUNT(descriptorsWritten, 1);
+            }
+        m_bindingCache->storeSamplers(layout, descriptors, count, hash, allocation);
+    }
+    m_table->samplers = allocation;
+    uint32_t index = descriptorSet.samplerRootParameter;
+    m_bindingData->rootParameters[index] = createRootDescriptorTable(index, allocation.firstGpuHandle);
     return SLANG_OK;
 }
 
@@ -269,6 +328,7 @@ Result BindingDataBuilder::bindAsParameterBlock(
     ShaderObjectLayoutImpl* specializedLayout
 )
 {
+    TableScope table(*this, shaderObject, specializedLayout, false);
     // The first step to binding an object as a parameter block is to allocate a descriptor
     // set (consisting of zero or one resource descriptor table and zero or one sampler
     // descriptor table) to represent its values.
@@ -286,6 +346,8 @@ Result BindingDataBuilder::bindAsParameterBlock(
         bindAsConstantBuffer(shaderObject, descriptorSet, subOffset, rootParamIndex, specializedLayout)
     );
 
+    SLANG_RETURN_ON_FAIL(finishSamplerTable(descriptorSet, specializedLayout));
+    table.publish();
     return SLANG_OK;
 }
 
@@ -305,6 +367,18 @@ Result BindingDataBuilder::bindAsValue(
     //
     for (const auto& bindingRangeInfo : specializedLayout->m_bindingRanges)
     {
+        if (m_tableHit)
+        {
+            if (bindingRangeInfo.isRootParameter)
+                for (uint32_t i = 0; i < bindingRangeInfo.count; ++i)
+                {
+                    auto parameter = m_table->rootDescriptors[m_rootDescriptorCursor++];
+                    parameter.index = rootParamIndex;
+                    m_bindingData->rootParameters[rootParamIndex++] = parameter;
+                }
+            continue;
+        }
+
         BindingOffset rangeOffset = offset;
 
         uint32_t slotIndex = bindingRangeInfo.slotIndex;
@@ -340,12 +414,15 @@ Result BindingDataBuilder::bindAsValue(
                     descriptor =
                         m_device->getNullDescriptor(bindingRangeInfo.bindingType, bindingRangeInfo.resourceShape);
                 }
-                d3dDevice->CopyDescriptorsSimple(
-                    1,
-                    descriptorSet.resources.getCpuHandle(resourceIndex + i),
-                    descriptor,
-                    D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV
-                );
+                {
+                    d3dDevice->CopyDescriptorsSimple(
+                        1,
+                        descriptorSet.resources.getCpuHandle(resourceIndex + i),
+                        descriptor,
+                        D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV
+                    );
+                    SLANG_RHI_BINDING_COUNT(descriptorsWritten, 1);
+                }
             }
             break;
         }
@@ -370,13 +447,16 @@ Result BindingDataBuilder::bindAsValue(
                     textureDescriptor =
                         m_device->getNullDescriptor(slang::BindingType::Texture, bindingRangeInfo.resourceShape);
                 }
-                d3dDevice->CopyDescriptorsSimple(
-                    1,
-                    descriptorSet.resources.getCpuHandle(resourceIndex + i),
-                    textureDescriptor,
-                    D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV
-                );
-                SLANG_RHI_ASSERT(samplerIndex + i < descriptorSet.samplers.count);
+                {
+                    d3dDevice->CopyDescriptorsSimple(
+                        1,
+                        descriptorSet.resources.getCpuHandle(resourceIndex + i),
+                        textureDescriptor,
+                        D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV
+                    );
+                    SLANG_RHI_BINDING_COUNT(descriptorsWritten, 1);
+                }
+                SLANG_RHI_ASSERT(samplerIndex + i < descriptorSet.samplerCount);
                 D3D12_CPU_DESCRIPTOR_HANDLE samplerDescriptor = {};
                 if (sampler)
                 {
@@ -386,12 +466,7 @@ Result BindingDataBuilder::bindAsValue(
                 {
                     samplerDescriptor = m_device->getNullSamplerDescriptor();
                 }
-                d3dDevice->CopyDescriptorsSimple(
-                    1,
-                    descriptorSet.samplers.getCpuHandle(samplerIndex + i),
-                    samplerDescriptor,
-                    D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER
-                );
+                descriptorSet.samplerDescriptors[samplerIndex + i] = samplerDescriptor;
             }
             break;
         }
@@ -402,7 +477,7 @@ Result BindingDataBuilder::bindAsValue(
             {
                 const ResourceSlot& slot = shaderObject->m_slots[slotIndex + i];
                 SamplerImpl* sampler = checked_cast<SamplerImpl*>(slot.resource.get());
-                SLANG_RHI_ASSERT(samplerIndex + i < descriptorSet.samplers.count);
+                SLANG_RHI_ASSERT(samplerIndex + i < descriptorSet.samplerCount);
                 D3D12_CPU_DESCRIPTOR_HANDLE descriptor = {};
                 if (sampler)
                 {
@@ -412,12 +487,7 @@ Result BindingDataBuilder::bindAsValue(
                 {
                     descriptor = m_device->getNullSamplerDescriptor();
                 }
-                d3dDevice->CopyDescriptorsSimple(
-                    1,
-                    descriptorSet.samplers.getCpuHandle(samplerIndex + i),
-                    descriptor,
-                    D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER
-                );
+                descriptorSet.samplerDescriptors[samplerIndex + i] = descriptor;
             }
             break;
         }
@@ -440,12 +510,8 @@ Result BindingDataBuilder::bindAsValue(
                 if (bindingRangeInfo.isRootParameter)
                 {
                     SLANG_RHI_ASSERT(rootParamIndex < m_bindingData->rootParameterCount);
-                    if (buffer)
-                    {
-                        m_bindingData->rootParameters[rootParamIndex] =
-                            isSrv ? createRootSRV(rootParamIndex, buffer->getDeviceAddress() + slot.bufferRange.offset)
-                                  : createRootUAV(rootParamIndex, buffer->getDeviceAddress() + slot.bufferRange.offset);
-                    }
+                    writeRootParameter(rootParamIndex,
+                        buffer ? buffer->getDeviceAddress() + slot.bufferRange.offset : 0, !isSrv);
                     rootParamIndex++;
                 }
                 else
@@ -479,12 +545,15 @@ Result BindingDataBuilder::bindAsValue(
                         descriptor =
                             m_device->getNullDescriptor(bindingRangeInfo.bindingType, bindingRangeInfo.resourceShape);
                     }
-                    d3dDevice->CopyDescriptorsSimple(
-                        1,
-                        descriptorSet.resources.getCpuHandle(resourceIndex + i),
-                        descriptor,
-                        D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV
-                    );
+                    {
+                        d3dDevice->CopyDescriptorsSimple(
+                            1,
+                            descriptorSet.resources.getCpuHandle(resourceIndex + i),
+                            descriptor,
+                            D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV
+                        );
+                        SLANG_RHI_BINDING_COUNT(descriptorsWritten, 1);
+                    }
                 }
                 if (buffer)
                 {
@@ -503,11 +572,7 @@ Result BindingDataBuilder::bindAsValue(
                 if (bindingRangeInfo.isRootParameter)
                 {
                     SLANG_RHI_ASSERT(rootParamIndex < m_bindingData->rootParameterCount);
-                    if (as)
-                    {
-                        m_bindingData->rootParameters[rootParamIndex] =
-                            createRootSRV(rootParamIndex, as->getDeviceAddress());
-                    }
+                    writeRootParameter(rootParamIndex, as ? as->getDeviceAddress() : 0, false);
                     rootParamIndex++;
                 }
                 else
@@ -523,12 +588,15 @@ Result BindingDataBuilder::bindAsValue(
                         descriptor =
                             m_device->getNullDescriptor(bindingRangeInfo.bindingType, bindingRangeInfo.resourceShape);
                     }
-                    d3dDevice->CopyDescriptorsSimple(
-                        1,
-                        descriptorSet.resources.getCpuHandle(resourceIndex + i),
-                        descriptor,
-                        D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV
-                    );
+                    {
+                        d3dDevice->CopyDescriptorsSimple(
+                            1,
+                            descriptorSet.resources.getCpuHandle(resourceIndex + i),
+                            descriptor,
+                            D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV
+                        );
+                        SLANG_RHI_BINDING_COUNT(descriptorsWritten, 1);
+                    }
                 }
                 if (as)
                 {
@@ -658,6 +726,7 @@ Result BindingDataBuilder::bindOrdinaryDataBufferIfNeeded(
     ShaderObjectLayoutImpl* specializedLayout
 )
 {
+    if (m_tableHit) return SLANG_OK;
     uint32_t size = specializedLayout->getTotalOrdinaryDataSize();
     if (size == 0)
     {
@@ -669,6 +738,7 @@ Result BindingDataBuilder::bindOrdinaryDataBufferIfNeeded(
 
     TransientBufferArena::Allocation allocation;
     SLANG_RETURN_ON_FAIL(m_constantBufferArena->allocate(alignedSize, &allocation));
+    SLANG_RHI_BINDING_COUNT(cbAllocations, 1);
     SLANG_RETURN_ON_FAIL(shaderObject->writeOrdinaryData(allocation.mappedData, size, specializedLayout));
 
     // We also create and store a descriptor for our root constant buffer
@@ -682,6 +752,7 @@ Result BindingDataBuilder::bindOrdinaryDataBufferIfNeeded(
     viewDesc.BufferLocation = checked_cast<BufferImpl*>(allocation.buffer)->getDeviceAddress() + allocation.offset;
     viewDesc.SizeInBytes = alignedSize;
     m_device->m_device->CreateConstantBufferView(&viewDesc, descriptorSet.resources.getCpuHandle(ioOffset.resource));
+    SLANG_RHI_BINDING_COUNT(descriptorsWritten, 1);
     ioOffset.resource++;
 
     return SLANG_OK;

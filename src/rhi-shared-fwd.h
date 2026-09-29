@@ -12,9 +12,9 @@ class Resource;
 class Texture;
 class Sampler;
 class TextureView;
-class BindingSetLayout;
-class BindingSet;
-class PipelineLayout;
+
+
+
 class QueryPool;
 class InputLayout;
 class ShaderTable;

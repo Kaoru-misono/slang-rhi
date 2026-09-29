@@ -30,9 +30,6 @@
 | `createRootShaderObject`           | yes     | yes  | yes   | yes   | yes    | yes     | yes  |
 | `createShaderTable`                | :x:     | yes  | :x:   | yes   | yes    | :x:     | :x:  |
 | `createShaderProgram`              | yes     | yes  | yes   | yes   | yes    | yes     | yes  |
-| `createBindingSetLayout`           | :x:     | :x:  | :x:   | yes   | yes    | :x:     | :x:  |
-| `createBindingSet`                 | :x:     | :x:  | :x:   | yes   | yes    | :x:     | :x:  |
-| `createPipelineLayout`             | :x:     | :x:  | :x:   | yes   | yes    | :x:     | :x:  |
 | `createRenderPipeline`             | :x:     | :x:  | yes   | yes   | yes    | yes     | yes  |
 | `createComputePipeline`            | yes     | yes  | yes   | yes   | yes    | yes     | yes  |
 | `createRayTracingPipeline`         | :x:     | yes  | :x:   | yes   | yes    | :x:     | :x:  |
@@ -128,26 +125,8 @@
 
 ## `IShaderTable` interface
 
-## `IBindingSetLayout` interface
 
-| API       | CPU | CUDA | D3D11 | D3D12 | Vulkan | Metal | WGPU |
-|-----------|-----|------|-------|-------|--------|-------|------|
-| `getDesc` | :x: | :x:  | :x:   | yes   | yes    | :x:   | :x:  |
 
-## `IBindingSet` interface
-
-| API         | CPU | CUDA | D3D11 | D3D12 | Vulkan | Metal | WGPU |
-|-------------|-----|------|-------|-------|--------|-------|------|
-| `getLayout` | :x: | :x:  | :x:   | yes   | yes    | :x:   | :x:  |
-
-## `IPipelineLayout` interface
-
-| API                   | CPU | CUDA | D3D11 | D3D12 | Vulkan | Metal | WGPU |
-|-----------------------|-----|------|-------|-------|--------|-------|------|
-| `getDesc`             | :x: | :x:  | :x:   | yes   | yes    | :x:   | :x:  |
-| `getConstantsProfile` | :x: | :x:  | :x:   | yes   | yes    | :x:   | :x:  |
-| `getConstantsSize`    | :x: | :x:  | :x:   | yes   | yes    | :x:   | :x:  |
-| `getSetCount`         | :x: | :x:  | :x:   | yes   | yes    | :x:   | :x:  |
 
 ## `IPipeline` interface
 
@@ -242,7 +221,6 @@
 | API                   | CPU | CUDA | D3D11 | D3D12 | Vulkan | Metal | WGPU |
 |-----------------------|-----|------|-------|-------|--------|-------|------|
 | `bindPipeline`        | :x: | :x:  | yes   | yes   | yes    | yes   | yes  |
-| `bindPipeline` (flat) | :x: | :x:  | :x:   | yes   | yes    | :x:   | :x:  |
 | `setRenderState`      | :x: | :x:  | yes   | yes   | yes    | yes   | yes  |
 | `draw`                | :x: | :x:  | yes   | yes   | yes    | yes   | yes  |
 | `drawIndexed`         | :x: | :x:  | yes   | yes   | yes    | yes   | yes  |
@@ -266,29 +244,15 @@ to match inputs using `semanticName` and `semanticIndex`.
 | API                       | CPU | CUDA | D3D11 | D3D12 | Vulkan | Metal | WGPU |
 |---------------------------|-----|------|-------|-------|--------|-------|------|
 | `bindPipeline`            | yes | yes  | yes   | yes   | yes    | yes   | yes  |
-| `bindPipeline` (flat)     | :x: | :x:  | :x:   | yes   | yes    | :x:   | :x:  |
 | `dispatchCompute`         | yes | yes  | yes   | yes   | yes    | yes   | yes  |
 | `dispatchComputeIndirect` | :x: | yes  | yes   | yes   | yes    | yes   | yes  |
 
-Compute binding supports the general shader-object overloads and the `FlatBindingDesc` overload.
-Flat bindings use an `IPipelineLayout`, copy constant bytes immediately, and retain and transition
-resources declared by binding sets and explicit accesses. The earlier entry-point-data-only
-compute binding API has been removed.
-
-With `DeviceDesc::enableValidation`, replay of a flat binding reports `Warning` / `Layer` when
-its declared accesses require an effective resource-state change. Messages identify the resource
-label and target state, and include resolved layer/mip ranges for textures. Read-state unions are
-compared against the tracked effective state; repeated accesses already covered by that union and
-same-state UAV ordering barriers do not warn. The diagnostic does not suppress barriers or alter
-failure handling. Without the debug wrapper it is disabled, and general shader-object bindings,
-copy/clear commands, attachments, and default-state restoration do not produce this diagnostic.
-This applies to flat render, compute, and ray-tracing bindings on D3D12 and Vulkan.
-
-D3D12 caches flat sampler tables by immutable binding-set identity for the command buffer's
-lifetime, including workloads using more than 16 distinct sets. Rebinding an existing set does
-not allocate another sampler table. Command-buffer reset clears the cache along with its
-descriptor arenas. Distinct sets still consume the configured shader-visible sampler heap;
-exhaustion returns an allocation failure and does not overwrite tables used by earlier commands.
+Shader-object parameters are materialized when draw/dispatch is recorded. Recorded commands
+retain the resource dependencies and constant snapshots. Raw descriptor handles require explicit
+resource state commands before the pass; copying a handle alone does not retain its resource.
+D3D12 sampler tables are cached by complete descriptor sequence and layout, independently of
+ordinary constant changes. Failed legacy materialization is reported by `finish`, without publishing
+a partial command buffer.
 
 ### Vulkan allocation failures
 
@@ -299,11 +263,10 @@ reset fails are isolated instead of being returned to the reusable pool.
 
 ## `IRayTracingPassEncoder` interface
 
-| API                   | CPU | CUDA | D3D11 | D3D12 | Vulkan | Metal | WGPU |
-|-----------------------|-----|------|-------|-------|--------|-------|------|
-| `bindPipeline`        | :x: | yes  | :x:   | yes   | yes    | :x:   | :x:  |
-| `bindPipeline` (flat) | :x: | :x:  | :x:   | yes   | yes    | :x:   | :x:  |
-| `dispatchRays`        | :x: | yes  | :x:   | yes   | yes    | :x:   | :x:  |
+| API            | CPU | CUDA | D3D11 | D3D12 | Vulkan | Metal | WGPU |
+|----------------|-----|------|-------|-------|--------|-------|------|
+| `bindPipeline` | :x: | yes  | :x:   | yes   | yes    | :x:   | :x:  |
+| `dispatchRays` | :x: | yes  | :x:   | yes   | yes    | :x:   | :x:  |
 
 ## `ICommandBuffer` interface
 

@@ -1,5 +1,4 @@
 #include "d3d12-pipeline.h"
-#include "d3d12-binding-set.h"
 #include "d3d12-device.h"
 #include "d3d12-pipeline-state-stream.h"
 #include "d3d12-shader-program.h"
@@ -232,9 +231,7 @@ Result DeviceImpl::createRenderPipeline2(const RenderPipelineDesc& desc, IRender
     TimePoint startTime = Timer::now();
 
     ShaderProgramImpl* program = checked_cast<ShaderProgramImpl*>(desc.program);
-    auto* pipelineLayout = checked_cast<PipelineLayoutImpl*>(desc.layout);
-    ID3D12RootSignature* rootSignature = pipelineLayout ? pipelineLayout->m_rootSignature.get()
-                                                        : program->m_rootObjectLayout->m_rootSignature.get();
+    ID3D12RootSignature* rootSignature = program->m_rootObjectLayout->m_rootSignature.get();
     SLANG_RHI_ASSERT(!program->m_shaders.empty());
     InputLayoutImpl* inputLayout = checked_cast<InputLayoutImpl*>(desc.inputLayout);
 
@@ -503,9 +500,7 @@ Result DeviceImpl::createComputePipeline2(const ComputePipelineDesc& desc, IComp
     TimePoint startTime = Timer::now();
 
     ShaderProgramImpl* program = checked_cast<ShaderProgramImpl*>(desc.program);
-    auto* pipelineLayout = checked_cast<PipelineLayoutImpl*>(desc.layout);
-    ID3D12RootSignature* rootSignature = pipelineLayout ? pipelineLayout->m_rootSignature.get()
-                                                        : program->m_rootObjectLayout->m_rootSignature.get();
+    ID3D12RootSignature* rootSignature = program->m_rootObjectLayout->m_rootSignature.get();
     SLANG_RHI_ASSERT(!program->m_shaders.empty());
 
     // Describe and create the compute pipeline state object
@@ -698,9 +693,7 @@ Result DeviceImpl::createRayTracingPipeline2(const RayTracingPipelineDesc& desc,
     shaderConfigSubObject.pDesc = &shaderConfig;
     subObjects.push_back(shaderConfigSubObject);
 
-    auto* pipelineLayout = checked_cast<PipelineLayoutImpl*>(desc.layout);
-    ID3D12RootSignature* rootSignature = pipelineLayout ? pipelineLayout->m_rootSignature.get()
-                                                        : program->m_rootObjectLayout->m_rootSignature.get();
+    ID3D12RootSignature* rootSignature = program->m_rootObjectLayout->m_rootSignature.get();
     D3D12_GLOBAL_ROOT_SIGNATURE globalSignatureDesc = {};
     globalSignatureDesc.pGlobalRootSignature = rootSignature;
     D3D12_STATE_SUBOBJECT globalSignatureSubobject = {};

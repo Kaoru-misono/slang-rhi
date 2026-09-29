@@ -450,7 +450,7 @@ public:
 
     CommandList(
         ArenaAllocator& allocator,
-        std::set<RefPtr<RefObject>>& trackedObjects,
+        std::vector<RefPtr<RefObject>>& trackedObjects,
         std::vector<ExecuteCallbackObjectRetainer>& trackedExecuteCallbackObjects
     );
 
@@ -521,7 +521,7 @@ public:
     {
         if (resource)
         {
-            m_trackedObjects.insert(resource);
+            m_trackedObjects.emplace_back(resource);
         }
     }
 
@@ -546,7 +546,7 @@ public:
 
 private:
     ArenaAllocator& m_allocator;
-    std::set<RefPtr<RefObject>>& m_trackedObjects;
+    std::vector<RefPtr<RefObject>>& m_trackedObjects;
     std::vector<ExecuteCallbackObjectRetainer>& m_trackedExecuteCallbackObjects;
     CommandSlot* m_commandSlots = nullptr;
     CommandSlot* m_lastCommandSlot = nullptr;

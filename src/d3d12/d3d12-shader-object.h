@@ -3,6 +3,7 @@
 #include "d3d12-base.h"
 #include "d3d12-shader-object-layout.h"
 #include "../transient-buffer-heap.h"
+#include "../binding-table-cache.h"
 
 #include "core/short_vector.h"
 
@@ -15,9 +16,13 @@ namespace rhi::d3d12 {
 struct DescriptorSet
 {
     GPUDescriptorRange resources;
-    GPUDescriptorRange samplers;
+    D3D12_CPU_DESCRIPTOR_HANDLE* samplerDescriptors = nullptr;
+    uint32_t samplerCount = 0;
+    uint32_t samplerRootParameter = 0;
 };
 
+
+struct BindingTableEntry;
 
 struct BindingDataBuilder
 {
@@ -25,6 +30,11 @@ struct BindingDataBuilder
     ArenaAllocator* m_allocator;
     BindingCache* m_bindingCache;
     BindingDataImpl* m_bindingData;
+    std::vector<RefPtr<RefObject>>* m_retained;
+    BindingTableEntry* m_table = nullptr;
+    bool m_tableHit = false;
+    uint32_t m_rootDescriptorCursor = 0;
+
     TransientBufferArena* m_constantBufferArena;
     GPUDescriptorArena* m_cbvSrvUavArena;
     GPUDescriptorArena* m_samplerArena;
@@ -53,6 +63,10 @@ struct BindingDataBuilder
         ShaderObjectLayoutImpl* specializedLayout,
         DescriptorSet& outDescriptorSet
     );
+
+    void writeRootParameter(uint32_t index, uint64_t address, bool uav);
+
+    Result finishSamplerTable(const DescriptorSet& descriptorSet, ShaderObjectLayoutImpl* layout);
 
     /// Bind this object as a `ConstantBuffer<X>`
     Result bindAsConstantBuffer(
@@ -120,84 +134,95 @@ public:
         };
     };
 
-    /// Required buffer states.
-    BufferState* bufferStates;
-    uint32_t bufferStateCapacity;
-    uint32_t bufferStateCount;
-    /// Required texture states.
-    TextureState* textureStates;
-    uint32_t textureStateCapacity;
-    uint32_t textureStateCount;
+    struct StateSlice
+    {
+        const std::vector<BufferState>* buffers;
+        const std::vector<TextureState>* textures;
+        StateSlice* next;
+    };
+    StateSlice* stateSlices;
+    StateSlice* lastStateSlice;
+
     /// Root parameters.
     RootParameter* rootParameters;
     uint32_t rootParameterCount;
 };
 
-/// Cache of the sampler descriptor tables a command buffer has already filled, keyed by the owner
-/// of the samplers: a shader object with its layout, or a flat binding set. Neither owner's sampler
-/// bindings change between binds (a shader object only changes uniform data through setData, and a
-/// binding set is immutable), so reusing the table keeps repeated binds from exhausting the small
-/// shader-visible sampler heap.
-struct BindingCache
+struct BindingTableEntry
 {
-    static constexpr uint32_t kMaxSamplerEntries = 16;
+    BindingClosureKey key;
+    std::vector<BindingDataImpl::BufferState> buffers;
+    std::vector<BindingDataImpl::TextureState> textures;
+    GPUDescriptorRange resources;
+    GPUDescriptorRange samplers;
+    std::vector<BindingDataImpl::RootParameter> rootDescriptors;
+};
 
+// Descriptor tables are immutable once referenced by a recorded draw.
+struct BindingCache : BindingTableCache<BindingTableEntry>
+{
     struct SamplerEntry
     {
-        uint32_t objectUid;
         ShaderObjectLayoutImpl* layout;
+        size_t hash;
+        std::vector<SIZE_T> descriptors;
         GPUDescriptorRange samplers;
     };
 
-    struct FlatSamplerEntry
-    {
-        const BindingSet* set;
-        GPUDescriptorRange samplers;
-    };
 
-    SamplerEntry samplerEntries[kMaxSamplerEntries] = {};
-    uint32_t samplerEntryCount = 0;
-    std::vector<FlatSamplerEntry> flatSamplerEntries;
+    std::vector<SamplerEntry> samplerEntries;
 
-    GPUDescriptorRange lookupSamplers(uint32_t objectUid, ShaderObjectLayoutImpl* layout)
+    static size_t hashSamplers(const D3D12_CPU_DESCRIPTOR_HANDLE* descriptors, uint32_t count)
     {
-        for (uint32_t i = 0; i < samplerEntryCount; ++i)
-        {
-            if (samplerEntries[i].objectUid == objectUid && samplerEntries[i].layout == layout)
-                return samplerEntries[i].samplers;
-        }
-        return {};
+        size_t hash = count;
+        for (uint32_t i = 0; i < count; ++i)
+            hash ^= descriptors[i].ptr + size_t(0x9e3779b9) + (hash << 6) + (hash >> 2);
+        return hash;
     }
 
-    void storeSamplers(uint32_t objectUid, ShaderObjectLayoutImpl* layout, GPUDescriptorRange samplers)
+    GPUDescriptorRange lookupSamplers(
+        ShaderObjectLayoutImpl* layout,
+        const D3D12_CPU_DESCRIPTOR_HANDLE* descriptors,
+        uint32_t count,
+        size_t hash
+    ) const
     {
-        if (samplerEntryCount < kMaxSamplerEntries)
+        for (const auto& entry : samplerEntries)
         {
-            samplerEntries[samplerEntryCount++] = {objectUid, layout, samplers};
-        }
-    }
-
-    GPUDescriptorRange lookupFlatSamplers(const BindingSet* set) const
-    {
-        for (const FlatSamplerEntry& entry : flatSamplerEntries)
-        {
-            if (entry.set == set)
+            if (entry.layout != layout || entry.hash != hash || entry.descriptors.size() != count)
+                continue;
+            bool equal = true;
+            for (uint32_t i = 0; i < count; ++i)
+                if (entry.descriptors[i] != descriptors[i].ptr)
+                {
+                    equal = false;
+                    break;
+                }
+            if (equal)
                 return entry.samplers;
         }
         return {};
     }
 
-    void storeFlatSamplers(const BindingSet* set, GPUDescriptorRange samplers)
+    void storeSamplers(
+        ShaderObjectLayoutImpl* layout,
+        const D3D12_CPU_DESCRIPTOR_HANDLE* descriptors,
+        uint32_t count,
+        size_t hash,
+        GPUDescriptorRange samplers
+    )
     {
-        // The command buffer retains each immutable set until reset; its identity cannot be recycled.
-        // Descriptor capacity remains bounded by the real shader-visible sampler heap.
-        flatSamplerEntries.emplace_back(FlatSamplerEntry{set, samplers});
+        SamplerEntry entry{layout, hash, {}, samplers};
+        entry.descriptors.reserve(count);
+        for (uint32_t i = 0; i < count; ++i)
+            entry.descriptors.push_back(descriptors[i].ptr);
+        samplerEntries.push_back(std::move(entry));
     }
 
     void reset()
     {
-        samplerEntryCount = 0;
-        flatSamplerEntries.clear();
+        samplerEntries.clear();
+        BindingTableCache<BindingTableEntry>::reset();
     }
 };
 
