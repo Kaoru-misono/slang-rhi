@@ -414,7 +414,9 @@ Result ShaderObject::setDescriptorHandle(const ShaderOffset& offset, const Descr
         return SLANG_E_INVALID_ARG;
     }
 
-    RefPtr<Resource> retained = owner ? checked_cast<Resource*>(owner) : nullptr;
+    // Concrete resources derive from their interface and Resource separately, so reaching Resource
+    // from IResource is a cross cast that only dynamic_cast performs (release checked_cast is a static_cast).
+    RefPtr<Resource> retained = owner ? dynamic_cast<Resource*>(owner) : nullptr;
     clearDescriptorOwners(offset.uniformOffset, sizeof(uint64_t));
     if (retained)
         m_descriptorOwners.push_back({offset.uniformOffset, retained});
@@ -497,6 +499,42 @@ bool ShaderObject::isFinalized()
     return m_finalized;
 }
 
+Result ShaderObject::reset()
+{
+    SLANG_RETURN_ON_FAIL(checkFinalized());
+
+    incrementVersion();
+
+    m_data.resize(getInitialUniformSize(m_layout));
+    if (m_data.size())
+        ::memset(m_data.data(), 0, m_data.size());
+
+    m_slots.clear();
+    m_slots.resize(m_layout->getSlotCount());
+    m_descriptorOwners.clear();
+
+    m_objects = m_ownedObjects;
+    for (auto& object : m_ownedObjects)
+    {
+        if (object)
+            SLANG_RETURN_ON_FAIL(object->reset());
+    }
+
+    m_userProvidedSpecializationArgs.clear();
+    m_structuredBufferSpecializationArgs.clear();
+    m_specializedLayout = nullptr;
+    m_shaderObjectType = {nullptr, kInvalidComponentID};
+
+    return SLANG_OK;
+}
+
+size_t ShaderObject::getInitialUniformSize(ShaderObjectLayout* layout)
+{
+    if (layout->getContainerType() == ShaderObjectContainerType::ParameterBlock)
+        return layout->getParameterBlockTypeLayout()->getSize();
+    return layout->getUniformBufferSize();
+}
+
 Result ShaderObject::create(
     Device* device,
     ShaderObjectLayout* layout,
@@ -527,17 +565,7 @@ Result ShaderObject::init(ShaderObjectLayout* layout, ShaderProgram* program)
     // uniform data (which includes values from this object and
     // any existential-type sub-objects).
     //
-    size_t uniformSize = 0;
-    if (layout->getContainerType() == ShaderObjectContainerType::ParameterBlock)
-    {
-        auto parameterBlockTypeLayout = layout->getParameterBlockTypeLayout();
-        uniformSize = parameterBlockTypeLayout->getSize();
-    }
-    else
-    {
-        uniformSize = layout->getUniformBufferSize();
-    }
-
+    size_t uniformSize = getInitialUniformSize(layout);
     if (uniformSize)
     {
         m_data.resize(uniformSize);
@@ -579,6 +607,7 @@ Result ShaderObject::init(ShaderObjectLayout* layout, ShaderProgram* program)
             m_objects[bindingRange.subObjectIndex + i] = subObject;
         }
     }
+    m_ownedObjects = m_objects;
 
     m_device->customizeShaderObject(this);
 
@@ -864,6 +893,14 @@ Result RootShaderObject::init(ShaderProgram* program)
         SLANG_RETURN_ON_FAIL(ShaderObject::create(m_device, entryPointLayout, entryPoint.writeRef(), program));
         m_entryPoints.push_back(entryPoint);
     }
+    return SLANG_OK;
+}
+
+Result RootShaderObject::reset()
+{
+    SLANG_RETURN_ON_FAIL(ShaderObject::reset());
+    for (auto& entryPoint : m_entryPoints)
+        SLANG_RETURN_ON_FAIL(entryPoint->reset());
     return SLANG_OK;
 }
 

@@ -80,7 +80,7 @@ IShaderObject* DebugRenderPassEncoder::bindPipeline(IRenderPipeline* pipeline)
 
     if (!m_rootObject)
         m_rootObject = new DebugRootShaderObject(ctx);
-    m_rootObject->reset();
+    m_rootObject->detachBaseObject();
     m_rootObject->baseObject = baseObject->bindPipeline(pipeline);
     m_pipelineBound = true;
 
@@ -369,7 +369,7 @@ IShaderObject* DebugComputePassEncoder::bindPipeline(IComputePipeline* pipeline)
 
     if (!m_rootObject)
         m_rootObject = new DebugRootShaderObject(ctx);
-    m_rootObject->reset();
+    m_rootObject->detachBaseObject();
     m_rootObject->baseObject = baseObject->bindPipeline(pipeline);
     m_pipelineBound = true;
 
@@ -526,7 +526,7 @@ IShaderObject* DebugRayTracingPassEncoder::bindPipeline(IRayTracingPipeline* pip
 
     if (!m_rootObject)
         m_rootObject = new DebugRootShaderObject(ctx);
-    m_rootObject->reset();
+    m_rootObject->detachBaseObject();
     m_rootObject->baseObject = baseObject->bindPipeline(pipeline, shaderTable);
     m_pipelineBound = true;
 

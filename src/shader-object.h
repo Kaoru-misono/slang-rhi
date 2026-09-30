@@ -241,6 +241,8 @@ public:
     std::vector<DescriptorOwner> m_descriptorOwners;
     short_vector<uint8_t> m_data;
     short_vector<InternalRefPtr<ShaderObject>> m_objects;
+    // The sub-objects created by `init`; `reset` restores `m_objects` to them.
+    short_vector<InternalRefPtr<ShaderObject>> m_ownedObjects;
     short_vector<RefPtr<ExtendedShaderObjectTypeListObject>> m_userProvidedSpecializationArgs;
 
     // Specialization args for a StructuredBuffer object.
@@ -293,6 +295,7 @@ public:
     virtual SLANG_NO_THROW Result SLANG_MCALL setConstantBufferOverride(IBuffer* outBuffer) override;
     virtual SLANG_NO_THROW Result SLANG_MCALL finalize() override;
     virtual SLANG_NO_THROW bool SLANG_MCALL isFinalized() override;
+    virtual SLANG_NO_THROW Result SLANG_MCALL reset() override;
 
 public:
     static Result create(
@@ -317,6 +320,8 @@ public:
     );
 
 protected:
+    static size_t getInitialUniformSize(ShaderObjectLayout* layout);
+
     inline void incrementVersion() { m_version++; }
     void clearDescriptorOwners(size_t offset, size_t size);
 
@@ -357,6 +362,7 @@ public:
     // IShaderObject implementation
     virtual SLANG_NO_THROW uint32_t SLANG_MCALL getEntryPointCount() override;
     virtual SLANG_NO_THROW Result SLANG_MCALL getEntryPoint(uint32_t index, IShaderObject** outEntryPoint) override;
+    virtual SLANG_NO_THROW Result SLANG_MCALL reset() override;
 
 public:
     static Result create(Device* device, ShaderProgram* program, RootShaderObject** outRootShaderObject);

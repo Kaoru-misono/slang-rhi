@@ -74,6 +74,7 @@ public:
 
     virtual SLANG_NO_THROW Result SLANG_MCALL finalize() override;
     virtual SLANG_NO_THROW bool SLANG_MCALL isFinalized() override;
+    virtual SLANG_NO_THROW Result SLANG_MCALL reset() override;
 
 public:
     void checkCompleteness();
@@ -119,7 +120,7 @@ public:
     ) override;
 
 public:
-    void reset();
+    void detachBaseObject();
 };
 
 } // namespace rhi::debug
