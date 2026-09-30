@@ -1969,6 +1969,13 @@ public:
     /// Returns true if the shader object has been finalized.
     virtual SLANG_NO_THROW bool SLANG_MCALL isFinalized() = 0;
 
+    /// Restores the state the shader object had when it was created, so it can be reused for another binding.
+    /// Uniform data is zeroed; bindings, descriptor handles and specialization arguments are cleared; sub-objects
+    /// replaced by `setObject` are restored to the ones created with this object, which are reset recursively, as
+    /// are the entry points of a root object. Objects set from elsewhere are released, never modified.
+    /// Fails if the shader object is finalized.
+    virtual SLANG_NO_THROW Result SLANG_MCALL reset() = 0;
+
     inline ComPtr<IShaderObject> getObject(const ShaderOffset& offset)
     {
         ComPtr<IShaderObject> object = nullptr;
