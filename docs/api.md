@@ -122,6 +122,7 @@
 | `setConstantBufferOverride` | :x:   | :x:    |
 | `finalize`                  | yes   | yes    |
 | `isFinalized`               | yes   | yes    |
+| `reset`                     | yes   | yes    |
 
 ## `IShaderTable` interface
 

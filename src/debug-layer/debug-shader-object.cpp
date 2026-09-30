@@ -228,6 +228,20 @@ bool DebugShaderObject::isFinalized()
     return baseObject->isFinalized();
 }
 
+Result DebugShaderObject::reset()
+{
+    SLANG_RHI_DEBUG_API(IShaderObject, reset);
+
+    SLANG_RETURN_ON_FAIL(checkNotFinalized());
+
+    SLANG_RETURN_ON_FAIL(baseObject->reset());
+    // Cached child wrappers hold the objects set before the reset; drop them so they are released.
+    m_objects.clear();
+    for (auto& entryPoint : m_entryPoints)
+        entryPoint->m_objects.clear();
+    return SLANG_OK;
+}
+
 void DebugShaderObject::checkCompleteness()
 {
     // TODO(shaderobject): Implement better validation for bindings but make that optional as it's expensive.
@@ -282,7 +296,7 @@ Result DebugRootShaderObject::setSpecializationArgs(
     return baseObject->setSpecializationArgs(offset, args, count);
 }
 
-void DebugRootShaderObject::reset()
+void DebugRootShaderObject::detachBaseObject()
 {
     m_entryPoints.clear();
     m_objects.clear();
