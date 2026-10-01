@@ -879,7 +879,10 @@ Result DeviceImpl::initVulkanDevice(
             extendedFeatures.storage16BitFeatures,
             storageBuffer16BitAccess,
             VK_KHR_16BIT_STORAGE_EXTENSION_NAME,
-            {/* "16-bit-storage" */}
+            {
+                if (extendedFeatures.storage16BitFeatures.storageInputOutput16)
+                    availableFeatures.push_back(Feature::ShaderInputOutput16);
+            }
         );
 
         // Keep extension enablement on the base atomics bits to preserve load/store/exchange support.
