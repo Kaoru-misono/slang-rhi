@@ -233,6 +233,7 @@ public:
     void cmdExecuteCallback(const commands::ExecuteCallback& cmd);
 
     void prepareSetRenderState(const commands::SetRenderState& cmd);
+    void prepareIndirectArguments(BufferImpl* argBuffer, BufferImpl* countBuffer);
 
     void setBindings(BindingDataImpl* bindingData, VkPipelineBindPoint bindPoint);
 
@@ -277,11 +278,29 @@ Result CommandRecorder::record(CommandBufferImpl* commandBuffer)
         //
         if (slot->id == CommandID::BeginRenderPass)
         {
+            // Resource states can change between render passes, so each pass requires its states again.
+            m_preparedRenderStateValid = false;
             for (auto subCmdSlot = slot->next; subCmdSlot; subCmdSlot = subCmdSlot->next)
             {
                 if (subCmdSlot->id == CommandID::SetRenderState)
                 {
                     prepareSetRenderState(commandList.getCommand<commands::SetRenderState>(subCmdSlot));
+                }
+                else if (subCmdSlot->id == CommandID::DrawIndirect)
+                {
+                    const auto& draw = commandList.getCommand<commands::DrawIndirect>(subCmdSlot);
+                    prepareIndirectArguments(
+                        checked_cast<BufferImpl*>(draw.argBuffer.buffer),
+                        checked_cast<BufferImpl*>(draw.countBuffer.buffer)
+                    );
+                }
+                else if (subCmdSlot->id == CommandID::DrawIndexedIndirect)
+                {
+                    const auto& draw = commandList.getCommand<commands::DrawIndexedIndirect>(subCmdSlot);
+                    prepareIndirectArguments(
+                        checked_cast<BufferImpl*>(draw.argBuffer.buffer),
+                        checked_cast<BufferImpl*>(draw.countBuffer.buffer)
+                    );
                 }
                 else if (subCmdSlot->id == CommandID::EndRenderPass)
                 {
@@ -816,6 +835,15 @@ void CommandRecorder::cmdEndRenderPass(const commands::EndRenderPass& cmd)
     m_renderPassActive = false;
 }
 
+void CommandRecorder::prepareIndirectArguments(BufferImpl* argBuffer, BufferImpl* countBuffer)
+{
+    requireBufferState(argBuffer, ResourceState::IndirectArgument);
+    if (countBuffer)
+    {
+        requireBufferState(countBuffer, ResourceState::IndirectArgument);
+    }
+}
+
 void CommandRecorder::prepareSetRenderState(const commands::SetRenderState& cmd)
 {
     const RenderState& state = cmd.state;
@@ -1039,15 +1067,9 @@ void CommandRecorder::cmdDrawIndirect(const commands::DrawIndirect& cmd)
     if (!m_renderStateValid)
         return;
 
+    // The argument buffer states were required before the render pass began.
     auto argBuffer = checked_cast<BufferImpl*>(cmd.argBuffer.buffer);
     auto countBuffer = checked_cast<BufferImpl*>(cmd.countBuffer.buffer);
-
-    requireBufferState(argBuffer, ResourceState::IndirectArgument);
-    if (countBuffer)
-    {
-        requireBufferState(countBuffer, ResourceState::IndirectArgument);
-    }
-    commitBarriers();
 
     if (countBuffer)
     {
@@ -1078,15 +1100,9 @@ void CommandRecorder::cmdDrawIndexedIndirect(const commands::DrawIndexedIndirect
     if (!m_renderStateValid)
         return;
 
+    // The argument buffer states were required before the render pass began.
     auto argBuffer = checked_cast<BufferImpl*>(cmd.argBuffer.buffer);
     auto countBuffer = checked_cast<BufferImpl*>(cmd.countBuffer.buffer);
-
-    requireBufferState(argBuffer, ResourceState::IndirectArgument);
-    if (countBuffer)
-    {
-        requireBufferState(countBuffer, ResourceState::IndirectArgument);
-    }
-    commitBarriers();
 
     if (countBuffer)
     {

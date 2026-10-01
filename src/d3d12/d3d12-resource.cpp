@@ -97,8 +97,13 @@ Result D3D12Resource::initCommitted(
 {
     setResourceNull();
 
+    // The allocator's resources are not zeroed (D3D12MA_RECOMMENDED_ALLOCATOR_FLAGS), and a render target or depth
+    // stencil in non-zeroed memory must be cleared, discarded or copied before any other use. Committed resources
+    // outside the allocator are zeroed, so such textures are usable as created.
+    const bool isRenderTargetOrDepthStencil =
+        (resourceDesc.Flags & (D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET | D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL)) != 0;
     const bool canUseAllocator =
-        allocator &&
+        allocator && !isRenderTargetOrDepthStencil &&
         (heapProps.Type == D3D12_HEAP_TYPE_DEFAULT || heapProps.Type == D3D12_HEAP_TYPE_UPLOAD ||
          heapProps.Type == D3D12_HEAP_TYPE_READBACK) &&
         heapProps.CPUPageProperty == D3D12_CPU_PAGE_PROPERTY_UNKNOWN &&
