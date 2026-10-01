@@ -978,6 +978,7 @@ Result DeviceImpl::initialize(const DeviceDesc& desc, BackendImpl* backend)
             {
                 addFeature(Feature::Half);
                 addFeature(Feature::Int16);
+                addFeature(Feature::ShaderInputOutput16);
             }
         }
     }
