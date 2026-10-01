@@ -183,7 +183,9 @@ enum class DeviceType
     x(ArgumentBufferTier2,                      "argument-buffer-tier-2"                        ) \
     x(ResidencySet,                             "residency-set"                                 ) \
     /* CUDA specific features */                                                                  \
-    x(AtomicBfloat16,                           "atomic-bfloat16"                               )
+    x(AtomicBfloat16,                           "atomic-bfloat16"                               ) \
+    /* 16-bit shader stage inputs and outputs (Vulkan storageInputOutput16, D3D12 native 16-bit ops) */ \
+    x(ShaderInputOutput16,                      "shader-input-output-16"                        )
 // clang-format on
 
 #define SLANG_RHI_FEATURE_X(e, _) e,

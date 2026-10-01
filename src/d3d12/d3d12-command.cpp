@@ -629,8 +629,9 @@ void CommandRecorder::cmdUploadTextureData(const commands::UploadTextureData& cm
             D3D12_PLACED_SUBRESOURCE_FOOTPRINT& footprint = srcRegion.PlacedFootprint;
             footprint.Offset = bufferOffset;
             footprint.Footprint.Format = texDesc.Format;
-            footprint.Footprint.Width = srLayout->size.width;
-            footprint.Footprint.Height = srLayout->size.height;
+            // Block-compressed footprints cover whole blocks, also for mips smaller than one block.
+            footprint.Footprint.Width = UINT(math::calcAligned(srLayout->size.width, srLayout->blockWidth));
+            footprint.Footprint.Height = UINT(math::calcAligned(srLayout->size.height, srLayout->blockHeight));
             footprint.Footprint.Depth = srLayout->size.depth;
             footprint.Footprint.RowPitch = srLayout->rowPitch;
 
@@ -689,6 +690,10 @@ void CommandRecorder::cmdResolveQuery(const commands::ResolveQuery& cmd)
 void CommandRecorder::cmdBeginRenderPass(const commands::BeginRenderPass& cmd)
 {
     const RenderPassDesc& desc = cmd.desc;
+
+    // Resource states can change between render passes (explicit state requests, other passes), so the first render
+    // state of each pass requires its bound, vertex and index buffer states again.
+    m_renderStateValid = false;
 
     m_renderTargetViews.resize(desc.colorAttachmentCount);
     m_resolveTargetViews.resize(desc.colorAttachmentCount);
@@ -970,6 +975,9 @@ void CommandRecorder::cmdSetRenderState(const commands::SetRenderState& cmd)
             m_cmdList->IASetIndexBuffer(nullptr);
         }
     }
+
+    // Vertex and index buffer transitions are requested after setBindings committed its barriers.
+    commitBarriers();
 
     if (updateViewports)
     {
