@@ -222,6 +222,8 @@ public:
     void cmdSetBufferState(const commands::SetBufferState& cmd);
     void cmdSetTextureState(const commands::SetTextureState& cmd);
     void cmdGlobalBarrier(const commands::GlobalBarrier& cmd);
+    void cmdSynchronizeBufferWrites(const commands::SynchronizeBufferWrites& cmd);
+    void cmdSynchronizeTextureWrites(const commands::SynchronizeTextureWrites& cmd);
     void cmdReleaseBufferForQueue(const commands::ReleaseBufferForQueue& cmd);
     void cmdReleaseTextureForQueue(const commands::ReleaseTextureForQueue& cmd);
     void cmdAcquireBufferFromQueue(const commands::AcquireBufferFromQueue& cmd);
@@ -240,6 +242,9 @@ public:
     void requireBindingStates(BindingDataImpl* bindingData);
     void requireBufferState(BufferImpl* buffer, ResourceState state);
     void requireTextureState(TextureImpl* texture, SubresourceRange subresourceRange, ResourceState state);
+    void requireBindingBufferState(BufferImpl* buffer, ResourceState state);
+    void requireBindingTextureState(TextureImpl* texture, SubresourceRange subresourceRange, ResourceState state);
+    CommandStateScope beginCommandStates();
     void commitBarriers();
 
     void queryAccelerationStructureProperties(
@@ -507,9 +512,10 @@ void CommandRecorder::cmdCopyTextureToBuffer(const commands::CopyTextureToBuffer
 
 void CommandRecorder::cmdClearBuffer(const commands::ClearBuffer& cmd)
 {
+    CommandStateScope commandStates = beginCommandStates();
     BufferImpl* buffer = checked_cast<BufferImpl*>(cmd.buffer);
 
-    requireBufferState(buffer, ResourceState::CopyDestination);
+    commandStates.require(buffer, ResourceState::CopyDestination);
     commitBarriers();
 
     VkDeviceSize offset = cmd.range.offset;
@@ -529,9 +535,10 @@ void CommandRecorder::cmdClearBuffer(const commands::ClearBuffer& cmd)
 
 void CommandRecorder::cmdClearTextureFloat(const commands::ClearTextureFloat& cmd)
 {
+    CommandStateScope commandStates = beginCommandStates();
     TextureImpl* texture = checked_cast<TextureImpl*>(cmd.texture);
 
-    requireTextureState(texture, cmd.subresourceRange, ResourceState::CopyDestination);
+    commandStates.require(texture, cmd.subresourceRange, ResourceState::CopyDestination);
     commitBarriers();
 
     VkImageSubresourceRange subresourceRange = {};
@@ -556,9 +563,10 @@ void CommandRecorder::cmdClearTextureFloat(const commands::ClearTextureFloat& cm
 
 void CommandRecorder::cmdClearTextureUint(const commands::ClearTextureUint& cmd)
 {
+    CommandStateScope commandStates = beginCommandStates();
     TextureImpl* texture = checked_cast<TextureImpl*>(cmd.texture);
 
-    requireTextureState(texture, cmd.subresourceRange, ResourceState::CopyDestination);
+    commandStates.require(texture, cmd.subresourceRange, ResourceState::CopyDestination);
     commitBarriers();
 
     VkImageSubresourceRange subresourceRange = {};
@@ -583,10 +591,11 @@ void CommandRecorder::cmdClearTextureUint(const commands::ClearTextureUint& cmd)
 
 void CommandRecorder::cmdClearTextureDepthStencil(const commands::ClearTextureDepthStencil& cmd)
 {
+    CommandStateScope commandStates = beginCommandStates();
     TextureImpl* texture = checked_cast<TextureImpl*>(cmd.texture);
     const FormatInfo& formatInfo = getFormatInfo(texture->m_desc.format);
 
-    requireTextureState(texture, cmd.subresourceRange, ResourceState::CopyDestination);
+    commandStates.require(texture, cmd.subresourceRange, ResourceState::CopyDestination);
     commitBarriers();
 
     VkImageSubresourceRange subresourceRange = {};
@@ -1357,6 +1366,7 @@ void CommandRecorder::cmdDispatchRays(const commands::DispatchRays& cmd)
 
 void CommandRecorder::cmdBuildAccelerationStructure(const commands::BuildAccelerationStructure& cmd)
 {
+    CommandStateScope commandStates = beginCommandStates();
     AccelerationStructureBuildDescConverter converter;
     if (converter.convert(cmd.desc, m_device->m_debugCallback) != SLANG_OK)
         return;
@@ -1365,14 +1375,14 @@ void CommandRecorder::cmdBuildAccelerationStructure(const commands::BuildAcceler
     AccelerationStructureImpl* src = checked_cast<AccelerationStructureImpl*>(cmd.src);
     BufferImpl* scratchBuffer = checked_cast<BufferImpl*>(cmd.scratchBuffer.buffer);
 
-    requireBufferState(dst->m_buffer, ResourceState::AccelerationStructureWrite);
+    commandStates.require(dst->m_buffer, ResourceState::AccelerationStructureWrite);
     converter.buildInfo.dstAccelerationStructure = dst->m_vkHandle;
     if (src)
     {
-        requireBufferState(src->m_buffer, ResourceState::AccelerationStructureRead);
+        commandStates.require(src->m_buffer, ResourceState::AccelerationStructureRead);
         converter.buildInfo.srcAccelerationStructure = src->m_vkHandle;
     }
-    requireBufferState(scratchBuffer, ResourceState::UnorderedAccess);
+    commandStates.require(scratchBuffer, ResourceState::UnorderedAccess);
     converter.buildInfo.scratchData.deviceAddress = cmd.scratchBuffer.getDeviceAddress();
 
     for (uint32_t inputIndex = 0; inputIndex < cmd.desc.inputCount; ++inputIndex)
@@ -1383,7 +1393,7 @@ void CommandRecorder::cmdBuildAccelerationStructure(const commands::BuildAcceler
         case AccelerationStructureBuildInputType::Instances:
             if (input.instances.instanceBuffer.buffer)
             {
-                requireBufferState(
+                commandStates.require(
                     checked_cast<BufferImpl*>(input.instances.instanceBuffer.buffer),
                     ResourceState::AccelerationStructureBuildInput
                 );
@@ -1394,7 +1404,7 @@ void CommandRecorder::cmdBuildAccelerationStructure(const commands::BuildAcceler
             {
                 if (input.triangles.vertexBuffers[i].buffer)
                 {
-                    requireBufferState(
+                    commandStates.require(
                         checked_cast<BufferImpl*>(input.triangles.vertexBuffers[i].buffer),
                         ResourceState::AccelerationStructureBuildInput
                     );
@@ -1402,14 +1412,14 @@ void CommandRecorder::cmdBuildAccelerationStructure(const commands::BuildAcceler
             }
             if (input.triangles.indexBuffer.buffer)
             {
-                requireBufferState(
+                commandStates.require(
                     checked_cast<BufferImpl*>(input.triangles.indexBuffer.buffer),
                     ResourceState::AccelerationStructureBuildInput
                 );
             }
             if (input.triangles.preTransformBuffer.buffer)
             {
-                requireBufferState(
+                commandStates.require(
                     checked_cast<BufferImpl*>(input.triangles.preTransformBuffer.buffer),
                     ResourceState::AccelerationStructureBuildInput
                 );
@@ -1417,12 +1427,12 @@ void CommandRecorder::cmdBuildAccelerationStructure(const commands::BuildAcceler
             if (const auto* ommDesc = findStructInChain<AccelerationStructureOpacityMicromapDesc>(input.triangles.next))
             {
                 if (ommDesc->link.micromap)
-                    requireBufferState(
+                    commandStates.require(
                         checked_cast<MicromapImpl*>(ommDesc->link.micromap)->m_buffer,
                         ResourceState::MicromapRead
                     );
                 if (ommDesc->link.indexBuffer)
-                    requireBufferState(
+                    commandStates.require(
                         checked_cast<BufferImpl*>(ommDesc->link.indexBuffer.buffer),
                         ResourceState::AccelerationStructureBuildInput
                     );
@@ -1433,7 +1443,7 @@ void CommandRecorder::cmdBuildAccelerationStructure(const commands::BuildAcceler
             {
                 if (input.proceduralPrimitives.aabbBuffers[i].buffer)
                 {
-                    requireBufferState(
+                    commandStates.require(
                         checked_cast<BufferImpl*>(input.proceduralPrimitives.aabbBuffers[i].buffer),
                         ResourceState::AccelerationStructureBuildInput
                     );
@@ -1445,14 +1455,14 @@ void CommandRecorder::cmdBuildAccelerationStructure(const commands::BuildAcceler
             {
                 if (input.spheres.vertexPositionBuffers[i].buffer)
                 {
-                    requireBufferState(
+                    commandStates.require(
                         checked_cast<BufferImpl*>(input.spheres.vertexPositionBuffers[i].buffer),
                         ResourceState::AccelerationStructureBuildInput
                     );
                 }
                 if (input.spheres.vertexRadiusBuffers[i].buffer)
                 {
-                    requireBufferState(
+                    commandStates.require(
                         checked_cast<BufferImpl*>(input.spheres.vertexRadiusBuffers[i].buffer),
                         ResourceState::AccelerationStructureBuildInput
                     );
@@ -1460,7 +1470,7 @@ void CommandRecorder::cmdBuildAccelerationStructure(const commands::BuildAcceler
             }
             if (input.spheres.indexBuffer.buffer)
             {
-                requireBufferState(
+                commandStates.require(
                     checked_cast<BufferImpl*>(input.spheres.indexBuffer.buffer),
                     ResourceState::AccelerationStructureBuildInput
                 );
@@ -1471,14 +1481,14 @@ void CommandRecorder::cmdBuildAccelerationStructure(const commands::BuildAcceler
             {
                 if (input.linearSweptSpheres.vertexPositionBuffers[i].buffer)
                 {
-                    requireBufferState(
+                    commandStates.require(
                         checked_cast<BufferImpl*>(input.linearSweptSpheres.vertexPositionBuffers[i].buffer),
                         ResourceState::AccelerationStructureBuildInput
                     );
                 }
                 if (input.linearSweptSpheres.vertexRadiusBuffers[i].buffer)
                 {
-                    requireBufferState(
+                    commandStates.require(
                         checked_cast<BufferImpl*>(input.linearSweptSpheres.vertexRadiusBuffers[i].buffer),
                         ResourceState::AccelerationStructureBuildInput
                     );
@@ -1486,7 +1496,7 @@ void CommandRecorder::cmdBuildAccelerationStructure(const commands::BuildAcceler
             }
             if (input.linearSweptSpheres.indexBuffer.buffer)
             {
-                requireBufferState(
+                commandStates.require(
                     checked_cast<BufferImpl*>(input.linearSweptSpheres.indexBuffer.buffer),
                     ResourceState::AccelerationStructureBuildInput
                 );
@@ -1519,13 +1529,14 @@ void CommandRecorder::cmdBuildAccelerationStructure(const commands::BuildAcceler
 
 void CommandRecorder::cmdBuildMicromap(const commands::BuildMicromap& cmd)
 {
+    CommandStateScope commandStates = beginCommandStates();
     if (!m_device->m_api.vkCmdBuildMicromapsEXT)
         return;
     MicromapImpl* dst = checked_cast<MicromapImpl*>(cmd.dst);
-    requireBufferState(dst->m_buffer, ResourceState::MicromapWrite);
-    requireBufferState(checked_cast<BufferImpl*>(cmd.scratchBuffer.buffer), ResourceState::UnorderedAccess);
-    requireBufferState(checked_cast<BufferImpl*>(cmd.desc.dataBuffer.buffer), ResourceState::MicromapBuildInput);
-    requireBufferState(checked_cast<BufferImpl*>(cmd.desc.descriptorBuffer.buffer), ResourceState::MicromapBuildInput);
+    commandStates.require(dst->m_buffer, ResourceState::MicromapWrite);
+    commandStates.require(checked_cast<BufferImpl*>(cmd.scratchBuffer.buffer), ResourceState::UnorderedAccess);
+    commandStates.require(checked_cast<BufferImpl*>(cmd.desc.dataBuffer.buffer), ResourceState::MicromapBuildInput);
+    commandStates.require(checked_cast<BufferImpl*>(cmd.desc.descriptorBuffer.buffer), ResourceState::MicromapBuildInput);
     MicromapBuildDescConverter converter;
     if (SLANG_FAILED(converter.convert(cmd.desc)))
         return;
@@ -1537,11 +1548,12 @@ void CommandRecorder::cmdBuildMicromap(const commands::BuildMicromap& cmd)
 
 void CommandRecorder::cmdCopyAccelerationStructure(const commands::CopyAccelerationStructure& cmd)
 {
+    CommandStateScope commandStates = beginCommandStates();
     AccelerationStructureImpl* dst = checked_cast<AccelerationStructureImpl*>(cmd.dst);
     AccelerationStructureImpl* src = checked_cast<AccelerationStructureImpl*>(cmd.src);
 
-    requireBufferState(dst->m_buffer, ResourceState::AccelerationStructureWrite);
-    requireBufferState(src->m_buffer, ResourceState::AccelerationStructureRead);
+    commandStates.require(dst->m_buffer, ResourceState::AccelerationStructureWrite);
+    commandStates.require(src->m_buffer, ResourceState::AccelerationStructureRead);
     commitBarriers();
 
     VkCopyAccelerationStructureInfoKHR copyInfo = {VK_STRUCTURE_TYPE_COPY_ACCELERATION_STRUCTURE_INFO_KHR};
@@ -1571,6 +1583,7 @@ void CommandRecorder::cmdQueryAccelerationStructureProperties(const commands::Qu
 
 void CommandRecorder::cmdExecuteClusterOperation(const commands::ExecuteClusterOperation& cmd)
 {
+    CommandStateScope commandStates = beginCommandStates();
     if (!m_api.vkCmdBuildClusterAccelerationStructureIndirectNV)
         return;
 
@@ -1586,16 +1599,16 @@ void CommandRecorder::cmdExecuteClusterOperation(const commands::ExecuteClusterO
     BufferImpl* resultBuffer = checked_cast<BufferImpl*>(desc.resultBuffer.buffer);
     BufferImpl* sizesBuffer = checked_cast<BufferImpl*>(desc.sizesBuffer.buffer);
 
-    requireBufferState(argsBuffer, ResourceState::ShaderResource);
+    commandStates.require(argsBuffer, ResourceState::ShaderResource);
     if (argCountBuffer)
-        requireBufferState(argCountBuffer, ResourceState::ShaderResource);
-    requireBufferState(scratchBuffer, ResourceState::UnorderedAccess);
+        commandStates.require(argCountBuffer, ResourceState::ShaderResource);
+    commandStates.require(scratchBuffer, ResourceState::UnorderedAccess);
     if (addressesBuffer)
-        requireBufferState(addressesBuffer, ResourceState::UnorderedAccess);
+        commandStates.require(addressesBuffer, ResourceState::UnorderedAccess);
     if (resultBuffer)
-        requireBufferState(resultBuffer, ResourceState::AccelerationStructureWrite);
+        commandStates.require(resultBuffer, ResourceState::AccelerationStructureWrite);
     if (sizesBuffer)
-        requireBufferState(sizesBuffer, ResourceState::UnorderedAccess);
+        commandStates.require(sizesBuffer, ResourceState::UnorderedAccess);
     commitBarriers();
 
     VkClusterAccelerationStructureClustersBottomLevelInputNV bottomLevelInput;
@@ -1635,11 +1648,12 @@ void CommandRecorder::cmdExecuteClusterOperation(const commands::ExecuteClusterO
 
 void CommandRecorder::cmdConvertCooperativeVectorMatrix(const commands::ConvertCooperativeVectorMatrix& cmd)
 {
+    CommandStateScope commandStates = beginCommandStates();
     BufferImpl* dstBuffer = checked_cast<BufferImpl*>(cmd.dstBuffer);
     BufferImpl* srcBuffer = checked_cast<BufferImpl*>(cmd.srcBuffer);
 
-    requireBufferState(dstBuffer, ResourceState::UnorderedAccess);
-    requireBufferState(srcBuffer, ResourceState::ShaderResource);
+    commandStates.require(dstBuffer, ResourceState::UnorderedAccess);
+    commandStates.require(srcBuffer, ResourceState::ShaderResource);
     commitBarriers();
 
     short_vector<VkConvertCooperativeVectorMatrixInfoNV> infos;
@@ -1664,18 +1678,36 @@ void CommandRecorder::cmdConvertCooperativeVectorMatrix(const commands::ConvertC
     }
     m_api.vkCmdConvertCooperativeVectorMatrixNV(m_cmdBuffer, infos.size(), infos.data());
 
-    requireBufferState(dstBuffer, ResourceState::ShaderResource);
+    commandStates.require(dstBuffer, ResourceState::ShaderResource);
     commitBarriers();
 }
 
 void CommandRecorder::cmdSetBufferState(const commands::SetBufferState& cmd)
 {
-    m_stateTracking.setBufferState(checked_cast<BufferImpl*>(cmd.buffer), cmd.state);
+    auto buffer = checked_cast<BufferImpl*>(cmd.buffer);
+    if (m_device->m_resourceStateMode == ResourceStateMode::Explicit)
+        m_stateTracking.declareBufferState(buffer, cmd.state, getBufferReadStatePolicy(m_queueType));
+    else
+        m_stateTracking.setBufferState(buffer, cmd.state);
 }
 
 void CommandRecorder::cmdSetTextureState(const commands::SetTextureState& cmd)
 {
-    m_stateTracking.setTextureState(checked_cast<TextureImpl*>(cmd.texture), cmd.subresourceRange, cmd.state);
+    auto texture = checked_cast<TextureImpl*>(cmd.texture);
+    if (m_device->m_resourceStateMode == ResourceStateMode::Explicit)
+        m_stateTracking.declareTextureState(texture, cmd.subresourceRange, cmd.state);
+    else
+        m_stateTracking.setTextureState(texture, cmd.subresourceRange, cmd.state);
+}
+
+void CommandRecorder::cmdSynchronizeBufferWrites(const commands::SynchronizeBufferWrites& cmd)
+{
+    m_stateTracking.synchronizeBufferWrites(checked_cast<BufferImpl*>(cmd.buffer));
+}
+
+void CommandRecorder::cmdSynchronizeTextureWrites(const commands::SynchronizeTextureWrites& cmd)
+{
+    m_stateTracking.synchronizeTextureWrites(checked_cast<TextureImpl*>(cmd.texture), cmd.subresourceRange);
 }
 
 void CommandRecorder::cmdGlobalBarrier(const commands::GlobalBarrier& cmd)
@@ -2005,15 +2037,15 @@ void CommandRecorder::requireBindingStates(BindingDataImpl* bindingData)
         SLANG_RHI_BINDING_COUNT(stateEntries, slice->buffers->size() + slice->textures->size());
         for (const auto& bufferState : *slice->buffers)
         {
-            m_stateTracking.requireBufferState(
-                bufferState.buffer, bufferState.state, getBufferReadStatePolicy(m_queueType)
-            );
+            // Acceleration structure storage belongs to the device, so callers cannot declare it.
+            if (bufferState.state == ResourceState::AccelerationStructureRead)
+                requireBufferState(bufferState.buffer, bufferState.state);
+            else
+                requireBindingBufferState(bufferState.buffer, bufferState.state);
         }
         for (const auto& textureState : *slice->textures)
         {
-            m_stateTracking.setTextureState(
-                textureState.texture, textureState.subresourceRange, textureState.state
-            );
+            requireBindingTextureState(textureState.texture, textureState.subresourceRange, textureState.state);
         }
     }
 }
@@ -2026,6 +2058,44 @@ void CommandRecorder::requireBufferState(BufferImpl* buffer, ResourceState state
 void CommandRecorder::requireTextureState(TextureImpl* texture, SubresourceRange subresourceRange, ResourceState state)
 {
     m_stateTracking.setTextureState(texture, subresourceRange, state);
+}
+
+// Shader bindings: transitioned in Automatic mode, only checked in Explicit mode.
+void CommandRecorder::requireBindingBufferState(BufferImpl* buffer, ResourceState state)
+{
+    if (m_device->m_resourceStateMode == ResourceStateMode::Explicit)
+    {
+        if (m_device->m_validateResourceStates && !m_stateTracking.isBufferStateDeclared(buffer, state))
+            m_device->reportUndeclaredResourceState(buffer->m_desc.label, state);
+        return;
+    }
+    const bool changed = m_stateTracking.requireBufferState(buffer, state, getBufferReadStatePolicy(m_queueType));
+    if (changed && m_device->m_validateResourceStates)
+        m_device->reportUndeclaredResourceState(buffer->m_desc.label, state);
+}
+
+void CommandRecorder::requireBindingTextureState(TextureImpl* texture, SubresourceRange subresourceRange, ResourceState state)
+{
+    if (m_device->m_resourceStateMode == ResourceStateMode::Explicit)
+    {
+        if (m_device->m_validateResourceStates &&
+            !m_stateTracking.isTextureStateDeclared(texture, subresourceRange, state))
+            m_device->reportUndeclaredResourceState(texture->m_desc.label, state);
+        return;
+    }
+    const bool changed = m_stateTracking.setTextureState(texture, subresourceRange, state);
+    if (changed && m_device->m_validateResourceStates)
+        m_device->reportUndeclaredResourceState(texture->m_desc.label, state);
+}
+
+// For commands whose required state is backend-specific; see CommandStateScope.
+CommandStateScope CommandRecorder::beginCommandStates()
+{
+    return CommandStateScope(
+        m_stateTracking,
+        getBufferReadStatePolicy(m_queueType),
+        m_device->m_resourceStateMode == ResourceStateMode::Explicit
+    );
 }
 
 void CommandRecorder::commitBarriers()

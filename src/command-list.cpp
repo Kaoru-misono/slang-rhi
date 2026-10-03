@@ -381,6 +381,18 @@ void CommandList::write(commands::GlobalBarrier&& cmd)
     writeCommand(std::move(cmd));
 }
 
+void CommandList::write(commands::SynchronizeBufferWrites&& cmd)
+{
+    retainResource<Buffer>(cmd.buffer);
+    writeCommand(std::move(cmd));
+}
+
+void CommandList::write(commands::SynchronizeTextureWrites&& cmd)
+{
+    retainResource<Texture>(cmd.texture);
+    writeCommand(std::move(cmd));
+}
+
 void CommandList::write(commands::ReleaseBufferForQueue&& cmd)
 {
     retainResource<Buffer>(cmd.buffer);
