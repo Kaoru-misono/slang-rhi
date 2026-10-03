@@ -1,6 +1,7 @@
 #include "device.h"
 
 #include "rhi-shared.h"
+#include "enum-strings.h"
 #include "shader.h"
 #include "heap.h"
 #include "command-buffer.h"
@@ -123,6 +124,21 @@ void ShaderCache::free()
 // ----------------------------------------------------------------------------
 // Device
 // ----------------------------------------------------------------------------
+
+void Device::reportUndeclaredResourceState(const char* label, ResourceState state)
+{
+    const char* name = label ? label : "<unnamed>";
+    if (m_resourceStateMode == ResourceStateMode::Explicit)
+    {
+        printError("Resource '%s' is used in state %s, which was not declared.", name, enumToString(state));
+        return;
+    }
+    printWarning(
+        "Resource '%s' was transitioned to %s on use; Explicit resource states require declaring it.",
+        name,
+        enumToString(state)
+    );
+}
 
 void Device::printMessage(DebugMessageType type, DebugMessageSource source, const char* message, ...)
 {
@@ -420,6 +436,9 @@ Result Device::initialize(const DeviceDesc& desc)
     }
 
     m_pipelineCompilationMode = desc.pipelineCompilationMode;
+
+    m_resourceStateMode = desc.resourceStateMode;
+    m_validateResourceStates = desc.validateResourceStates;
 
     m_persistentShaderCache = desc.persistentShaderCache;
     m_persistentPipelineCache = desc.persistentPipelineCache;

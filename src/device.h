@@ -433,6 +433,9 @@ public:
     void printWarning(const char* message, ...);
     void printError(const char* message, ...);
 
+    // Reports a use whose required state was not declared (validateResourceStates).
+    void reportUndeclaredResourceState(const char* label, ResourceState state);
+
     Result createShaderObject(ShaderObjectLayout* layout, ShaderObject** outObject);
     Result createRootShaderObject(ShaderProgram* program, RootShaderObject** outObject);
 
@@ -565,6 +568,9 @@ public:
     IDebugCallback* m_debugCallback = nullptr;
 
     PipelineCompilationMode m_pipelineCompilationMode = PipelineCompilationMode::Serial;
+
+    ResourceStateMode m_resourceStateMode = ResourceStateMode::Automatic;
+    bool m_validateResourceStates = false;
 
     bool shouldDeferPipelineCompilation(PipelineCompilationPolicy policy) const
     {

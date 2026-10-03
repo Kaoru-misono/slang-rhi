@@ -923,6 +923,21 @@ void CommandEncoder::globalBarrier()
     m_commandList->write(std::move(cmd));
 }
 
+void CommandEncoder::synchronizeBufferWrites(IBuffer* buffer)
+{
+    commands::SynchronizeBufferWrites cmd;
+    cmd.buffer = checked_cast<Buffer*>(buffer);
+    m_commandList->write(std::move(cmd));
+}
+
+void CommandEncoder::synchronizeTextureWrites(ITexture* texture, SubresourceRange subresourceRange)
+{
+    commands::SynchronizeTextureWrites cmd;
+    cmd.texture = checked_cast<Texture*>(texture);
+    cmd.subresourceRange = subresourceRange;
+    m_commandList->write(std::move(cmd));
+}
+
 void CommandEncoder::releaseBufferForQueue(IBuffer* buffer, ResourceState currentState, QueueType dstQueue)
 {
     commands::ReleaseBufferForQueue cmd;

@@ -264,8 +264,157 @@ public:
         return changed;
     }
 
+    // Explicit mode: transitions on change only; mergeable read states merge.
+    void declareBufferState(Buffer* buffer, ResourceState state, BufferReadStatePolicy policy)
+    {
+        if (buffer->m_desc.memoryType != MemoryType::DeviceLocal)
+            return;
+        BufferState* bufferState = getBufferState(buffer);
+        BufferStateSet declaredStates(state);
+        if (isMergeableBufferReadState(state, policy) &&
+            containsOnlyMergeableBufferReadStates(bufferState->states, policy))
+        {
+            declaredStates = bufferState->states;
+            declaredStates.add(state);
+        }
+        transitionBufferState(buffer, *bufferState, declaredStates, false);
+    }
+
+    void declareTextureState(Texture* texture, SubresourceRange subresourceRange, ResourceState state)
+    {
+        transitionTextureState(texture, subresourceRange, state, false);
+    }
+
+    BufferStateSet getBufferStates(Buffer* buffer) { return getBufferState(buffer)->states; }
+
+    void restoreBufferStates(Buffer* buffer, BufferStateSet states)
+    {
+        transitionBufferState(buffer, *getBufferState(buffer), states, false);
+    }
+
+    TextureState getTextureStates(Texture* texture) { return *getTextureState(texture); }
+
+    void restoreTextureStates(Texture* texture, SubresourceRange subresourceRange, const TextureState& states)
+    {
+        if (states.subresourceStates.empty())
+        {
+            transitionTextureState(texture, subresourceRange, states.state, false);
+            return;
+        }
+        subresourceRange = texture->resolveSubresourceRange(subresourceRange);
+        const uint32_t layerEnd = subresourceRange.layer + subresourceRange.layerCount;
+        for (uint32_t layer = subresourceRange.layer; layer < layerEnd; layer++)
+        {
+            for (uint32_t mip = subresourceRange.mip; mip < subresourceRange.mip + subresourceRange.mipCount; mip++)
+            {
+                transitionTextureState(
+                    texture,
+                    {layer, 1, mip, 1},
+                    states.subresourceStates[layer * texture->m_desc.mipCount + mip],
+                    false
+                );
+            }
+        }
+    }
+
+    bool isBufferStateDeclared(Buffer* buffer, ResourceState state)
+    {
+        if (buffer->m_desc.memoryType != MemoryType::DeviceLocal)
+            return true;
+        return getBufferState(buffer)->states.contains(state);
+    }
+
+    bool isTextureStateDeclared(Texture* texture, SubresourceRange subresourceRange, ResourceState state)
+    {
+        if (texture->m_desc.memoryType != MemoryType::DeviceLocal)
+            return true;
+        subresourceRange = texture->resolveSubresourceRange(subresourceRange);
+        TextureState* textureState = getTextureState(texture);
+        if (textureState->subresourceStates.empty())
+            return textureState->state == state;
+        const uint32_t layerEnd = subresourceRange.layer + subresourceRange.layerCount;
+        for (uint32_t layer = subresourceRange.layer; layer < layerEnd; layer++)
+        {
+            for (uint32_t mip = subresourceRange.mip; mip < subresourceRange.mip + subresourceRange.mipCount; mip++)
+            {
+                if (textureState->subresourceStates[layer * texture->m_desc.mipCount + mip] != state)
+                    return false;
+            }
+        }
+        return true;
+    }
+
+    // A same-state barrier orders earlier accesses; a pending barrier for the resource already does.
+    void synchronizeBufferWrites(Buffer* buffer)
+    {
+        if (buffer->m_desc.memoryType != MemoryType::DeviceLocal)
+            return;
+        BufferState* bufferState = getBufferState(buffer);
+        transitionBufferState(buffer, *bufferState, bufferState->states, true);
+    }
+
+    void synchronizeTextureWrites(Texture* texture, SubresourceRange subresourceRange)
+    {
+        if (texture->m_desc.memoryType != MemoryType::DeviceLocal)
+            return;
+        subresourceRange = texture->resolveSubresourceRange(subresourceRange);
+        TextureState* textureState = getTextureState(texture);
+        if (textureState->subresourceStates.empty())
+        {
+            if (!hasPendingEntireTextureBarrier(texture))
+                m_textureBarriers.push_back({texture, true, 0, 0, textureState->state, textureState->state});
+            return;
+        }
+        const uint32_t layerEnd = subresourceRange.layer + subresourceRange.layerCount;
+        for (uint32_t layer = subresourceRange.layer; layer < layerEnd; layer++)
+        {
+            for (uint32_t mip = subresourceRange.mip; mip < subresourceRange.mip + subresourceRange.mipCount; mip++)
+            {
+                if (hasPendingSubresourceBarrier(texture, mip, layer))
+                    continue;
+                ResourceState state = textureState->subresourceStates[layer * texture->m_desc.mipCount + mip];
+                m_textureBarriers.push_back({texture, false, mip, layer, state, state});
+            }
+        }
+    }
+
     // Returns whether any requested subresource changed state, excluding UAV ordering barriers.
     bool setTextureState(Texture* texture, SubresourceRange subresourceRange, ResourceState state)
+    {
+        return transitionTextureState(texture, subresourceRange, state, state == ResourceState::UnorderedAccess);
+    }
+
+private:
+    bool hasPendingEntireTextureBarrier(Texture* texture) const
+    {
+        return std::any_of(
+            m_textureBarriers.begin(),
+            m_textureBarriers.end(),
+            [texture](const TextureBarrier& barrier) { return barrier.texture == texture && barrier.entireTexture; }
+        );
+    }
+
+    // A pending entire-texture barrier also covers the subresource.
+    bool hasPendingSubresourceBarrier(Texture* texture, uint32_t mip, uint32_t layer) const
+    {
+        return std::any_of(
+            m_textureBarriers.begin(),
+            m_textureBarriers.end(),
+            [texture, mip, layer](const TextureBarrier& barrier)
+            {
+                return barrier.texture == texture &&
+                       (barrier.entireTexture || (barrier.mip == mip && barrier.layer == layer));
+            }
+        );
+    }
+
+    // Returns whether any requested subresource changed state, excluding ordering barriers.
+    bool transitionTextureState(
+        Texture* texture,
+        SubresourceRange subresourceRange,
+        ResourceState state,
+        bool orderSameState
+    )
     {
         // Cannot change state of upload/readback textures.
         if (texture->m_desc.memoryType != MemoryType::DeviceLocal)
@@ -282,7 +431,7 @@ public:
         {
             changed = state != textureState->state;
             // Transition entire texture.
-            if (state != textureState->state || state == ResourceState::UnorderedAccess)
+            if (state != textureState->state || orderSameState)
             {
                 // Try to merge with an existing entire-texture barrier for the same texture.
                 bool merged = false;
@@ -317,8 +466,7 @@ public:
                 {
                     uint32_t subresourceIndex = layer * texture->m_desc.mipCount + mip;
                     changed |= state != textureState->subresourceStates[subresourceIndex];
-                    if (state != textureState->subresourceStates[subresourceIndex] ||
-                        state == ResourceState::UnorderedAccess)
+                    if (state != textureState->subresourceStates[subresourceIndex] || orderSameState)
                     {
                         m_textureBarriers.push_back({
                             texture,
@@ -353,6 +501,7 @@ public:
         return changed;
     }
 
+public:
     void requireDefaultStates()
     {
         for (auto& bufferState : m_bufferStates)
@@ -455,6 +604,69 @@ private:
             return state;
         return &m_textureStates.insertOrAssign(texture, TextureState{texture->m_desc.defaultState, {}});
     }
+};
+
+// Explicit mode: caller resources take a command's backend-specific state only while it records, then return to their
+// declared states.
+class CommandStateScope
+{
+public:
+    CommandStateScope(StateTracking& stateTracking, BufferReadStatePolicy policy, bool restoreDeclaredStates)
+        : m_stateTracking(stateTracking)
+        , m_policy(policy)
+        , m_restoreDeclaredStates(restoreDeclaredStates)
+    {
+    }
+
+    CommandStateScope(const CommandStateScope&) = delete;
+    CommandStateScope& operator=(const CommandStateScope&) = delete;
+
+    // Reverse order, so a texture saved twice ends in its first saved state.
+    ~CommandStateScope()
+    {
+        for (auto it = m_declaredBuffers.rbegin(); it != m_declaredBuffers.rend(); ++it)
+            m_stateTracking.restoreBufferStates(it->buffer, it->states);
+        for (auto it = m_declaredTextures.rbegin(); it != m_declaredTextures.rend(); ++it)
+            m_stateTracking.restoreTextureStates(it->texture, it->subresourceRange, it->states);
+    }
+
+    void require(Buffer* buffer, ResourceState state)
+    {
+        if (m_restoreDeclaredStates && buffer->m_desc.memoryType == MemoryType::DeviceLocal &&
+            std::none_of(
+                m_declaredBuffers.begin(),
+                m_declaredBuffers.end(),
+                [buffer](const DeclaredBuffer& declared) { return declared.buffer == buffer; }
+            ))
+            m_declaredBuffers.push_back({buffer, m_stateTracking.getBufferStates(buffer)});
+        m_stateTracking.requireBufferState(buffer, state, m_policy);
+    }
+
+    void require(Texture* texture, SubresourceRange subresourceRange, ResourceState state)
+    {
+        if (m_restoreDeclaredStates && texture->m_desc.memoryType == MemoryType::DeviceLocal)
+            m_declaredTextures.push_back({texture, subresourceRange, m_stateTracking.getTextureStates(texture)});
+        m_stateTracking.setTextureState(texture, subresourceRange, state);
+    }
+
+private:
+    struct DeclaredBuffer
+    {
+        Buffer* buffer;
+        BufferStateSet states;
+    };
+    struct DeclaredTexture
+    {
+        Texture* texture;
+        SubresourceRange subresourceRange;
+        TextureState states;
+    };
+
+    StateTracking& m_stateTracking;
+    BufferReadStatePolicy m_policy;
+    bool m_restoreDeclaredStates;
+    std::vector<DeclaredBuffer> m_declaredBuffers;
+    std::vector<DeclaredTexture> m_declaredTextures;
 };
 
 } // namespace rhi

@@ -1903,6 +1903,43 @@ void DebugCommandEncoder::globalBarrier()
     baseObject->globalBarrier();
 }
 
+void DebugCommandEncoder::synchronizeBufferWrites(IBuffer* buffer)
+{
+    SLANG_RHI_DEBUG_API(ICommandEncoder, synchronizeBufferWrites);
+
+    requireOpen();
+    requireNoPass();
+
+    if (!buffer)
+    {
+        RHI_VALIDATION_ERROR("'buffer' must not be null.");
+        return;
+    }
+
+    baseObject->synchronizeBufferWrites(buffer);
+}
+
+void DebugCommandEncoder::synchronizeTextureWrites(ITexture* texture, SubresourceRange subresourceRange)
+{
+    SLANG_RHI_DEBUG_API(ICommandEncoder, synchronizeTextureWrites);
+
+    requireOpen();
+    requireNoPass();
+
+    if (!texture)
+    {
+        RHI_VALIDATION_ERROR("'texture' must not be null.");
+        return;
+    }
+    if (!validateSubresourceRange(subresourceRange, texture->getDesc()))
+    {
+        RHI_VALIDATION_ERROR("Subresource range out of bounds.");
+        return;
+    }
+
+    baseObject->synchronizeTextureWrites(texture, subresourceRange);
+}
+
 void DebugCommandEncoder::releaseBufferForQueue(IBuffer* buffer, ResourceState currentState, QueueType dstQueue)
 {
     SLANG_RHI_DEBUG_API(ICommandEncoder, releaseBufferForQueue);
