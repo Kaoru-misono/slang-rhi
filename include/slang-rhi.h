@@ -2982,6 +2982,15 @@ public:
 
     virtual SLANG_NO_THROW void SLANG_MCALL globalBarrier() = 0;
 
+    // Orders same-state accesses to the buffer when one of them writes. A pending barrier for the buffer absorbs it.
+    virtual SLANG_NO_THROW void SLANG_MCALL synchronizeBufferWrites(IBuffer* buffer) = 0;
+
+    // Texture counterpart of synchronizeBufferWrites, per subresource.
+    virtual SLANG_NO_THROW void SLANG_MCALL synchronizeTextureWrites(
+        ITexture* texture,
+        SubresourceRange subresourceRange
+    ) = 0;
+
     /// Gives up this queue family's ownership of `buffer` so `dstQueue` can take it.
     ///
     /// Record this on the encoder of the queue that currently owns the resource, passing the state
@@ -3565,6 +3574,17 @@ enum class PipelineCompilationMode
     Parallel,
 };
 
+// Who transitions resources into the states commands require.
+enum class ResourceStateMode
+{
+    // The device transitions every resource a command uses into the state the command requires.
+    Automatic,
+    // Shader bindings only check the states declared with setBufferState/setTextureState; same-state writes are ordered
+    // with synchronize*Writes. Every other command transitions on a mismatch; clears and acceleration-structure,
+    // micromap, cluster and cooperative-vector work restore the declared states afterwards.
+    Explicit,
+};
+
 struct DeviceDesc
 {
     static constexpr StructType kStructType = StructType::DeviceDesc;
@@ -3617,6 +3637,12 @@ struct DeviceDesc
     AftermathFlags aftermathFlags = AftermathFlags::Default;
     /// Debug callback. If not null, this will be called for each debug message.
     IDebugCallback* debugCallback = nullptr;
+
+    // Who transitions resources into the states commands require; see ResourceStateMode.
+    ResourceStateMode resourceStateMode = ResourceStateMode::Automatic;
+
+    // Reports uses of undeclared states: an error in Explicit mode, a warning in Automatic mode.
+    bool validateResourceStates = false;
 
     /// Enable reporting of shader compilation timings.
     bool enableCompilationReports = false;

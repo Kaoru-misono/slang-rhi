@@ -429,6 +429,11 @@ public:
     ) override;
 
     virtual SLANG_NO_THROW void SLANG_MCALL globalBarrier() override;
+    virtual SLANG_NO_THROW void SLANG_MCALL synchronizeBufferWrites(IBuffer* buffer) override;
+    virtual SLANG_NO_THROW void SLANG_MCALL synchronizeTextureWrites(
+        ITexture* texture,
+        SubresourceRange subresourceRange
+    ) override;
 
     virtual SLANG_NO_THROW void SLANG_MCALL
     releaseBufferForQueue(IBuffer* buffer, ResourceState currentState, QueueType dstQueue) override;

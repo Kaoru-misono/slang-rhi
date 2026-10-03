@@ -47,6 +47,8 @@
     x(SetBufferState) \
     x(SetTextureState) \
     x(GlobalBarrier) \
+    x(SynchronizeBufferWrites) \
+    x(SynchronizeTextureWrites) \
     x(ReleaseBufferForQueue) \
     x(ReleaseTextureForQueue) \
     x(AcquireBufferFromQueue) \
@@ -317,6 +319,17 @@ struct SetTextureState
 struct GlobalBarrier
 {};
 
+struct SynchronizeBufferWrites
+{
+    IBuffer* buffer;
+};
+
+struct SynchronizeTextureWrites
+{
+    ITexture* texture;
+    SubresourceRange subresourceRange;
+};
+
 struct ReleaseBufferForQueue
 {
     IBuffer* buffer;
@@ -491,6 +504,8 @@ public:
     void write(commands::SetBufferState&& cmd);
     void write(commands::SetTextureState&& cmd);
     void write(commands::GlobalBarrier&& cmd);
+    void write(commands::SynchronizeBufferWrites&& cmd);
+    void write(commands::SynchronizeTextureWrites&& cmd);
     void write(commands::ReleaseBufferForQueue&& cmd);
     void write(commands::ReleaseTextureForQueue&& cmd);
     void write(commands::AcquireBufferFromQueue&& cmd);
