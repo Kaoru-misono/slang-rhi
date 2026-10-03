@@ -432,6 +432,11 @@ public:
     ) override;
 
     virtual SLANG_NO_THROW void SLANG_MCALL globalBarrier() override;
+    virtual SLANG_NO_THROW void SLANG_MCALL synchronizeBufferWrites(IBuffer* buffer) override;
+    virtual SLANG_NO_THROW void SLANG_MCALL synchronizeTextureWrites(
+        ITexture* texture,
+        SubresourceRange subresourceRange
+    ) override;
 
     using ICommandEncoder::aliasResources;
     virtual SLANG_NO_THROW void SLANG_MCALL aliasResources(
