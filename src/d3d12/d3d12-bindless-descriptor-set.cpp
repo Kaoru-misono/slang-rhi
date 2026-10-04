@@ -59,6 +59,7 @@ Result BindlessDescriptorSet::allocBufferHandle(
     IBuffer* buffer,
     DescriptorHandleAccess access,
     Format format,
+    uint32_t elementStride,
     BufferRange range,
     DescriptorHandle* outHandle
 )
@@ -73,7 +74,7 @@ Result BindlessDescriptorSet::allocBufferHandle(
         m_device->m_device->CopyDescriptorsSimple(
             1,
             m_srvUavAllocation.getCpuHandle(slot),
-            bufferImpl->getSRV(format, 0, range),
+            bufferImpl->getSRV(format, elementStride, range),
             D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV
         );
         outHandle->type = DescriptorHandleType::Buffer;
@@ -82,7 +83,7 @@ Result BindlessDescriptorSet::allocBufferHandle(
         m_device->m_device->CopyDescriptorsSimple(
             1,
             m_srvUavAllocation.getCpuHandle(slot),
-            bufferImpl->getUAV(format, 0, range),
+            bufferImpl->getUAV(format, elementStride, range),
             D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV
         );
         outHandle->type = DescriptorHandleType::RWBuffer;
