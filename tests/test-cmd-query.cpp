@@ -1,5 +1,7 @@
 #include "testing.h"
 
+#include "../src/core/deferred.h"
+
 #include <chrono>
 #include <initializer_list>
 #include <cmath>
@@ -240,6 +242,52 @@ GPU_TEST_CASE("cmd-query-result-readiness", ALL)
     REQUIRE_CALL(queryPool->getResult(0, 1, &timestamp));
     REQUIRE_CALL(queryPool->reset());
     checkQueryResultReset(queryPool, 0, 1);
+}
+
+GPU_TEST_CASE("cmd-query-compute-queue-readiness", D3D12 | Vulkan)
+{
+    if (!device->hasFeature(Feature::TimestampQuery))
+    {
+        SKIP("Timestamp queries not supported");
+    }
+
+    auto graphics = device->getQueue(QueueType::Graphics);
+    auto compute = device->getQueue(QueueType::Compute);
+    // Graphics finishes more submissions than compute will have made, so comparing the compute submission
+    // against the graphics queue would report the range ready too early.
+    for (int i = 0; i < 4; ++i)
+    {
+        REQUIRE_CALL(graphics->submit(graphics->createCommandEncoder()->finish()));
+    }
+    REQUIRE_CALL(graphics->waitOnHost());
+
+    auto queryPool = createTimestampQueryPool(device, 1);
+    auto gate = device->createFence({});
+    REQUIRE(gate);
+    // Always unblock the gated submission, including on a failing assertion.
+    SLANG_RHI_DEFERRED({ gate->setCurrentValue(1); compute->waitOnHost(); });
+    auto commandBuffer = createTimestampCommandBuffer(compute, queryPool, {0});
+    ICommandBuffer* commandBuffers[] = {commandBuffer};
+    IFence* waitFence = gate;
+    uint64_t waitValue = 1;
+    SubmitDesc submit = {};
+    submit.commandBuffers = commandBuffers;
+    submit.commandBufferCount = 1;
+    submit.waitFences = &waitFence;
+    submit.waitFenceValues = &waitValue;
+    submit.waitFenceCount = 1;
+    REQUIRE_CALL(compute->submit(submit));
+
+    QueryResultState state = QueryResultState::Reset;
+    REQUIRE_CALL(queryPool->getResultState(0, 1, &state));
+    CHECK(state == QueryResultState::Pending);
+
+    REQUIRE_CALL(gate->setCurrentValue(1));
+    REQUIRE_CALL(compute->waitOnHost());
+    checkQueryResultReady(queryPool, 0, 1);
+    uint64_t timestamp = 0;
+    REQUIRE_CALL(queryPool->getResult(0, 1, &timestamp));
+    CHECK(timestamp != 0);
 }
 
 GPU_TEST_CASE("cmd-query-partial-range-readiness", ALL)

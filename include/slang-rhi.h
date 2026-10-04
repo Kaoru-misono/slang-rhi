@@ -3230,6 +3230,10 @@ struct SurfaceConfig
     bool vsync = true;
 };
 
+/// Returned by ISurface::acquireNextImage() and ISurface::present() when the surface no longer matches its window,
+/// for example after a resize. The surface is unconfigured; configure() it again before the next acquire.
+#define SLANG_RHI_E_SURFACE_OUT_OF_DATE SLANG_MAKE_ERROR(SLANG_FACILITY_EXTERNAL_BASE, 1)
+
 class ISurface : public ISlangUnknown
 {
     SLANG_COM_INTERFACE(0xd6c37a71, 0x7d0d, 0x4714, {0xb7, 0xa3, 0x25, 0xca, 0x81, 0x73, 0x0c, 0x37});

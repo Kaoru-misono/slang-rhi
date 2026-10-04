@@ -314,15 +314,20 @@ public:
     virtual SLANG_NO_THROW Result SLANG_MCALL reset() override;
     virtual SLANG_NO_THROW Result SLANG_MCALL reset(uint32_t queryIndex, uint32_t count) override;
 
+    static constexpr uint32_t kQueueTypeCount = uint32_t(QueueType::Transfer) + 1;
+
     struct QueryRangeInfo
     {
         QueryResultState state = QueryResultState::Reset;
-        uint64_t submissionID = 0;
+        // Queue submission IDs are per queue, so a range written from several queues keeps the latest one of each;
+        // 0 means that queue wrote none of the range.
+        uint64_t submissionIDs[kQueueTypeCount] = {};
     };
 
     bool isValidQueryRange(uint32_t queryIndex, uint32_t count) const;
-    void markQueryRangeSubmitted(uint32_t queryIndex, uint32_t count, uint64_t submissionID);
-    void markQueryRangeResolved(uint32_t queryIndex, uint32_t count, uint64_t completedSubmissionID);
+    void markQueryRangeSubmitted(uint32_t queryIndex, uint32_t count, QueueType queue, uint64_t submissionID);
+    void markQueryRangeResolved(uint32_t queryIndex, uint32_t count, QueueType queue, uint64_t completedSubmissionID);
+    void markQueryRangeResolved(uint32_t queryIndex, uint32_t count, const QueryRangeInfo& info);
     QueryRangeInfo getQueryRangeInfo(uint32_t queryIndex, uint32_t count) const;
 
 public:
@@ -330,17 +335,22 @@ public:
     {
         static constexpr uint64_t kStateShift = 62;
         static constexpr uint64_t kStateMask = uint64_t(3) << kStateShift;
-        static constexpr uint64_t kSubmissionIDMask = (uint64_t(1) << kStateShift) - 1;
+        static constexpr uint64_t kQueueShift = 60;
+        static constexpr uint64_t kQueueMask = uint64_t(3) << kQueueShift;
+        static constexpr uint64_t kSubmissionIDMask = (uint64_t(1) << kQueueShift) - 1;
 
         uint64_t packedState = 0;
 
-        void set(QueryResultState state, uint64_t submissionID)
+        void set(QueryResultState state, QueueType queue, uint64_t submissionID)
         {
             SLANG_RHI_ASSERT((submissionID & ~kSubmissionIDMask) == 0);
-            packedState = (uint64_t(state) << kStateShift) | (submissionID & kSubmissionIDMask);
+            packedState = (uint64_t(state) << kStateShift) | (uint64_t(queue) << kQueueShift) |
+                          (submissionID & kSubmissionIDMask);
         }
 
         QueryResultState getState() const { return QueryResultState((packedState & kStateMask) >> kStateShift); }
+
+        QueueType getQueue() const { return QueueType((packedState & kQueueMask) >> kQueueShift); }
 
         uint64_t getSubmissionID() const { return packedState & kSubmissionIDMask; }
     };
