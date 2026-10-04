@@ -821,6 +821,15 @@ public:
         BufferRange range,
         DescriptorHandle* outHandle
     ) = 0;
+    // A nonzero elementStride requests a structured-buffer descriptor and needs Format::Undefined and a range aligned
+    // to the stride. D3D12 builds StructuredBuffer handles from it; Vulkan's storage buffers need no stride.
+    virtual SLANG_NO_THROW Result SLANG_MCALL getDescriptorHandle(
+        DescriptorHandleAccess access,
+        Format format,
+        uint32_t elementStride,
+        BufferRange range,
+        DescriptorHandle* outHandle
+    ) = 0;
 };
 
 struct DepthStencilClearValue
