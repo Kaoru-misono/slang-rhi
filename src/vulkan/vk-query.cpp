@@ -99,7 +99,7 @@ Result QueryPoolImpl::getResultState(uint32_t queryIndex, uint32_t count, QueryR
     }
     SLANG_VK_RETURN_ON_FAIL_REPORT(result, device);
 
-    markQueryRangeResolved(queryIndex, count, queryInfo.submissionID);
+    markQueryRangeResolved(queryIndex, count, queryInfo);
     *outState = QueryResultState::Resolved;
 
     return SLANG_OK;
@@ -142,7 +142,7 @@ Result QueryPoolImpl::getResult(uint32_t queryIndex, uint32_t count, uint64_t* o
         device
     );
 
-    markQueryRangeResolved(queryIndex, count, queryInfo.submissionID);
+    markQueryRangeResolved(queryIndex, count, queryInfo);
 
     return SLANG_OK;
 }
