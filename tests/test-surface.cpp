@@ -440,21 +440,30 @@ GPU_TEST_CASE("surface-resize-during-frame", Vulkan | CUDA)
     glfwGetFramebufferSize(t.window, &width, &height);
     t.configureSurface(width, height);
 
+    // This fork reports an out-of-date swapchain as SLANG_RHI_E_SURFACE_OUT_OF_DATE instead of
+    // dropping the frame; the surface then stays unconfigured until it is configured again.
+    bool outOfDate = false;
+    auto allowOutOfDate = [&](Result result)
+    {
+        CHECK((SLANG_SUCCEEDED(result) || result == SLANG_RHI_E_SURFACE_OUT_OF_DATE));
+        outOfDate = result == SLANG_RHI_E_SURFACE_OUT_OF_DATE;
+    };
+
     // A window thread can resize after acquisition but before presentation.
     ComPtr<ITexture> texture = t.surface->acquireNextImage();
     REQUIRE(texture);
     glfwSetWindowSize(t.window, 700, 700);
     glfwPollEvents();
-    REQUIRE_CALL(t.surface->present());
+    allowOutOfDate(t.surface->present());
     texture.setNull();
 
-    // The render thread may attempt more frames before receiving the resize event.
-    // An out-of-date acquisition must leave the frame fence signaled for the next attempt.
-    for (int i = 0; i < 2; ++i)
+    // The render thread may attempt more frames until a call reports the surface out of date.
+    // An out-of-date acquisition must leave the frame fence signaled for the one after reconfiguration.
+    for (int i = 0; i < 2 && !outOfDate; ++i)
     {
-        texture = t.surface->acquireNextImage();
+        allowOutOfDate(t.surface->acquireNextImage(texture.writeRef()));
         if (texture)
-            REQUIRE_CALL(t.surface->present());
+            allowOutOfDate(t.surface->present());
         texture.setNull();
     }
 

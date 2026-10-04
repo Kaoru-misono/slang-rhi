@@ -109,6 +109,11 @@ Result DebugSurface::acquireNextImage(ITexture** outTexture)
     {
         m_state = State::ImageAcquired;
     }
+    // The backend leaves an out-of-date surface unconfigured.
+    if (result == SLANG_RHI_E_SURFACE_OUT_OF_DATE)
+    {
+        m_configured = false;
+    }
 
     return result;
 }
@@ -131,9 +136,14 @@ Result DebugSurface::present()
 
     Result result = baseObject->present();
 
-    if (SLANG_SUCCEEDED(result))
+    // An out-of-date present still releases the image, and the backend leaves the surface unconfigured.
+    if (SLANG_SUCCEEDED(result) || result == SLANG_RHI_E_SURFACE_OUT_OF_DATE)
     {
         m_state = State::ImagePresented;
+    }
+    if (result == SLANG_RHI_E_SURFACE_OUT_OF_DATE)
+    {
+        m_configured = false;
     }
 
     return result;

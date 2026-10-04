@@ -2477,7 +2477,7 @@ void CommandQueueImpl::consumeCommandBuffers(const SubmitDesc& desc, uint64_t se
         for (const auto& queryWrite : commandBuffer->m_commandList.getQueryWrites())
         {
             checked_cast<QueryPool*>(queryWrite.queryPool)
-                ->markQueryRangeSubmitted(queryWrite.index, queryWrite.count, sequence);
+                ->markQueryRangeSubmitted(queryWrite.index, queryWrite.count, m_type, sequence);
         }
         std::lock_guard<std::mutex> lock(m_mutex);
         m_commandBuffersInFlight.emplace_back(commandBuffer);
