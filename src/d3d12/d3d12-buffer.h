@@ -24,6 +24,13 @@ public:
         BufferRange range,
         DescriptorHandle* outHandle
     ) override;
+    virtual SLANG_NO_THROW Result SLANG_MCALL getDescriptorHandle(
+        DescriptorHandleAccess access,
+        Format format,
+        uint32_t elementStride,
+        BufferRange range,
+        DescriptorHandle* outHandle
+    ) override;
 
 public:
     D3D12_CPU_DESCRIPTOR_HANDLE getSRV(Format format, uint32_t stride, const BufferRange& range);
@@ -71,10 +78,12 @@ public:
     {
         DescriptorHandleAccess access;
         Format format;
+        uint32_t elementStride;
         BufferRange range;
         bool operator==(const DescriptorHandleKey& other) const
         {
-            return access == other.access && format == other.format && range == other.range;
+            return access == other.access && format == other.format && elementStride == other.elementStride &&
+                   range == other.range;
         }
     };
 
@@ -85,6 +94,7 @@ public:
             size_t hash = 0;
             hash_combine(hash, key.access);
             hash_combine(hash, key.format);
+            hash_combine(hash, key.elementStride);
             hash_combine(hash, key.range.offset);
             hash_combine(hash, key.range.size);
             return hash;

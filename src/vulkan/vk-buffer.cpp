@@ -310,6 +310,24 @@ DeviceAddress BufferImpl::getDeviceAddress()
     return m_deviceAddress;
 }
 
+// Structured and raw buffers are both storage-buffer descriptors, so the stride only needs validating.
+Result BufferImpl::getDescriptorHandle(
+    DescriptorHandleAccess access,
+    Format format,
+    uint32_t elementStride,
+    BufferRange range,
+    DescriptorHandle* outHandle
+)
+{
+    BufferRange resolvedRange = resolveBufferRange(range);
+    if (elementStride != 0 && (format != Format::Undefined || resolvedRange.offset % elementStride != 0 ||
+                               resolvedRange.size % elementStride != 0))
+    {
+        return SLANG_E_INVALID_ARG;
+    }
+    return getDescriptorHandle(access, format, range, outHandle);
+}
+
 Result BufferImpl::getDescriptorHandle(
     DescriptorHandleAccess access,
     Format format,

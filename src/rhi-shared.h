@@ -104,6 +104,13 @@ public:
         BufferRange range,
         DescriptorHandle* outHandle
     ) override;
+    virtual SLANG_NO_THROW Result SLANG_MCALL getDescriptorHandle(
+        DescriptorHandleAccess access,
+        Format format,
+        uint32_t elementStride,
+        BufferRange range,
+        DescriptorHandle* outHandle
+    ) override;
 
     // IResource interface
     virtual SLANG_NO_THROW Result SLANG_MCALL getNativeHandle(NativeHandle* outHandle) override;

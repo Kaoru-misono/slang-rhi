@@ -16,6 +16,7 @@ public:
         IBuffer* buffer,
         DescriptorHandleAccess access,
         Format format,
+        uint32_t elementStride,
         BufferRange range,
         DescriptorHandle* outHandle
     );
