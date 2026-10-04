@@ -557,6 +557,11 @@ Result SurfaceImpl::acquireNextImage(ITexture** outTexture)
     uint32_t imageIndex = 0;
     VkResult result =
         api.vkAcquireNextImageKHR(api.m_device, m_swapchain, UINT64_MAX, VK_NULL_HANDLE, m_acquireFence, &imageIndex);
+    if (result == VK_ERROR_OUT_OF_DATE_KHR)
+    {
+        m_configured = false;
+        return SLANG_RHI_E_SURFACE_OUT_OF_DATE;
+    }
     if (result != VK_SUCCESS && result != VK_SUBOPTIMAL_KHR)
     {
         reportVulkanError(result, "vkAcquireNextImageKHR", SLANG_RHI_SOURCE_LOCATION(), m_device);
@@ -634,6 +639,11 @@ Result SurfaceImpl::present()
     {
         std::lock_guard<std::mutex> lock(*m_device->m_queue->m_nativeQueueMutex);
         result = api.vkQueuePresentKHR(m_device->m_queue->m_queue, &presentInfo);
+    }
+    if (result == VK_ERROR_OUT_OF_DATE_KHR)
+    {
+        m_configured = false;
+        return SLANG_RHI_E_SURFACE_OUT_OF_DATE;
     }
     if (result != VK_SUCCESS && result != VK_SUBOPTIMAL_KHR)
     {
