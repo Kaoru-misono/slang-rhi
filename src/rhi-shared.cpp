@@ -546,7 +546,7 @@ Result QueryPool::reset(uint32_t queryIndex, uint32_t count)
     for (uint32_t i = 0; i < count; ++i)
     {
         QuerySlotState& slotState = m_querySlotStates[queryIndex + i];
-        slotState.set(QueryResultState::Reset, 0);
+        slotState.set(QueryResultState::Reset, QueueType::Graphics, 0);
     }
 
     return SLANG_OK;
@@ -561,7 +561,7 @@ bool QueryPool::isValidQueryRange(uint32_t queryIndex, uint32_t count) const
     return queryIndex < m_desc.count && count <= m_desc.count - queryIndex;
 }
 
-void QueryPool::markQueryRangeSubmitted(uint32_t queryIndex, uint32_t count, uint64_t submissionID)
+void QueryPool::markQueryRangeSubmitted(uint32_t queryIndex, uint32_t count, QueueType queue, uint64_t submissionID)
 {
     if (!isValidQueryRange(queryIndex, count))
     {
@@ -572,11 +572,16 @@ void QueryPool::markQueryRangeSubmitted(uint32_t queryIndex, uint32_t count, uin
     for (uint32_t i = 0; i < count; ++i)
     {
         QuerySlotState& slotState = m_querySlotStates[queryIndex + i];
-        slotState.set(QueryResultState::Pending, submissionID);
+        slotState.set(QueryResultState::Pending, queue, submissionID);
     }
 }
 
-void QueryPool::markQueryRangeResolved(uint32_t queryIndex, uint32_t count, uint64_t completedSubmissionID)
+void QueryPool::markQueryRangeResolved(
+    uint32_t queryIndex,
+    uint32_t count,
+    QueueType queue,
+    uint64_t completedSubmissionID
+)
 {
     if (!isValidQueryRange(queryIndex, count))
     {
@@ -587,11 +592,22 @@ void QueryPool::markQueryRangeResolved(uint32_t queryIndex, uint32_t count, uint
     for (uint32_t i = 0; i < count; ++i)
     {
         QuerySlotState& slotState = m_querySlotStates[queryIndex + i];
-        QueryResultState state = slotState.getState();
         uint64_t submissionID = slotState.getSubmissionID();
-        if (state == QueryResultState::Pending && submissionID <= completedSubmissionID)
+        if (slotState.getState() == QueryResultState::Pending && slotState.getQueue() == queue &&
+            submissionID <= completedSubmissionID)
         {
-            slotState.set(QueryResultState::Resolved, submissionID);
+            slotState.set(QueryResultState::Resolved, queue, submissionID);
+        }
+    }
+}
+
+void QueryPool::markQueryRangeResolved(uint32_t queryIndex, uint32_t count, const QueryRangeInfo& info)
+{
+    for (uint32_t queue = 0; queue < kQueueTypeCount; ++queue)
+    {
+        if (info.submissionIDs[queue] != 0)
+        {
+            markQueryRangeResolved(queryIndex, count, QueueType(queue), info.submissionIDs[queue]);
         }
     }
 }
@@ -600,12 +616,12 @@ QueryPool::QueryRangeInfo QueryPool::getQueryRangeInfo(uint32_t queryIndex, uint
 {
     if (!isValidQueryRange(queryIndex, count))
     {
-        return {QueryResultState::Reset, 0};
+        return {QueryResultState::Reset, {}};
     }
 
     if (count == 0)
     {
-        return {QueryResultState::Resolved, 0};
+        return {QueryResultState::Resolved, {}};
     }
 
     QueryRangeInfo info;
@@ -616,13 +632,14 @@ QueryPool::QueryRangeInfo QueryPool::getQueryRangeInfo(uint32_t queryIndex, uint
         QueryResultState state = slotState.getState();
         if (state == QueryResultState::Reset)
         {
-            return {QueryResultState::Reset, 0};
+            return {QueryResultState::Reset, {}};
         }
         if (state == QueryResultState::Pending)
         {
             info.state = QueryResultState::Pending;
         }
-        info.submissionID = std::max(info.submissionID, slotState.getSubmissionID());
+        uint64_t& queueSubmissionID = info.submissionIDs[uint32_t(slotState.getQueue())];
+        queueSubmissionID = std::max(queueSubmissionID, slotState.getSubmissionID());
     }
     if (info.state != QueryResultState::Pending)
     {

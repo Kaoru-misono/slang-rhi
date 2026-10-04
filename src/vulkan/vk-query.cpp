@@ -5,6 +5,50 @@
 
 namespace rhi::vk {
 
+namespace {
+
+CommandQueueImpl* getQueryQueue(DeviceImpl* device, uint32_t queue)
+{
+    switch (QueueType(queue))
+    {
+    case QueueType::Compute:
+        return device->m_computeQueue.get();
+    case QueueType::Transfer:
+        return device->m_transferQueue.get();
+    default:
+        return device->m_queue.get();
+    }
+}
+
+bool areQuerySubmissionsFinished(DeviceImpl* device, const QueryPool::QueryRangeInfo& info)
+{
+    for (uint32_t queue = 0; queue < QueryPool::kQueueTypeCount; ++queue)
+    {
+        if (info.submissionIDs[queue] != 0 &&
+            getQueryQueue(device, queue)->updateLastFinishedID() < info.submissionIDs[queue])
+        {
+            return false;
+        }
+    }
+    return true;
+}
+
+Result waitForQuerySubmissions(DeviceImpl* device, const QueryPool::QueryRangeInfo& info)
+{
+    for (uint32_t queue = 0; queue < QueryPool::kQueueTypeCount; ++queue)
+    {
+        if (info.submissionIDs[queue] != 0)
+        {
+            SLANG_RETURN_ON_FAIL(
+                getQueryQueue(device, queue)->waitForSequence(info.submissionIDs[queue], kTimeoutInfinite)
+            );
+        }
+    }
+    return SLANG_OK;
+}
+
+} // namespace
+
 Result QueryPoolImpl::init()
 {
     DeviceImpl* device = getDevice<DeviceImpl>();
@@ -81,23 +125,15 @@ Result QueryPoolImpl::getResultState(uint32_t queryIndex, uint32_t count, QueryR
         return SLANG_OK;
     }
 
-    DeviceImpl* device = getDevice<DeviceImpl>();
     // A reused query remains available until its GPU-side reset executes.
     // Availability alone can therefore describe the previous submission.
-    CommandQueueImpl* queue = device->m_queue.get();
-    uint64_t completedSubmissionID = 0;
-    SLANG_VK_RETURN_ON_FAIL_REPORT(
-        device->m_api
-            .vkGetSemaphoreCounterValue(device->m_api.m_device, queue->m_trackingSemaphore, &completedSubmissionID),
-        device
-    );
-    if (completedSubmissionID < queryInfo.submissionID)
+    if (!areQuerySubmissionsFinished(getDevice<DeviceImpl>(), queryInfo))
     {
         *outState = QueryResultState::Pending;
         return SLANG_OK;
     }
 
-    markQueryRangeResolved(queryIndex, count, queryInfo.submissionID);
+    markQueryRangeResolved(queryIndex, count, queryInfo);
     *outState = QueryResultState::Resolved;
 
     return SLANG_OK;
@@ -129,16 +165,8 @@ Result QueryPoolImpl::getResult(uint32_t queryIndex, uint32_t count, uint64_t* o
     if (queryInfo.state == QueryResultState::Pending)
     {
         // WAIT_BIT also accepts results from a previous use until the reset
-        // executes, so first wait for the submission that wrote this range.
-        CommandQueueImpl* queue = device->m_queue.get();
-        VkSemaphoreWaitInfo waitInfo = {VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO};
-        waitInfo.semaphoreCount = 1;
-        waitInfo.pSemaphores = &queue->m_trackingSemaphore;
-        waitInfo.pValues = &queryInfo.submissionID;
-        SLANG_VK_RETURN_ON_FAIL_REPORT(
-            device->m_api.vkWaitSemaphores(device->m_api.m_device, &waitInfo, UINT64_MAX),
-            device
-        );
+        // executes, so first wait for the submissions that wrote this range.
+        SLANG_RETURN_ON_FAIL(waitForQuerySubmissions(device, queryInfo));
     }
     SLANG_VK_RETURN_ON_FAIL_REPORT(
         device->m_api.vkGetQueryPoolResults(
@@ -154,7 +182,7 @@ Result QueryPoolImpl::getResult(uint32_t queryIndex, uint32_t count, uint64_t* o
         device
     );
 
-    markQueryRangeResolved(queryIndex, count, queryInfo.submissionID);
+    markQueryRangeResolved(queryIndex, count, queryInfo);
 
     return SLANG_OK;
 }

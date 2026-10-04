@@ -551,8 +551,14 @@ Result SurfaceImpl::acquireNextImage(ITexture** outTexture)
         (uint32_t*)&m_currentTextureIndex
     );
 
+    if (result == VK_ERROR_OUT_OF_DATE_KHR)
+    {
+        m_configured = false;
+        return SLANG_RHI_E_SURFACE_OUT_OF_DATE;
+    }
     if (result != VK_SUCCESS && result != VK_SUBOPTIMAL_KHR)
     {
+        reportVulkanError(result, "vkAcquireNextImageKHR", SLANG_RHI_SOURCE_LOCATION(), m_device);
         return SLANG_FAIL;
     }
 
@@ -621,7 +627,7 @@ Result SurfaceImpl::present()
     if (result == VK_ERROR_OUT_OF_DATE_KHR)
     {
         m_configured = false;
-        return SLANG_OK;
+        return SLANG_RHI_E_SURFACE_OUT_OF_DATE;
     }
     if (result != VK_SUCCESS && result != VK_SUBOPTIMAL_KHR)
     {

@@ -6,6 +6,42 @@
 
 namespace rhi::d3d12 {
 
+namespace {
+
+CommandQueueImpl* getQueryQueue(DeviceImpl* device, uint32_t queue)
+{
+    return QueueType(queue) == QueueType::Compute ? device->m_computeQueue.get() : device->m_queue.get();
+}
+
+bool areQuerySubmissionsFinished(DeviceImpl* device, const QueryPool::QueryRangeInfo& info)
+{
+    for (uint32_t queue = 0; queue < QueryPool::kQueueTypeCount; ++queue)
+    {
+        if (info.submissionIDs[queue] != 0 &&
+            getQueryQueue(device, queue)->updateLastFinishedID() < info.submissionIDs[queue])
+        {
+            return false;
+        }
+    }
+    return true;
+}
+
+Result waitForQuerySubmissions(DeviceImpl* device, const QueryPool::QueryRangeInfo& info)
+{
+    for (uint32_t queue = 0; queue < QueryPool::kQueueTypeCount; ++queue)
+    {
+        if (info.submissionIDs[queue] != 0)
+        {
+            SLANG_RETURN_ON_FAIL(
+                getQueryQueue(device, queue)->waitForSequence(info.submissionIDs[queue], kTimeoutInfinite)
+            );
+        }
+    }
+    return SLANG_OK;
+}
+
+} // namespace
+
 QueryPoolImpl::QueryPoolImpl(Device* device, const QueryPoolDesc& desc)
     : QueryPool(device, desc)
 {
@@ -93,15 +129,13 @@ Result QueryPoolImpl::getResultState(uint32_t queryIndex, uint32_t count, QueryR
         return SLANG_OK;
     }
 
-    CommandQueueImpl* queue = getDevice<DeviceImpl>()->m_queue.get();
-    uint64_t submissionID = queryInfo.submissionID;
-    if (queue->updateLastFinishedID() < submissionID)
+    if (!areQuerySubmissionsFinished(getDevice<DeviceImpl>(), queryInfo))
     {
         *outState = QueryResultState::Pending;
         return SLANG_OK;
     }
 
-    markQueryRangeResolved(queryIndex, count, queryInfo.submissionID);
+    markQueryRangeResolved(queryIndex, count, queryInfo);
     *outState = QueryResultState::Resolved;
 
     return SLANG_OK;
@@ -124,11 +158,10 @@ Result QueryPoolImpl::getResult(uint32_t queryIndex, uint32_t count, uint64_t* o
         return SLANG_OK;
     }
 
-    CommandQueueImpl* queue = getDevice<DeviceImpl>()->m_queue.get();
-    SLANG_RETURN_ON_FAIL(queue->waitForSequence(queryInfo.submissionID, kTimeoutInfinite));
+    SLANG_RETURN_ON_FAIL(waitForQuerySubmissions(getDevice<DeviceImpl>(), queryInfo));
 
     memcpy(outData, m_mappedReadBackData + sizeof(uint64_t) * queryIndex, sizeof(uint64_t) * count);
-    markQueryRangeResolved(queryIndex, count, queryInfo.submissionID);
+    markQueryRangeResolved(queryIndex, count, queryInfo);
 
     return SLANG_OK;
 }
@@ -220,15 +253,13 @@ Result PlainBufferProxyQueryPoolImpl::getResultState(uint32_t queryIndex, uint32
         return SLANG_OK;
     }
 
-    CommandQueueImpl* queue = getDevice<DeviceImpl>()->m_queue.get();
-    uint64_t submissionID = queryInfo.submissionID;
-    if (queue->updateLastFinishedID() < submissionID)
+    if (!areQuerySubmissionsFinished(getDevice<DeviceImpl>(), queryInfo))
     {
         *outState = QueryResultState::Pending;
         return SLANG_OK;
     }
 
-    markQueryRangeResolved(queryIndex, count, queryInfo.submissionID);
+    markQueryRangeResolved(queryIndex, count, queryInfo);
     *outState = QueryResultState::Resolved;
 
     return SLANG_OK;
@@ -251,11 +282,10 @@ Result PlainBufferProxyQueryPoolImpl::getResult(uint32_t queryIndex, uint32_t co
         return SLANG_OK;
     }
 
-    CommandQueueImpl* queue = getDevice<DeviceImpl>()->m_queue.get();
-    SLANG_RETURN_ON_FAIL(queue->waitForSequence(queryInfo.submissionID, kTimeoutInfinite));
+    SLANG_RETURN_ON_FAIL(waitForQuerySubmissions(getDevice<DeviceImpl>(), queryInfo));
 
     memcpy(outData, m_mappedReadBackData + uint64_t(m_stride) * queryIndex, uint64_t(m_stride) * count);
-    markQueryRangeResolved(queryIndex, count, queryInfo.submissionID);
+    markQueryRangeResolved(queryIndex, count, queryInfo);
 
     return SLANG_OK;
 }
