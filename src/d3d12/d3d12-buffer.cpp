@@ -96,6 +96,17 @@ Result BufferImpl::getDescriptorHandle(
     DescriptorHandle* outHandle
 )
 {
+    return getDescriptorHandle(access, format, 0, range, outHandle);
+}
+
+Result BufferImpl::getDescriptorHandle(
+    DescriptorHandleAccess access,
+    Format format,
+    uint32_t elementStride,
+    BufferRange range,
+    DescriptorHandle* outHandle
+)
+{
     DeviceImpl* device = getDevice<DeviceImpl>();
 
     if (!device->m_bindlessDescriptorSet)
@@ -104,8 +115,13 @@ Result BufferImpl::getDescriptorHandle(
     }
 
     range = resolveBufferRange(range);
+    if (elementStride != 0 &&
+        (format != Format::Undefined || range.offset % elementStride != 0 || range.size % elementStride != 0))
+    {
+        return SLANG_E_INVALID_ARG;
+    }
 
-    DescriptorHandleKey key = {access, format, range};
+    DescriptorHandleKey key = {access, format, elementStride, range};
     DescriptorHandle& handle = m_descriptorHandles[key];
     if (handle)
     {
@@ -115,7 +131,9 @@ Result BufferImpl::getDescriptorHandle(
 
     if (!handle)
     {
-        SLANG_RETURN_ON_FAIL(device->m_bindlessDescriptorSet->allocBufferHandle(this, access, format, range, &handle));
+        SLANG_RETURN_ON_FAIL(
+            device->m_bindlessDescriptorSet->allocBufferHandle(this, access, format, elementStride, range, &handle)
+        );
     }
 
     *outHandle = handle;

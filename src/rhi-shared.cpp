@@ -87,6 +87,23 @@ Result Buffer::getDescriptorHandle(
     return SLANG_E_NOT_AVAILABLE;
 }
 
+Result Buffer::getDescriptorHandle(
+    DescriptorHandleAccess access,
+    Format format,
+    uint32_t elementStride,
+    BufferRange range,
+    DescriptorHandle* outHandle
+)
+{
+    // Backends without structured descriptors still serve stride-less requests.
+    if (elementStride == 0)
+    {
+        return getDescriptorHandle(access, format, range, outHandle);
+    }
+    *outHandle = {};
+    return SLANG_E_NOT_AVAILABLE;
+}
+
 Result Buffer::getNativeHandle(NativeHandle* outHandle)
 {
     *outHandle = {};

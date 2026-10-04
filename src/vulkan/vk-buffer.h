@@ -61,6 +61,13 @@ public:
         BufferRange range,
         DescriptorHandle* outHandle
     ) override;
+    virtual SLANG_NO_THROW Result SLANG_MCALL getDescriptorHandle(
+        DescriptorHandleAccess access,
+        Format format,
+        uint32_t elementStride,
+        BufferRange range,
+        DescriptorHandle* outHandle
+    ) override;
 
 public:
     VKBufferHandleRAII m_buffer;
