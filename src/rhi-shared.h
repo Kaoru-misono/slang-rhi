@@ -329,6 +329,7 @@ public:
     void markQueryRangeResolved(uint32_t queryIndex, uint32_t count, QueueType queue, uint64_t completedSubmissionID);
     void markQueryRangeResolved(uint32_t queryIndex, uint32_t count, const QueryRangeInfo& info);
     QueryRangeInfo getQueryRangeInfo(uint32_t queryIndex, uint32_t count) const;
+    QueueType getQuerySlotQueue(uint32_t queryIndex) const;
 
 public:
     struct QuerySlotState

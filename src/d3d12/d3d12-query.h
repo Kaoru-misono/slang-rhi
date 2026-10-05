@@ -28,8 +28,9 @@ public:
 public:
     D3D12_QUERY_TYPE m_queryType;
     ComPtr<ID3D12QueryHeap> m_queryHeap;
-    D3D12Resource m_readBackBuffer;
-    uint8_t* m_mappedReadBackData = nullptr;
+    // Each queue resolves into its own buffer: resolves from two queues into one buffer would be concurrent writes.
+    D3D12Resource m_readBackBuffers[kQueueTypeCount];
+    uint8_t* m_mappedReadBackData[kQueueTypeCount] = {};
 };
 
 /// Implements the IQueryPool interface with a plain buffer.
