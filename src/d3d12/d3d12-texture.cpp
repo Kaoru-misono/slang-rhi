@@ -41,6 +41,13 @@ TextureImpl::~TextureImpl()
             device->m_cpuDsvHeap->free(dsv.second);
         }
     }
+    for (auto& dsv : m_readOnlyDsvs)
+    {
+        if (dsv.second)
+        {
+            device->m_cpuDsvHeap->free(dsv.second);
+        }
+    }
     if (m_sharedHandle)
     {
         ::CloseHandle((HANDLE)m_sharedHandle.value);
@@ -313,18 +320,25 @@ D3D12_CPU_DESCRIPTOR_HANDLE TextureImpl::getDSV(
     Format format,
     TextureType type,
     TextureAspect aspect,
-    const SubresourceRange& range
+    const SubresourceRange& range,
+    bool readOnly
 )
 {
     DeviceImpl* device = getDevice<DeviceImpl>();
 
     ViewKey key = {format, type, aspect, range};
-    CPUDescriptorAllocation& allocation = m_dsvs[key];
+    CPUDescriptorAllocation& allocation = readOnly ? m_readOnlyDsvs[key] : m_dsvs[key];
     if (allocation)
         return allocation.cpuHandle;
 
     D3D12_DEPTH_STENCIL_VIEW_DESC viewDesc = {};
     viewDesc.Format = m_isTypeless ? getFormatMapping(format).rtvFormat : m_format;
+    if (readOnly)
+    {
+        viewDesc.Flags = getFormatInfo(m_desc.format).hasStencil
+                             ? D3D12_DSV_FLAG_READ_ONLY_DEPTH | D3D12_DSV_FLAG_READ_ONLY_STENCIL
+                             : D3D12_DSV_FLAG_READ_ONLY_DEPTH;
+    }
     switch (type)
     {
     case TextureType::Texture1D:
@@ -470,11 +484,13 @@ D3D12_CPU_DESCRIPTOR_HANDLE TextureViewImpl::getRTV()
     return m_rtv;
 }
 
-D3D12_CPU_DESCRIPTOR_HANDLE TextureViewImpl::getDSV()
+D3D12_CPU_DESCRIPTOR_HANDLE TextureViewImpl::getDSV(bool readOnly)
 {
-    if (!m_dsv.ptr)
-        m_dsv = m_texture->getDSV(m_desc.format, m_texture->m_desc.type, m_desc.aspect, m_desc.subresourceRange);
-    return m_dsv;
+    D3D12_CPU_DESCRIPTOR_HANDLE& dsv = readOnly ? m_readOnlyDsv : m_dsv;
+    if (!dsv.ptr)
+        dsv =
+            m_texture->getDSV(m_desc.format, m_texture->m_desc.type, m_desc.aspect, m_desc.subresourceRange, readOnly);
+    return dsv;
 }
 
 } // namespace rhi::d3d12

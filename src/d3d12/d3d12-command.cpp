@@ -596,7 +596,7 @@ void CommandRecorder::cmdClearTextureDepthStencil(const commands::ClearTextureDe
             SubresourceRange sr = cmd.subresourceRange;
             sr.mip = cmd.subresourceRange.mip + mipOffset;
             sr.mipCount = 1;
-            D3D12_CPU_DESCRIPTOR_HANDLE dsv = texture->getDSV(desc.format, desc.type, TextureAspect::All, sr);
+            D3D12_CPU_DESCRIPTOR_HANDLE dsv = texture->getDSV(desc.format, desc.type, TextureAspect::All, sr, false);
             m_cmdList->ClearDepthStencilView(dsv, clearFlags, cmd.depthValue, cmd.stencilValue, 0, nullptr);
         }
     }
@@ -732,7 +732,7 @@ void CommandRecorder::cmdBeginRenderPass(const commands::BeginRenderPass& cmd)
 
     D3D12_CPU_DESCRIPTOR_HANDLE depthStencilDescriptor = {};
     if (m_depthStencilView)
-        depthStencilDescriptor = m_depthStencilView->getDSV();
+        depthStencilDescriptor = m_depthStencilView->getDSV(desc.depthStencilAttachment->depthReadOnly);
 
     m_cmdList->OMSetRenderTargets(
         (UINT)m_renderTargetViews.size(),
@@ -766,7 +766,7 @@ void CommandRecorder::cmdBeginRenderPass(const commands::BeginRenderPass& cmd)
         if (clearFlags)
         {
             m_cmdList->ClearDepthStencilView(
-                m_depthStencilView->getDSV(),
+                depthStencilDescriptor,
                 (D3D12_CLEAR_FLAGS)clearFlags,
                 attachment.depthClearValue,
                 attachment.stencilClearValue,
