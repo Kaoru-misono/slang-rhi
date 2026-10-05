@@ -769,12 +769,18 @@ Result DeviceImpl::initVulkanDevice(
         // SIMPLE_EXTENSION_FEATURE(struct, feature member name, extension, code)
         // will check for the presence of the boolean feature member in struct and the availability of the extensions.
         // If they are both present then the extension is added, the struct linked into the deviceCreateInfo chain
-        // and the code block is executed.
+        // and the code block is executed. Otherwise the feature member is cleared: a layer such as RenderDoc can hide
+        // an extension whose feature the driver still reports, and code testing the member would call its null entry
+        // points.
 #define SIMPLE_EXTENSION_FEATURE(s, m, e, code)                                                                        \
     {                                                                                                                  \
         if (addFeatureExtension(s.m, s, e))                                                                            \
         {                                                                                                              \
             code                                                                                                       \
+        }                                                                                                              \
+        else                                                                                                           \
+        {                                                                                                              \
+            s.m = VK_FALSE;                                                                                            \
         }                                                                                                              \
     }
 
