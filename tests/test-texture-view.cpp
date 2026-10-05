@@ -187,6 +187,9 @@ inline bool shouldSkipFormat(Format format)
     {
     case Format::RGB9E5Ufloat:
     case Format::R11G11B10Float:
+    // No host pack/unpack functions exist for 64-bit texels.
+    case Format::R64Uint:
+    case Format::R64Sint:
         return true;
     default:
         return false;

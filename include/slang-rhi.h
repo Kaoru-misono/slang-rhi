@@ -164,6 +164,7 @@ enum class DeviceType
     x(AtomicFloat,                              "atomic-float"                                  ) \
     x(AtomicHalf,                               "atomic-half"                                   ) \
     x(AtomicInt64,                              "atomic-int64"                                  ) \
+    x(ImageAtomicInt64,                         "image-atomic-int64"                            ) \
     x(WaveOps,                                  "wave-ops"                                      ) \
     x(MeshShader,                               "mesh-shader"                                   ) \
     x(Pointer,                                  "has-ptr"                                       ) \

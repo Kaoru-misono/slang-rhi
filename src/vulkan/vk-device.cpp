@@ -881,7 +881,7 @@ Result DeviceImpl::initVulkanDevice(
             extendedFeatures.imageInt64AtomicFeatures,
             shaderImageInt64Atomics,
             VK_EXT_SHADER_IMAGE_ATOMIC_INT64_EXTENSION_NAME,
-            {/* "image-atomic-int64" */}
+            { availableFeatures.push_back(Feature::ImageAtomicInt64); }
         );
 
         SIMPLE_EXTENSION_FEATURE(
