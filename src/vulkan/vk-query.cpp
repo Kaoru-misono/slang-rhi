@@ -1,8 +1,55 @@
 #include "vk-query.h"
+#include "vk-command.h"
 #include "vk-device.h"
 #include "vk-utils.h"
 
 namespace rhi::vk {
+
+namespace {
+
+CommandQueueImpl* getQueryQueue(DeviceImpl* device, uint32_t queue)
+{
+    switch (QueueType(queue))
+    {
+    case QueueType::Compute:
+        return device->m_computeQueue.get();
+    case QueueType::Transfer:
+        return device->m_transferQueue.get();
+    default:
+        return device->m_queue.get();
+    }
+}
+
+// A command resets its query only when it executes, so until the submission that rewrites a slot finishes the API
+// still reports the slot's previous result as available.
+bool areQuerySubmissionsFinished(DeviceImpl* device, const QueryPool::QueryRangeInfo& info)
+{
+    for (uint32_t queue = 0; queue < QueryPool::kQueueTypeCount; ++queue)
+    {
+        if (info.submissionIDs[queue] != 0 &&
+            getQueryQueue(device, queue)->updateLastFinishedID() < info.submissionIDs[queue])
+        {
+            return false;
+        }
+    }
+    return true;
+}
+
+Result waitForQuerySubmissions(DeviceImpl* device, const QueryPool::QueryRangeInfo& info)
+{
+    for (uint32_t queue = 0; queue < QueryPool::kQueueTypeCount; ++queue)
+    {
+        if (info.submissionIDs[queue] != 0)
+        {
+            SLANG_RETURN_ON_FAIL(
+                getQueryQueue(device, queue)->waitForSequence(info.submissionIDs[queue], kTimeoutInfinite)
+            );
+        }
+    }
+    return SLANG_OK;
+}
+
+} // namespace
 
 Result QueryPoolImpl::init()
 {
@@ -81,6 +128,11 @@ Result QueryPoolImpl::getResultState(uint32_t queryIndex, uint32_t count, QueryR
     }
 
     DeviceImpl* device = getDevice<DeviceImpl>();
+    if (!areQuerySubmissionsFinished(device, queryInfo))
+    {
+        *outState = QueryResultState::Pending;
+        return SLANG_OK;
+    }
     std::vector<uint64_t> data(count);
     VkResult result = device->m_api.vkGetQueryPoolResults(
         device->m_api.m_device,
@@ -128,6 +180,7 @@ Result QueryPoolImpl::getResult(uint32_t queryIndex, uint32_t count, uint64_t* o
     }
 
     DeviceImpl* device = getDevice<DeviceImpl>();
+    SLANG_RETURN_ON_FAIL(waitForQuerySubmissions(device, queryInfo));
     SLANG_VK_RETURN_ON_FAIL_REPORT(
         device->m_api.vkGetQueryPoolResults(
             device->m_api.m_device,

@@ -290,6 +290,49 @@ GPU_TEST_CASE("cmd-query-compute-queue-readiness", D3D12 | Vulkan)
     CHECK(timestamp != 0);
 }
 
+GPU_TEST_CASE("cmd-query-rewritten-slot-readiness", D3D12 | Vulkan)
+{
+    if (!device->hasFeature(Feature::TimestampQuery))
+    {
+        SKIP("Timestamp queries not supported");
+    }
+
+    auto queue = device->getQueue(QueueType::Graphics);
+    auto queryPool = createTimestampQueryPool(device, 1);
+    REQUIRE_CALL(queue->submit(createTimestampCommandBuffer(queue, queryPool, {0})));
+    REQUIRE_CALL(queue->waitOnHost());
+    uint64_t firstTimestamp = 0;
+    REQUIRE_CALL(queryPool->getResult(0, 1, &firstTimestamp));
+
+    // The slot still holds the first result while the gated rewrite waits, so it must not read as ready.
+    REQUIRE_CALL(queryPool->reset());
+    auto gate = device->createFence({});
+    REQUIRE(gate);
+    SLANG_RHI_DEFERRED({ gate->setCurrentValue(1); queue->waitOnHost(); });
+    auto commandBuffer = createTimestampCommandBuffer(queue, queryPool, {0});
+    ICommandBuffer* commandBuffers[] = {commandBuffer};
+    IFence* waitFence = gate;
+    uint64_t waitValue = 1;
+    SubmitDesc submit = {};
+    submit.commandBuffers = commandBuffers;
+    submit.commandBufferCount = 1;
+    submit.waitFences = &waitFence;
+    submit.waitFenceValues = &waitValue;
+    submit.waitFenceCount = 1;
+    REQUIRE_CALL(queue->submit(submit));
+
+    QueryResultState state = QueryResultState::Reset;
+    REQUIRE_CALL(queryPool->getResultState(0, 1, &state));
+    CHECK(state == QueryResultState::Pending);
+
+    REQUIRE_CALL(gate->setCurrentValue(1));
+    REQUIRE_CALL(queue->waitOnHost());
+    checkQueryResultReady(queryPool, 0, 1);
+    uint64_t secondTimestamp = 0;
+    REQUIRE_CALL(queryPool->getResult(0, 1, &secondTimestamp));
+    CHECK(secondTimestamp > firstTimestamp);
+}
+
 GPU_TEST_CASE("cmd-query-partial-range-readiness", ALL)
 {
     if (!device->hasFeature(Feature::TimestampQuery))
