@@ -474,8 +474,13 @@ Result DeviceImpl::createBuffer(const BufferDesc& desc_, const void* initData, I
         usage |= VK_BUFFER_USAGE_TRANSFER_DST_BIT;
     }
 
-    if (is_set(desc.usage, BufferUsage::ConstantBuffer) || desc.memoryType == MemoryType::Upload ||
-        desc.memoryType == MemoryType::ReadBack)
+    if (desc.memoryType == MemoryType::ReadBack)
+    {
+        // The CPU reads readback memory, and reads from uncached host memory run at a fraction of memory bandwidth.
+        reqMemoryProperties = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT |
+                              VK_MEMORY_PROPERTY_HOST_CACHED_BIT;
+    }
+    else if (is_set(desc.usage, BufferUsage::ConstantBuffer) || desc.memoryType == MemoryType::Upload)
     {
         reqMemoryProperties = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
     }
