@@ -648,7 +648,8 @@ Result DeviceImpl::createRenderPipeline2(const RenderPipelineDesc& desc, IRender
 
     VkPipelineRasterizationStateCreateInfo rasterizer = {};
     rasterizer.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
-    rasterizer.depthClampEnable = VK_TRUE; // TODO: Depth clipping and clamping are different between Vk and D3D12
+    // D3D12 clamps depth to the viewport range either way, so disabling its depth clip is Vulkan's depth clamp.
+    rasterizer.depthClampEnable = rasterizerDesc.depthClipEnable ? VK_FALSE : VK_TRUE;
     rasterizer.rasterizerDiscardEnable = VK_FALSE; // TODO: Currently unsupported
     rasterizer.polygonMode = translateFillMode(rasterizerDesc.fillMode);
     rasterizer.cullMode = translateCullMode(rasterizerDesc.cullMode);
