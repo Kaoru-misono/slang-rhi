@@ -913,6 +913,15 @@ Result DeviceImpl::initialize(const DeviceDesc& desc, BackendImpl* backend)
             }
         }
     }
+    // Bindless handles compile to ResourceDescriptorHeap accesses, so 64-bit atomics also need heap support.
+    bool atomicInt64OnDescriptorHeap = false;
+    {
+        D3D12_FEATURE_DATA_D3D12_OPTIONS11 options = {};
+        if (SLANG_SUCCEEDED(m_device->CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS11, &options, sizeof(options))))
+        {
+            atomicInt64OnDescriptorHeap = options.AtomicInt64OnDescriptorHeapResourceSupported;
+        }
+    }
     {
         D3D12_FEATURE_DATA_D3D12_OPTIONS1 options = {};
         if (SLANG_SUCCEEDED(m_device->CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS1, &options, sizeof(options))))
@@ -927,15 +936,23 @@ Result DeviceImpl::initialize(const DeviceDesc& desc, BackendImpl* backend)
             if (options.Int64ShaderOps)
             {
                 addFeature(Feature::Int64);
-                if (shaderModelData.HighestShaderModel >= D3D_SHADER_MODEL_6_6)
+                if (shaderModelData.HighestShaderModel >= D3D_SHADER_MODEL_6_6 && atomicInt64OnDescriptorHeap)
                 {
                     // SM 6.6 requires 64-bit integer atomics for RWByteAddressBuffer and
-                    // RWStructuredBuffer when Int64ShaderOps is present. Typed resources,
-                    // groupshared memory, and descriptor-heap resources have separate
-                    // optional D3D12_OPTIONS9/11 capability bits.
+                    // RWStructuredBuffer when Int64ShaderOps is present. Typed resources and
+                    // groupshared memory have separate optional D3D12_OPTIONS9 capability bits.
                     addFeature(Feature::AtomicInt64);
                 }
             }
+        }
+    }
+    {
+        D3D12_FEATURE_DATA_D3D12_OPTIONS9 options = {};
+        if (shaderModelData.HighestShaderModel >= D3D_SHADER_MODEL_6_6 && atomicInt64OnDescriptorHeap &&
+            SLANG_SUCCEEDED(m_device->CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS9, &options, sizeof(options))) &&
+            options.AtomicInt64OnTypedResourceSupported)
+        {
+            addFeature(Feature::ImageAtomicInt64);
         }
     }
     {
