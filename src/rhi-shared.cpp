@@ -584,6 +584,12 @@ void QueryPool::markQueryRangeResolved(uint32_t queryIndex, uint32_t count, cons
     }
 }
 
+QueueType QueryPool::getQuerySlotQueue(uint32_t queryIndex) const
+{
+    std::lock_guard<std::mutex> lock(m_queryStateMutex);
+    return m_querySlotStates[queryIndex].getQueue();
+}
+
 QueryPool::QueryRangeInfo QueryPool::getQueryRangeInfo(uint32_t queryIndex, uint32_t count) const
 {
     if (!isValidQueryRange(queryIndex, count))

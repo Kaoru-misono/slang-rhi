@@ -49,11 +49,14 @@ QueryPoolImpl::QueryPoolImpl(Device* device, const QueryPoolDesc& desc)
 
 QueryPoolImpl::~QueryPoolImpl()
 {
-    if (m_mappedReadBackData)
+    for (uint32_t queue = 0; queue < kQueueTypeCount; ++queue)
     {
-        D3D12_RANGE writtenRange = {0, 0};
-        m_readBackBuffer.getResource()->Unmap(0, &writtenRange);
-        m_mappedReadBackData = nullptr;
+        if (m_mappedReadBackData[queue])
+        {
+            D3D12_RANGE writtenRange = {0, 0};
+            m_readBackBuffers[queue].getResource()->Unmap(0, &writtenRange);
+            m_mappedReadBackData[queue] = nullptr;
+        }
     }
 }
 
@@ -87,25 +90,30 @@ Result QueryPoolImpl::init()
         m_queryHeap->SetName(string::to_wstring(m_desc.label).c_str());
     }
 
-    // Create readback buffer.
     D3D12_HEAP_PROPERTIES heapProps = makeHeapProperties(D3D12_HEAP_TYPE_READBACK);
     D3D12_RESOURCE_DESC resourceDesc = {};
     initBufferDesc(sizeof(uint64_t) * m_desc.count, resourceDesc);
-    SLANG_RETURN_ON_FAIL(m_readBackBuffer.initCommitted(
-        d3dDevice,
-        heapProps,
-        D3D12_HEAP_FLAG_NONE,
-        resourceDesc,
-        D3D12_RESOURCE_STATE_COPY_DEST,
-        nullptr,
-        device->m_allocator
-    ));
-
     D3D12_RANGE readRange = {0, sizeof(uint64_t) * m_desc.count};
-    SLANG_D3D_RETURN_ON_FAIL_REPORT(
-        m_readBackBuffer.getResource()->Map(0, &readRange, reinterpret_cast<void**>(&m_mappedReadBackData)),
-        device
-    );
+    for (uint32_t queue = 0; queue < kQueueTypeCount; ++queue)
+    {
+        SLANG_RETURN_ON_FAIL(m_readBackBuffers[queue].initCommitted(
+            d3dDevice,
+            heapProps,
+            D3D12_HEAP_FLAG_NONE,
+            resourceDesc,
+            D3D12_RESOURCE_STATE_COPY_DEST,
+            nullptr,
+            device->m_allocator
+        ));
+        SLANG_D3D_RETURN_ON_FAIL_REPORT(
+            m_readBackBuffers[queue].getResource()->Map(
+                0,
+                &readRange,
+                reinterpret_cast<void**>(&m_mappedReadBackData[queue])
+            ),
+            device
+        );
+    }
 
     return SLANG_OK;
 }
@@ -160,7 +168,11 @@ Result QueryPoolImpl::getResult(uint32_t queryIndex, uint32_t count, uint64_t* o
 
     SLANG_RETURN_ON_FAIL(waitForQuerySubmissions(getDevice<DeviceImpl>(), queryInfo));
 
-    memcpy(outData, m_mappedReadBackData + sizeof(uint64_t) * queryIndex, sizeof(uint64_t) * count);
+    for (uint32_t i = 0; i < count; ++i)
+    {
+        uint32_t queue = uint32_t(getQuerySlotQueue(queryIndex + i));
+        memcpy(outData + i, m_mappedReadBackData[queue] + sizeof(uint64_t) * (queryIndex + i), sizeof(uint64_t));
+    }
     markQueryRangeResolved(queryIndex, count, queryInfo);
 
     return SLANG_OK;
