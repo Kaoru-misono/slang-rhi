@@ -1742,7 +1742,8 @@ void CommandRecorder::cmdReleaseBufferForQueue(const commands::ReleaseBufferForQ
     uint32_t srcFamily = m_device->getQueueFamilyIndex(m_queueType);
     uint32_t dstFamily = m_device->getQueueFamilyIndex(cmd.dstQueue);
 
-    if (srcFamily == dstFamily || buffer->m_desc.sharingMode == SharingMode::Concurrent)
+    if (srcFamily == dstFamily || buffer->m_desc.sharingMode == SharingMode::Concurrent ||
+        m_device->isOwnershipTransferImplicit(srcFamily, dstFamily, false))
     {
         m_stateTracking.setBufferState(buffer, cmd.currentState);
         return;
@@ -1784,12 +1785,15 @@ void CommandRecorder::cmdReleaseTextureForQueue(const commands::ReleaseTextureFo
     uint32_t srcFamily = m_device->getQueueFamilyIndex(m_queueType);
     uint32_t dstFamily = m_device->getQueueFamilyIndex(cmd.dstQueue);
 
-    if (srcFamily == dstFamily || texture->m_desc.sharingMode == SharingMode::Concurrent)
+    if (srcFamily == dstFamily || texture->m_desc.sharingMode == SharingMode::Concurrent ||
+        m_device->isOwnershipTransferImplicit(srcFamily, dstFamily, true))
     {
         m_stateTracking.setTextureState(texture, cmd.subresourceRange, cmd.currentState);
         return;
     }
 
+    // The release barrier keeps the layout, so the texture must already be in the state it is released in.
+    m_stateTracking.setTextureState(texture, cmd.subresourceRange, cmd.currentState);
     commitBarriers();
 
     VkImageLayout currentLayout = translateImageLayout(cmd.currentState);
@@ -1830,7 +1834,8 @@ void CommandRecorder::cmdAcquireBufferFromQueue(const commands::AcquireBufferFro
     uint32_t srcFamily = m_device->getQueueFamilyIndex(cmd.srcQueue);
     uint32_t dstFamily = m_device->getQueueFamilyIndex(m_queueType);
 
-    if (srcFamily == dstFamily || buffer->m_desc.sharingMode == SharingMode::Concurrent)
+    if (srcFamily == dstFamily || buffer->m_desc.sharingMode == SharingMode::Concurrent ||
+        m_device->isOwnershipTransferImplicit(srcFamily, dstFamily, false))
     {
         m_stateTracking.setBufferState(buffer, cmd.desiredState);
         return;
@@ -1871,7 +1876,8 @@ void CommandRecorder::cmdAcquireTextureFromQueue(const commands::AcquireTextureF
     uint32_t srcFamily = m_device->getQueueFamilyIndex(cmd.srcQueue);
     uint32_t dstFamily = m_device->getQueueFamilyIndex(m_queueType);
 
-    if (srcFamily == dstFamily || texture->m_desc.sharingMode == SharingMode::Concurrent)
+    if (srcFamily == dstFamily || texture->m_desc.sharingMode == SharingMode::Concurrent ||
+        m_device->isOwnershipTransferImplicit(srcFamily, dstFamily, true))
     {
         m_stateTracking.setTextureState(texture, cmd.subresourceRange, cmd.desiredState);
         return;

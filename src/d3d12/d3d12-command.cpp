@@ -2047,7 +2047,7 @@ void CommandRecorder::resolveTimestampQueryResults(const CommandList::QueryWrite
             queryPool->m_queryType,
             queryWrite.index,
             queryWrite.count,
-            queryPool->m_readBackBuffer,
+            queryPool->m_readBackBuffers[uint32_t(m_queueType)],
             uint64_t(queryWrite.index) * sizeof(uint64_t)
         );
     }

@@ -68,6 +68,7 @@ protected:
 #define VK_API_INSTANCE_PROCS_OPT(x) \
     x(vkGetPhysicalDeviceFeatures2) \
     x(vkGetPhysicalDeviceProperties2) \
+    x(vkGetPhysicalDeviceQueueFamilyProperties2) \
     VK_API_INSTANCE_KHR_PROCS(x) \
     x(vkCreateDebugUtilsMessengerEXT) \
     x(vkDestroyDebugUtilsMessengerEXT) \
@@ -517,6 +518,11 @@ struct VulkanExtendedFeatures
     // Pipeline binary features
     VkPhysicalDevicePipelineBinaryFeaturesKHR pipelineBinaryFeatures = {
         VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PIPELINE_BINARY_FEATURES_KHR
+    };
+
+    // Maintenance9 features
+    VkPhysicalDeviceMaintenance9FeaturesKHR maintenance9Features = {
+        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MAINTENANCE_9_FEATURES_KHR
     };
 
     // Shader subgroup rotate features

@@ -263,6 +263,8 @@ public:
     );
 
     uint32_t getQueueFamilyIndex(QueueType queueType);
+    // True when an access on dstFamily keeps the contents srcFamily left without an ownership transfer.
+    bool isOwnershipTransferImplicit(uint32_t srcFamily, uint32_t dstFamily, bool optimalImage) const;
     uint32_t getSharingQueueFamilies(SharingMode mode, uint32_t (&families)[3]) const;
 
 public:
@@ -274,6 +276,10 @@ public:
 
     VkDevice m_device = VK_NULL_HANDLE;
     bool m_hasSubgroupSizeControl = false;
+    // VK_KHR_maintenance9: queue family ownership transfers become optional for buffers, and for optimal images
+    // whose source family lists the destination in optimalImageTransferToQueueFamilies (indexed by family).
+    bool m_maintenance9 = false;
+    std::vector<uint32_t> m_optimalImageTransferToQueueFamilies;
     CalibratedTimestampSupport m_calibratedTimestampSupport;
 
     VulkanModule m_module;

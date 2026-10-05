@@ -714,6 +714,7 @@ Result DeviceImpl::initVulkanDevice(
         EXTEND_DESC_CHAIN(deviceFeatures2, extendedFeatures.descriptorIndexingFeatures);
         EXTEND_DESC_CHAIN(deviceFeatures2, extendedFeatures.mutableDescriptorTypeFeatures);
         EXTEND_DESC_CHAIN(deviceFeatures2, extendedFeatures.pipelineBinaryFeatures);
+        EXTEND_DESC_CHAIN(deviceFeatures2, extendedFeatures.maintenance9Features);
         EXTEND_DESC_CHAIN(deviceFeatures2, extendedFeatures.shaderSubgroupRotateFeatures);
         EXTEND_DESC_CHAIN(deviceFeatures2, extendedFeatures.shaderReplicatedCompositesFeatures);
         EXTEND_DESC_CHAIN(deviceFeatures2, extendedFeatures.fragmentShaderBarycentricFeatures);
@@ -1266,6 +1267,13 @@ Result DeviceImpl::initVulkanDevice(
         );
 
         SIMPLE_EXTENSION_FEATURE(
+            extendedFeatures.maintenance9Features,
+            maintenance9,
+            VK_KHR_MAINTENANCE_9_EXTENSION_NAME,
+            { m_maintenance9 = true; }
+        );
+
+        SIMPLE_EXTENSION_FEATURE(
             extendedFeatures.shaderReplicatedCompositesFeatures,
             shaderReplicatedComposites,
             VK_EXT_SHADER_REPLICATED_COMPOSITES_EXTENSION_NAME,
@@ -1537,6 +1545,20 @@ Result DeviceImpl::initVulkanDevice(
             m_transferQueueFamilyIndex = m_computeQueueFamilyIndex;
         else
             m_transferQueueFamilyIndex = m_queueFamilyIndex;
+    }
+
+    if (m_maintenance9 && m_api.vkGetPhysicalDeviceQueueFamilyProperties2)
+    {
+        std::vector<VkQueueFamilyOwnershipTransferPropertiesKHR> transfers(
+            numFamilies,
+            {VK_STRUCTURE_TYPE_QUEUE_FAMILY_OWNERSHIP_TRANSFER_PROPERTIES_KHR}
+        );
+        std::vector<VkQueueFamilyProperties2> families2(numFamilies, {VK_STRUCTURE_TYPE_QUEUE_FAMILY_PROPERTIES_2});
+        for (uint32_t i = 0; i < numFamilies; ++i)
+            families2[i].pNext = &transfers[i];
+        m_api.vkGetPhysicalDeviceQueueFamilyProperties2(m_api.m_physicalDevice, &numFamilies, families2.data());
+        for (const auto& transfer : transfers)
+            m_optimalImageTransferToQueueFamilies.push_back(transfer.optimalImageTransferToQueueFamilies);
     }
 
 #if SLANG_RHI_ENABLE_AFTERMATH
@@ -2387,6 +2409,16 @@ uint32_t DeviceImpl::getSharingQueueFamilies(SharingMode mode, uint32_t (&famili
             families[count++] = family;
     }
     return count > 1 ? count : 0;
+}
+
+bool DeviceImpl::isOwnershipTransferImplicit(uint32_t srcFamily, uint32_t dstFamily, bool optimalImage) const
+{
+    if (!m_maintenance9)
+        return false;
+    if (!optimalImage)
+        return true;
+    return srcFamily < m_optimalImageTransferToQueueFamilies.size() && dstFamily < 32 &&
+           (m_optimalImageTransferToQueueFamilies[srcFamily] & (1u << dstFamily)) != 0;
 }
 
 uint32_t DeviceImpl::getQueueFamilyIndex(QueueType queueType)
