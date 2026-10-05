@@ -59,6 +59,7 @@ public:
     std::unordered_map<ViewKey, CPUDescriptorAllocation, ViewKeyHasher> m_uavs;
     std::unordered_map<ViewKey, CPUDescriptorAllocation, ViewKeyHasher> m_rtvs;
     std::unordered_map<ViewKey, CPUDescriptorAllocation, ViewKeyHasher> m_dsvs;
+    std::unordered_map<ViewKey, CPUDescriptorAllocation, ViewKeyHasher> m_readOnlyDsvs;
 
     D3D12_CPU_DESCRIPTOR_HANDLE getSRV(
         Format format,
@@ -82,7 +83,8 @@ public:
         Format format,
         TextureType type,
         TextureAspect aspect,
-        const SubresourceRange& range
+        const SubresourceRange& range,
+        bool readOnly
     );
 };
 
@@ -111,7 +113,7 @@ public:
     D3D12_CPU_DESCRIPTOR_HANDLE getSRV();
     D3D12_CPU_DESCRIPTOR_HANDLE getUAV();
     D3D12_CPU_DESCRIPTOR_HANDLE getRTV();
-    D3D12_CPU_DESCRIPTOR_HANDLE getDSV();
+    D3D12_CPU_DESCRIPTOR_HANDLE getDSV(bool readOnly);
 
     // Immutable borrowed association; TextureView pairs each consumer reference with a texture reference.
     TextureImpl* m_texture;
@@ -120,6 +122,7 @@ public:
     D3D12_CPU_DESCRIPTOR_HANDLE m_uav = {};
     D3D12_CPU_DESCRIPTOR_HANDLE m_rtv = {};
     D3D12_CPU_DESCRIPTOR_HANDLE m_dsv = {};
+    D3D12_CPU_DESCRIPTOR_HANDLE m_readOnlyDsv = {};
 };
 
 } // namespace rhi::d3d12

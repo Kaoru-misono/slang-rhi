@@ -797,11 +797,13 @@ void CommandRecorder::cmdBeginRenderPass(const commands::BeginRenderPass& cmd)
         m_depthStencilView = checked_cast<TextureViewImpl*>(desc.depthStencilAttachment->view);
 
         // Transition state
-        requireTextureState(
-            view->m_texture,
-            view->m_desc.subresourceRange,
-            attachment.depthReadOnly ? ResourceState::DepthRead : ResourceState::DepthWrite
-        );
+        ResourceState depthState = attachment.depthReadOnly ? ResourceState::DepthRead : ResourceState::DepthWrite;
+        requireTextureState(view->m_texture, view->m_desc.subresourceRange, depthState);
+        // A read-only attachment keeps its contents, and STORE would count as an attachment write for synchronization.
+        auto storeOp = [&](StoreOp op)
+        {
+            return attachment.depthReadOnly ? VK_ATTACHMENT_STORE_OP_NONE : translateStoreOp(op);
+        };
 
         // Determine render area
         const TextureViewDesc& viewDesc = view->m_desc;
@@ -817,9 +819,9 @@ void CommandRecorder::cmdBeginRenderPass(const commands::BeginRenderPass& cmd)
             hasDepthAttachment = true;
             const auto& dsa = *desc.depthStencilAttachment;
             depthAttachmentInfo.imageView = checked_cast<TextureViewImpl*>(dsa.view)->getRenderTargetView().imageView;
-            depthAttachmentInfo.imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+            depthAttachmentInfo.imageLayout = translateImageLayout(depthState);
             depthAttachmentInfo.loadOp = translateLoadOp(dsa.depthLoadOp);
-            depthAttachmentInfo.storeOp = translateStoreOp(dsa.depthStoreOp);
+            depthAttachmentInfo.storeOp = storeOp(dsa.depthStoreOp);
             depthAttachmentInfo.clearValue.depthStencil.depth = dsa.depthClearValue;
         }
         if (isStencilFormat(view->m_texture->m_vkformat))
@@ -827,9 +829,9 @@ void CommandRecorder::cmdBeginRenderPass(const commands::BeginRenderPass& cmd)
             hasStencilAttachment = true;
             const auto& dsa = *desc.depthStencilAttachment;
             stencilAttachmentInfo.imageView = checked_cast<TextureViewImpl*>(dsa.view)->getRenderTargetView().imageView;
-            stencilAttachmentInfo.imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+            stencilAttachmentInfo.imageLayout = translateImageLayout(depthState);
             stencilAttachmentInfo.loadOp = translateLoadOp(dsa.stencilLoadOp);
-            stencilAttachmentInfo.storeOp = translateStoreOp(dsa.stencilStoreOp);
+            stencilAttachmentInfo.storeOp = storeOp(dsa.stencilStoreOp);
             stencilAttachmentInfo.clearValue.depthStencil.stencil = dsa.stencilClearValue;
         }
     }
