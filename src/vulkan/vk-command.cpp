@@ -1794,6 +1794,8 @@ void CommandRecorder::cmdReleaseTextureForQueue(const commands::ReleaseTextureFo
         return;
     }
 
+    // The release barrier keeps the layout, so the texture must already be in the state it is released in.
+    m_stateTracking.setTextureState(texture, cmd.subresourceRange, cmd.currentState);
     commitBarriers();
 
     VkImageLayout currentLayout = translateImageLayout(cmd.currentState);
