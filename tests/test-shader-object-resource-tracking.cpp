@@ -991,8 +991,9 @@ void main() {
     CHECK(internal->m_bindingCounters.tableMisses == 257);
     const uint64_t implicitNvapiDescriptors = device->getDeviceType() == DeviceType::D3D12 &&
         device->hasCapability(Capability::hlsl_nvapi) ? expected.size() : 0;
-    const uint64_t ordinaryDescriptors = entryConstants && device->getDeviceType() == DeviceType::Vulkan ? 0 : 256;
+    const uint64_t ordinaryDescriptors = entryConstants ? 0 : expected.size();
     CHECK(internal->m_bindingCounters.descriptorsWritten == 16 + ordinaryDescriptors + implicitNvapiDescriptors);
+    CHECK(internal->m_bindingCounters.cbAllocations == ordinaryDescriptors);
 #endif
     REQUIRE_CALL(queue->submit(commands));
     REQUIRE_CALL(queue->waitOnHost());

@@ -12,7 +12,7 @@ namespace rhi::d3d12 {
 
 inline BindingDataImpl::RootParameter createRootDescriptorTable(UINT index, D3D12_GPU_DESCRIPTOR_HANDLE baseDescriptor)
 {
-    BindingDataImpl::RootParameter result;
+    BindingDataImpl::RootParameter result = {};
     result.type = BindingDataImpl::RootParameter::DescriptorTable;
     result.index = index;
     result.baseDescriptor = baseDescriptor;
@@ -21,7 +21,7 @@ inline BindingDataImpl::RootParameter createRootDescriptorTable(UINT index, D3D1
 
 inline BindingDataImpl::RootParameter createRootSRV(UINT index, D3D12_GPU_VIRTUAL_ADDRESS bufferLocation)
 {
-    BindingDataImpl::RootParameter result;
+    BindingDataImpl::RootParameter result = {};
     result.type = BindingDataImpl::RootParameter::SRV;
     result.index = index;
     result.bufferLocation = bufferLocation;
@@ -30,7 +30,7 @@ inline BindingDataImpl::RootParameter createRootSRV(UINT index, D3D12_GPU_VIRTUA
 
 inline BindingDataImpl::RootParameter createRootUAV(UINT index, D3D12_GPU_VIRTUAL_ADDRESS bufferLocation)
 {
-    BindingDataImpl::RootParameter result;
+    BindingDataImpl::RootParameter result = {};
     result.type = BindingDataImpl::RootParameter::UAV;
     result.index = index;
     result.bufferLocation = bufferLocation;
@@ -154,9 +154,29 @@ Result BindingDataBuilder::bindAsRoot(
         auto entryPointOffset = rootOffset;
         entryPointOffset += entryPointInfo.offset;
 
-        SLANG_RETURN_ON_FAIL(
-            bindAsConstantBuffer(entryPoint, descriptorSet, entryPointOffset, rootParamIndex, entryPointLayout)
-        );
+        if (entryPointInfo.constantIndex != UINT32_MAX)
+        {
+            uint32_t size = entryPointLayout->getTotalOrdinaryDataSize();
+            if (entryPoint->m_data.size() > size)
+                return SLANG_E_INVALID_ARG;
+            auto& parameter = m_bindingData->rootParameters[entryPointInfo.constantIndex];
+            parameter = {};
+            parameter.type = BindingDataImpl::RootParameter::Constants;
+            parameter.index = entryPointInfo.constantIndex;
+            parameter.constantCount = size / 4;
+            parameter.constants = m_allocator->allocate<uint32_t>(parameter.constantCount);
+            memset(parameter.constants, 0, size);
+            SLANG_RETURN_ON_FAIL(entryPoint->writeOrdinaryData(parameter.constants, size, entryPointLayout));
+            SLANG_RETURN_ON_FAIL(
+                bindAsValue(entryPoint, descriptorSet, entryPointOffset, rootParamIndex, entryPointLayout)
+            );
+        }
+        else
+        {
+            SLANG_RETURN_ON_FAIL(
+                bindAsConstantBuffer(entryPoint, descriptorSet, entryPointOffset, rootParamIndex, entryPointLayout)
+            );
+        }
     }
 
 #if SLANG_RHI_ENABLE_NVAPI

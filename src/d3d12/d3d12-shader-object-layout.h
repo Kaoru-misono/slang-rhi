@@ -102,12 +102,14 @@ public:
     uint32_t m_childRootParameterCount = 0;
 
     uint32_t m_totalOrdinaryDataSize = 0;
+    bool m_ordinaryDataIsConstants = false;
 
     static Result createForElementType(
         Device* device,
         slang::ISession* session,
         slang::TypeLayoutReflection* elementType,
-        ShaderObjectLayoutImpl** outLayout
+        ShaderObjectLayoutImpl** outLayout,
+        bool ordinaryDataIsConstants = false
     );
 
 #if 0
@@ -127,9 +129,9 @@ public:
     uint32_t getTotalResourceDescriptorCount() { return m_totalCounts.resource; }
     uint32_t getTotalSamplerDescriptorCount() { return m_totalCounts.sampler; }
 
-    uint32_t getOrdinaryDataBufferCount() { return m_totalOrdinaryDataSize ? 1 : 0; }
+    uint32_t getOrdinaryDataBufferCount() { return m_totalOrdinaryDataSize && !m_ordinaryDataIsConstants ? 1 : 0; }
 #if 0
-    bool hasOrdinaryDataBuffer() { return m_totalOrdinaryDataSize != 0; }
+    bool hasOrdinaryDataBuffer() { return m_totalOrdinaryDataSize != 0 && !m_ordinaryDataIsConstants; }
 #endif
 
     uint32_t getTotalResourceDescriptorCountWithoutOrdinaryDataBuffer()
@@ -209,6 +211,7 @@ protected:
         /// The total size in bytes of the ordinary data for this object and transitive
         /// sub-object.
         uint32_t m_totalOrdinaryDataSize = 0;
+        bool m_ordinaryDataIsConstants = false;
 
         /// The container type of this shader object. When `m_containerType` is
         /// `StructuredBuffer` or `UnsizedArray`, this shader object represents a collection
@@ -232,6 +235,7 @@ public:
     {
         RefPtr<ShaderObjectLayoutImpl> layout;
         BindingOffset offset;
+        uint32_t constantIndex = UINT32_MAX;
     };
 
     ComPtr<slang::IComponentType> m_program;
@@ -293,6 +297,13 @@ public:
         std::vector<D3D12_ROOT_PARAMETER1> m_rootDescTableParameters;
 
         D3D12_ROOT_SIGNATURE_DESC1 m_rootSignatureDesc = {};
+        bool m_promoteEntryOrdinaryData = false;
+        D3D12_ROOT_CONSTANTS m_constants = {};
+#if SLANG_RHI_ENABLE_NVAPI
+        bool m_hasImplicitDescriptorRangeForNVAPI = false;
+#endif
+
+        void addProgram(slang::ProgramLayout* layout, const std::vector<bool>& promoted);
 
         static Result translateDescriptorRangeType(slang::BindingType c, D3D12_DESCRIPTOR_RANGE_TYPE* outType);
 

@@ -321,6 +321,7 @@ Result BindingDataBuilder::bindAsRoot(
 
     SLANG_RETURN_ON_FAIL(bindAsValue(shaderObject, offset, specializedLayout));
 
+    int32_t firstConstantEntry = -1;
     for (size_t i = 0; i < entryPointCount; ++i)
     {
         auto entryPoint = shaderObject->m_entryPoints[i];
@@ -332,7 +333,39 @@ Result BindingDataBuilder::bindAsRoot(
         // `RootShaderObjectLayout` has already baked any offsets
         // from the global layout into the `entryPointInfo`.
 
-        SLANG_RETURN_ON_FAIL(bindAsEntryPoint(entryPoint, entryPointInfo.offset, entryPointLayout, (uint32_t)i));
+        if (specializedLayout->m_coalescedEntryPointConstants)
+        {
+            uint32_t size = entryPointLayout->getTotalOrdinaryDataSize();
+            if (size)
+            {
+                if (entryPoint->m_data.size() > size)
+                    return SLANG_E_INVALID_ARG;
+                void* bytes = m_allocator->allocate(size);
+                memset(bytes, 0, size);
+                SLANG_RETURN_ON_FAIL(entryPoint->writeOrdinaryData(bytes, size, entryPointLayout));
+                if (firstConstantEntry < 0)
+                {
+                    firstConstantEntry = int32_t(i);
+                    m_bindingData->pushConstantCount = 1;
+                    m_bindingData->pushConstantRanges[0] = m_pushConstantRanges[0];
+                    m_bindingData->pushConstantData[0] = bytes;
+                }
+                else if (memcmp(m_bindingData->pushConstantData[0], bytes, size))
+                {
+                    m_device->printError(
+                        "Entry-point push constants differ between '%s' and '%s'.",
+                        specializedLayout->m_entryPoints[firstConstantEntry].layout->getSlangLayout()->getName(),
+                        entryPointLayout->getSlangLayout()->getName()
+                    );
+                    return SLANG_E_INVALID_ARG;
+                }
+            }
+            SLANG_RETURN_ON_FAIL(bindAsValue(entryPoint, entryPointInfo.offset, entryPointLayout));
+        }
+        else
+        {
+            SLANG_RETURN_ON_FAIL(bindAsEntryPoint(entryPoint, entryPointInfo.offset, entryPointLayout, (uint32_t)i));
+        }
     }
 
     if (specializedLayout->m_bindlessSetIndex != UINT32_MAX)

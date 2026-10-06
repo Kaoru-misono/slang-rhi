@@ -120,6 +120,7 @@ public:
     {
         enum Type
         {
+            Constants,
             CBV,
             UAV,
             SRV,
@@ -127,6 +128,8 @@ public:
         };
         Type type;
         UINT index;
+        uint32_t* constants;
+        uint32_t constantCount;
         union
         {
             D3D12_GPU_VIRTUAL_ADDRESS bufferLocation;

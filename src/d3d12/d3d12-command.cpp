@@ -1837,6 +1837,9 @@ void CommandRecorder::setBindings(BindingDataImpl* bindingData, BindMode bindMod
             const auto& param = bindingData->rootParameters[i];
             switch (param.type)
             {
+            case BindingDataImpl::RootParameter::Constants:
+                m_cmdList->SetGraphicsRoot32BitConstants(param.index, param.constantCount, param.constants, 0);
+                break;
             case BindingDataImpl::RootParameter::CBV:
                 m_cmdList->SetGraphicsRootConstantBufferView(param.index, param.bufferLocation);
                 break;
@@ -1859,6 +1862,9 @@ void CommandRecorder::setBindings(BindingDataImpl* bindingData, BindMode bindMod
             const auto& param = bindingData->rootParameters[i];
             switch (param.type)
             {
+            case BindingDataImpl::RootParameter::Constants:
+                m_cmdList->SetComputeRoot32BitConstants(param.index, param.constantCount, param.constants, 0);
+                break;
             case BindingDataImpl::RootParameter::CBV:
                 m_cmdList->SetComputeRootConstantBufferView(param.index, param.bufferLocation);
                 break;
