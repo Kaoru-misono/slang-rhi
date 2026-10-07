@@ -1,4 +1,5 @@
 #include "testing.h"
+#include "test-ray-tracing-common.h"
 
 using namespace rhi;
 using namespace rhi::testing;
@@ -780,4 +781,44 @@ GPU_TEST_CASE("bindless-combined-texture-samplers", D3D12 | Vulkan | CUDA)
             12.f,
         }
     );
+}
+
+// Vulkan lowers an acceleration-structure handle to the structure's device address, D3D12 to a heap index.
+GPU_TEST_CASE("bindless-acceleration-structure-handle", D3D12 | Vulkan)
+{
+    if (!device->hasFeature(Feature::Bindless) || !device->hasFeature(Feature::RayQuery))
+        SKIP("bindless ray queries unsupported");
+    ComPtr<ICommandQueue> queue = device->getQueue(QueueType::Graphics);
+    SingleTriangleBLAS blas(device, queue);
+    TLAS tlas(device, queue, blas.blas);
+
+    ComPtr<IShaderProgram> program;
+    REQUIRE_CALL(loadProgram(device, "test-bindless-acceleration-structure", "computeMain", program.writeRef()));
+    ComputePipelineDesc pipelineDesc = {};
+    pipelineDesc.program = program;
+    auto pipeline = device->createComputePipeline(pipelineDesc);
+    REQUIRE(pipeline);
+
+    BufferDesc bufferDesc = {};
+    bufferDesc.size = sizeof(uint32_t);
+    bufferDesc.elementSize = sizeof(uint32_t);
+    bufferDesc.usage = BufferUsage::UnorderedAccess | BufferUsage::CopySource;
+    bufferDesc.defaultState = ResourceState::UnorderedAccess;
+    const uint32_t zero = 0;
+    ComPtr<IBuffer> result;
+    REQUIRE_CALL(device->createBuffer(bufferDesc, &zero, result.writeRef()));
+
+    auto encoder = queue->createCommandEncoder();
+    auto pass = encoder->beginComputePass();
+    auto root = pass->bindPipeline(pipeline);
+    REQUIRE(root);
+    ShaderCursor entry(root->getEntryPoint(0));
+    REQUIRE_CALL(entry["scene"].setDescriptorHandle(tlas.tlas.get()));
+    REQUIRE_CALL(entry["result"].setBinding(result));
+    pass->dispatchCompute(1, 1, 1);
+    pass->end();
+    REQUIRE_CALL(queue->submit(encoder->finish()));
+    REQUIRE_CALL(queue->waitOnHost());
+    // COMMITTED_TRIANGLE_HIT
+    compareComputeResult(device, result, std::array<uint32_t, 1>{1});
 }

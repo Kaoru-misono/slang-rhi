@@ -436,6 +436,10 @@ void ShaderObjectLayoutImpl::Builder::addBindingRanges(slang::TypeLayoutReflecti
         subObjectRange.bindingRangeIndex = bindingRangeIndex;
         subObjectRange.layout = subObjectLayout;
 
+        // A push-constant block with descriptors of its own still writes them into the enclosing table.
+        m_bindingRanges[bindingRangeIndex].isPushConstantBlock =
+            slangBindingType == slang::BindingType::PushConstant && subObjectLayout->getBindingRangeCount() == 0;
+
         // We will use Slang reflection infromation to extract the offset information
         // for each sub-object range.
         //
@@ -691,71 +695,6 @@ Result RootShaderObjectLayoutImpl::create(
     return SLANG_OK;
 }
 
-// A scalar, vector or matrix inside a type's ordinary data, at its byte offset.
-struct UniformLeaf
-{
-    size_t offset;
-    slang::TypeReflection::Kind kind;
-    slang::TypeReflection::ScalarType scalarType;
-    unsigned rowCount;
-    unsigned columnCount;
-    SlangMatrixLayoutMode matrixLayout;
-
-    bool operator==(const UniformLeaf&) const = default;
-};
-
-static void collectUniformLeaves(slang::TypeLayoutReflection* type, size_t offset, std::vector<UniformLeaf>& leaves)
-{
-    if (!type->getSize(SLANG_PARAMETER_CATEGORY_UNIFORM))
-        return;
-    switch (type->getKind())
-    {
-    case slang::TypeReflection::Kind::Struct:
-        for (unsigned i = 0; i < type->getFieldCount(); ++i)
-        {
-            auto field = type->getFieldByIndex(i);
-            collectUniformLeaves(
-                field->getTypeLayout(),
-                offset + field->getOffset(SLANG_PARAMETER_CATEGORY_UNIFORM),
-                leaves
-            );
-        }
-        break;
-    case slang::TypeReflection::Kind::Array:
-        for (size_t i = 0; i < type->getElementCount(); ++i)
-        {
-            collectUniformLeaves(
-                type->getElementTypeLayout(),
-                offset + i * type->getElementStride(SLANG_PARAMETER_CATEGORY_UNIFORM),
-                leaves
-            );
-        }
-        break;
-    default:
-        leaves.push_back(
-            {offset,
-             type->getKind(),
-             type->getScalarType(),
-             type->getRowCount(),
-             type->getColumnCount(),
-             type->getMatrixLayoutMode()}
-        );
-        break;
-    }
-}
-
-// Stages can share one push-constant range only when they read the same values at the same offsets.
-static bool hasSameUniformLayout(slang::TypeLayoutReflection* a, slang::TypeLayoutReflection* b)
-{
-    if (a->getSize(SLANG_PARAMETER_CATEGORY_UNIFORM) != b->getSize(SLANG_PARAMETER_CATEGORY_UNIFORM))
-        return false;
-    std::vector<UniformLeaf> leavesA;
-    std::vector<UniformLeaf> leavesB;
-    collectUniformLeaves(a, 0, leavesA);
-    collectUniformLeaves(b, 0, leavesB);
-    return leavesA == leavesB;
-}
-
 Result RootShaderObjectLayoutImpl::_init(const Builder* builder)
 {
     auto device = builder->m_device;
@@ -792,46 +731,6 @@ Result RootShaderObjectLayoutImpl::_init(const Builder* builder)
     // ranges needed for this object, sub-objects, and entry points.
     //
     SLANG_RETURN_ON_FAIL(addAllPushConstantRanges());
-    // Slang places every stage's entry-point push block at offset 0, so those stages share one range and one payload.
-    // Ray-tracing entry points keep their own data paths.
-    bool rayTracing = false;
-    for (const auto& entry : m_entryPoints)
-    {
-        auto stage = entry.layout->getSlangLayout()->getStage();
-        rayTracing = rayTracing || (stage >= SLANG_STAGE_RAY_GENERATION && stage <= SLANG_STAGE_CALLABLE);
-    }
-    if (!rayTracing)
-    {
-        const EntryPointInfo* first = nullptr;
-        uint32_t entryRangeCount = 0;
-        VkShaderStageFlags stages = 0;
-        for (const auto& entry : m_entryPoints)
-        {
-            auto type = entry.layout->getElementTypeLayout();
-            if (!type->getSize())
-                continue;
-            if (first && !hasSameUniformLayout(first->layout->getElementTypeLayout(), type))
-            {
-                m_device->printError(
-                    "Entry points '%s' and '%s' declare different uniform parameters, but they share one push-constant "
-                    "range.",
-                    first->layout->getSlangLayout()->getName(),
-                    entry.layout->getSlangLayout()->getName()
-                );
-                return SLANG_E_INVALID_ARG;
-            }
-            first = first ? first : &entry;
-            ++entryRangeCount;
-            stages |= entry.layout->getShaderStageFlag();
-        }
-        // Extra logical ranges belong to explicit global or nested push blocks, which keep their own ranges.
-        if (first && entryRangeCount == m_allPushConstantRanges.size())
-        {
-            m_coalescedEntryPointConstants = true;
-            m_totalPushConstantSize = uint32_t(first->layout->getElementTypeLayout()->getSize());
-            m_allPushConstantRanges = {{stages, 0, m_totalPushConstantSize}};
-        }
-    }
 
     // Once we've collected the information across the entire
     // tree of sub-objects

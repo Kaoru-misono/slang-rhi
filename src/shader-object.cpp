@@ -400,7 +400,18 @@ void ShaderObject::clearDescriptorOwners(size_t offset, size_t size)
         m_descriptorOwners.end());
 }
 
-Result ShaderObject::setDescriptorHandle(const ShaderOffset& offset, const DescriptorHandle& handle, IResource* owner)
+static ResourceState descriptorAccessState(DescriptorHandleAccess access)
+{
+    return access == DescriptorHandleAccess::ReadWrite ? ResourceState::UnorderedAccess
+                                                       : ResourceState::ShaderResource;
+}
+
+Result ShaderObject::writeDescriptorHandle(
+    const ShaderOffset& offset,
+    const DescriptorHandle& handle,
+    Resource* owner,
+    ResourceState requiredState
+)
 {
     SLANG_RETURN_ON_FAIL(checkFinalized());
 
@@ -409,17 +420,71 @@ Result ShaderObject::setDescriptorHandle(const ShaderOffset& offset, const Descr
         return SLANG_E_INVALID_ARG;
     }
 
-    // Concrete resources derive from their interface and Resource separately, so reaching Resource
-    // from IResource is a cross cast that only dynamic_cast performs (release checked_cast is a static_cast).
-    RefPtr<Resource> retained = owner ? dynamic_cast<Resource*>(owner) : nullptr;
     clearDescriptorOwners(offset.uniformOffset, sizeof(uint64_t));
-    if (retained)
-        m_descriptorOwners.push_back({offset.uniformOffset, retained});
+    if (owner)
+        m_descriptorOwners.push_back({offset.uniformOffset, owner, requiredState});
     ::memcpy(m_data.data() + offset.uniformOffset, &handle.value, sizeof(uint64_t));
 
     incrementVersion();
 
     return SLANG_OK;
+}
+
+Result ShaderObject::setDescriptorHandle(const ShaderOffset& offset, const DescriptorHandle& handle)
+{
+    return writeDescriptorHandle(offset, handle, nullptr, ResourceState::Undefined);
+}
+
+Result ShaderObject::setDescriptorHandle(
+    const ShaderOffset& offset,
+    ITextureView* textureView,
+    DescriptorHandleAccess access
+)
+{
+    if (!textureView)
+        return SLANG_E_INVALID_ARG;
+    DescriptorHandle handle;
+    SLANG_RETURN_ON_FAIL(textureView->getDescriptorHandle(access, &handle));
+    return writeDescriptorHandle(offset, handle, checked_cast<TextureView*>(textureView), descriptorAccessState(access));
+}
+
+Result ShaderObject::setDescriptorHandle(
+    const ShaderOffset& offset,
+    IBuffer* buffer,
+    DescriptorHandleAccess access,
+    Format format,
+    uint32_t elementStride,
+    BufferRange range
+)
+{
+    if (!buffer)
+        return SLANG_E_INVALID_ARG;
+    DescriptorHandle handle;
+    SLANG_RETURN_ON_FAIL(buffer->getDescriptorHandle(access, format, elementStride, range, &handle));
+    return writeDescriptorHandle(offset, handle, checked_cast<Buffer*>(buffer), descriptorAccessState(access));
+}
+
+Result ShaderObject::setDescriptorHandle(const ShaderOffset& offset, ISampler* sampler)
+{
+    if (!sampler)
+        return SLANG_E_INVALID_ARG;
+    DescriptorHandle handle;
+    SLANG_RETURN_ON_FAIL(sampler->getDescriptorHandle(&handle));
+    return writeDescriptorHandle(offset, handle, checked_cast<Sampler*>(sampler), ResourceState::Undefined);
+}
+
+Result ShaderObject::setDescriptorHandle(const ShaderOffset& offset, IAccelerationStructure* accelerationStructure)
+{
+    if (!accelerationStructure)
+        return SLANG_E_INVALID_ARG;
+    DescriptorHandle handle;
+    SLANG_RETURN_ON_FAIL(accelerationStructure->getDescriptorHandle(&handle));
+    return writeDescriptorHandle(
+        offset,
+        handle,
+        checked_cast<AccelerationStructure*>(accelerationStructure),
+        ResourceState::AccelerationStructureRead
+    );
 }
 
 Result ShaderObject::setSpecializationArgs(

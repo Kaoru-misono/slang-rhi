@@ -13,12 +13,6 @@ AccelerationStructureImpl::AccelerationStructureImpl(Device* device, const Accel
 AccelerationStructureImpl::~AccelerationStructureImpl()
 {
     DeviceImpl* device = getDevice<DeviceImpl>();
-
-    if (m_descriptorHandle)
-    {
-        device->m_bindlessDescriptorSet->freeHandle(m_descriptorHandle);
-    }
-
     device->m_api.vkDestroyAccelerationStructureKHR(device->m_device, m_vkHandle, nullptr);
 }
 
@@ -74,28 +68,11 @@ DeviceAddress AccelerationStructureImpl::getAccelerationStructureDeviceAddress()
 
 Result AccelerationStructureImpl::getDescriptorHandle(DescriptorHandle* outHandle)
 {
-    if (m_descriptorHandle)
-    {
-        *outHandle = m_descriptorHandle;
-        return SLANG_OK;
-    }
-
-    DeviceImpl* device = getDevice<DeviceImpl>();
-
-    if (!device->m_bindlessDescriptorSet)
-    {
-        return SLANG_E_NOT_AVAILABLE;
-    }
-
-    if (!m_descriptorHandle)
-    {
-        SLANG_RETURN_ON_FAIL(
-            device->m_bindlessDescriptorSet->allocAccelerationStructureHandle(this, &m_descriptorHandle)
-        );
-    }
-
-    *outHandle = m_descriptorHandle;
-    return SLANG_OK;
+    // Slang lowers a Vulkan acceleration-structure handle with OpConvertUToAccelerationStructureKHR, so the handle
+    // is the structure's device address rather than a bindless slot.
+    outHandle->type = DescriptorHandleType::AccelerationStructure;
+    outHandle->value = getAccelerationStructureDeviceAddress();
+    return outHandle->value ? SLANG_OK : SLANG_E_NOT_AVAILABLE;
 }
 
 MicromapImpl::MicromapImpl(Device* device, const MicromapDesc& desc)

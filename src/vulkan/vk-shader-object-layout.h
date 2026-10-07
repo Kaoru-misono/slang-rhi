@@ -495,7 +495,6 @@ public:
     static_vector<VkDescriptorSetLayout, kMaxDescriptorSets> m_vkDescriptorSetLayouts;
     std::vector<VkPushConstantRange> m_allPushConstantRanges;
     uint32_t m_totalPushConstantSize = 0;
-    bool m_coalescedEntryPointConstants = false;
 
     DeviceImpl* m_device = nullptr;
 };

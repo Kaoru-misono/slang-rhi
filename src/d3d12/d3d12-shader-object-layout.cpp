@@ -24,6 +24,22 @@ inline bool isBindingRangeRootParameter(
     return isRootParameter;
 }
 
+// HLSL reflection keeps no trace of `[[vk::push_constant]]`, so the program's push-constant block also carries this
+// user attribute on its `ConstantBuffer`.
+static const char* const kPushConstantsAttributeName = "PushConstants";
+
+inline bool isBindingRangePushConstantBlock(
+    SlangSession* globalSession,
+    slang::TypeLayoutReflection* typeLayout,
+    uint32_t bindingRangeIndex
+)
+{
+    if (typeLayout->getBindingRangeType(bindingRangeIndex) != slang::BindingType::ConstantBuffer)
+        return false;
+    auto leafVariable = typeLayout->getBindingRangeLeafVariable(bindingRangeIndex);
+    return leafVariable && leafVariable->findUserAttributeByName(globalSession, kPushConstantsAttributeName);
+}
+
 Result ShaderObjectLayoutImpl::createForElementType(
     Device* device,
     slang::ISession* session,
@@ -232,15 +248,21 @@ Result ShaderObjectLayoutImpl::Builder::setElementTypeLayout(slang::TypeLayoutRe
         // know the appropraite type/layout of sub-object to allocate.
         //
         RefPtr<ShaderObjectLayoutImpl> subObjectLayout;
+        const bool isPushConstantBlock =
+            m_findPushConstantBlock &&
+            isBindingRangePushConstantBlock(m_device->m_slangContext.globalSession, typeLayout, bindingRangeIndex);
         if (slangBindingType != slang::BindingType::ExistentialValue)
         {
+            // The block's bytes travel as root constants, so its layout reserves no constant-buffer view.
             createForElementType(
                 m_device,
                 m_session,
                 slangLeafTypeLayout->getElementTypeLayout(),
-                subObjectLayout.writeRef()
+                subObjectLayout.writeRef(),
+                isPushConstantBlock
             );
         }
+        m_bindingRanges[bindingRangeIndex].isPushConstantBlock = isPushConstantBlock;
 
         SubObjectRangeInfo subObjectRange;
         subObjectRange.bindingRangeIndex = bindingRangeIndex;
@@ -389,6 +411,7 @@ Result RootShaderObjectLayoutImpl::Builder::build(RootShaderObjectLayoutImpl** o
 
 void RootShaderObjectLayoutImpl::Builder::addGlobalParams(slang::VariableLayoutReflection* globalsLayout)
 {
+    m_findPushConstantBlock = true;
     setElementTypeLayout(globalsLayout->getTypeLayout());
 }
 
@@ -746,16 +769,20 @@ void RootShaderObjectLayoutImpl::RootSignatureDescBuilder::addAsValue(
             // Register-class spaces are independent of ParameterBlock space offsets.
             elementOffset.spaceOffset +=
                 (UINT)reflectedOffset->getBindingSpace(SLANG_PARAMETER_CATEGORY_CONSTANT_BUFFER);
-            if (m_promoteEntryOrdinaryData)
+            if (typeLayout == m_globalsTypeLayout &&
+                isBindingRangePushConstantBlock(m_device->m_slangContext.globalSession, typeLayout, bindingRangeIndex))
             {
-                m_promoteEntryOrdinaryData = false;
-                m_constants = {
-                    containerOffset[D3D12_DESCRIPTOR_RANGE_TYPE_CBV],
-                    containerOffset.spaceOffset,
-                    UINT(elementTypeLayout->getSize() / 4)
+                // The block takes the register and space its constant-buffer view would have had.
+                m_hasPushConstantBlock = true;
+                m_pushConstantBlockName = typeLayout->getBindingRangeLeafVariable(bindingRangeIndex)->getName();
+                m_pushConstantParameter = {};
+                m_pushConstantParameter.ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
+                m_pushConstantParameter.ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+                m_pushConstantParameter.Constants = {
+                    elementOffset[D3D12_DESCRIPTOR_RANGE_TYPE_CBV],
+                    elementOffset.spaceOffset,
+                    UINT(elementTypeLayout->getSize() / 4),
                 };
-                // The reflected element offset already accounts for the wrapper's CBV register.
-                addAsValue(elementTypeLayout, physicalDescriptorSetIndex, containerOffset, elementOffset);
             }
             else
             {
@@ -850,58 +877,17 @@ D3D12_ROOT_SIGNATURE_DESC1& RootShaderObjectLayoutImpl::RootSignatureDescBuilder
     return m_rootSignatureDesc;
 }
 
-void RootShaderObjectLayoutImpl::RootSignatureDescBuilder::addProgram(
-    slang::ProgramLayout* layout,
-    const std::vector<bool>& promoted
-)
+void RootShaderObjectLayoutImpl::RootSignatureDescBuilder::addProgram(slang::ProgramLayout* layout)
 {
     auto& builder = *this;
     auto device = m_device;
     builder.addDescriptorSet();
+    m_globalsTypeLayout = layout->getGlobalParamsVarLayout()->getTypeLayout();
     builder.addAsValue(layout->getGlobalParamsVarLayout(), 0);
-    std::vector<D3D12_ROOT_PARAMETER1> constants;
     for (uint32_t i = 0; i < layout->getEntryPointCount(); ++i)
     {
         auto entry = layout->getEntryPointByIndex(i);
-        // The entry wrapper is visited before its nested constant buffers. Slang can
-        // expose a different type-layout object for that wrapper than for the entry.
-        m_promoteEntryOrdinaryData = promoted[i];
         builder.addAsValue(entry->getVarLayout(), 0);
-        if (promoted[i])
-        {
-            SLANG_RHI_ASSERT(!m_promoteEntryOrdinaryData);
-            D3D12_ROOT_PARAMETER1 parameter = {};
-            parameter.ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
-            parameter.Constants = m_constants;
-            switch (layout->getEntryPointByIndex(i)->getStage())
-            {
-            case SLANG_STAGE_VERTEX:
-                parameter.ShaderVisibility = D3D12_SHADER_VISIBILITY_VERTEX;
-                break;
-            case SLANG_STAGE_FRAGMENT:
-                parameter.ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
-                break;
-            case SLANG_STAGE_GEOMETRY:
-                parameter.ShaderVisibility = D3D12_SHADER_VISIBILITY_GEOMETRY;
-                break;
-            case SLANG_STAGE_HULL:
-                parameter.ShaderVisibility = D3D12_SHADER_VISIBILITY_HULL;
-                break;
-            case SLANG_STAGE_DOMAIN:
-                parameter.ShaderVisibility = D3D12_SHADER_VISIBILITY_DOMAIN;
-                break;
-            case SLANG_STAGE_AMPLIFICATION:
-                parameter.ShaderVisibility = D3D12_SHADER_VISIBILITY_AMPLIFICATION;
-                break;
-            case SLANG_STAGE_MESH:
-                parameter.ShaderVisibility = D3D12_SHADER_VISIBILITY_MESH;
-                break;
-            default:
-                parameter.ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
-                break;
-            }
-            constants.push_back(parameter);
-        }
     }
 #if SLANG_RHI_ENABLE_NVAPI
     // Create extra descriptor range for NVAPI UAV slot if a range does not yet exist.
@@ -933,7 +919,12 @@ void RootShaderObjectLayoutImpl::RootSignatureDescBuilder::addProgram(
     }
 #endif
 
-    m_rootParameters.insert(m_rootParameters.end(), constants.begin(), constants.end());
+    // The constants follow the `[root]` descriptors and precede the tables that `build` appends.
+    if (m_hasPushConstantBlock)
+    {
+        m_pushConstantRootParameterIndex = uint32_t(m_rootParameters.size());
+        m_rootParameters.push_back(m_pushConstantParameter);
+    }
 }
 
 Result RootShaderObjectLayoutImpl::createRootSignatureFromSlang(
@@ -945,17 +936,8 @@ Result RootShaderObjectLayoutImpl::createRootSignatureFromSlang(
 )
 {
     RootSignatureDescBuilder builder(device);
-    std::vector<bool> promoted;
-    for (const auto& entry : rootLayout->m_entryPoints)
-        promoted.push_back(entry.layout->m_ordinaryDataIsConstants);
-    builder.addProgram(program->getLayout(), promoted);
-    uint32_t constantCount = 0;
-    for (bool value : promoted)
-        constantCount += value ? 1 : 0;
-    uint32_t constantIndex = uint32_t(builder.m_rootParameters.size()) - constantCount;
-    for (auto& entry : rootLayout->m_entryPoints)
-        if (entry.layout->m_ordinaryDataIsConstants)
-            entry.constantIndex = constantIndex++;
+    builder.addProgram(program->getLayout());
+    rootLayout->m_pushConstantRootParameterIndex = builder.m_pushConstantRootParameterIndex;
 #if SLANG_RHI_ENABLE_NVAPI
     rootLayout->m_hasImplicitDescriptorRangeForNVAPI = builder.m_hasImplicitDescriptorRangeForNVAPI;
     if (builder.m_hasImplicitDescriptorRangeForNVAPI)
@@ -967,6 +949,28 @@ Result RootShaderObjectLayoutImpl::createRootSignatureFromSlang(
     auto& rootSignatureDesc = builder.build();
     // After build, m_rootParameters also contains the descriptor tables.
     rootLayout->m_rootSignatureTotalParameterCount = builder.m_rootParameters.size();
+    if (builder.m_hasPushConstantBlock)
+    {
+        // Root constants share the 64 DWORDs of a root signature with the tables and root descriptors.
+        uint32_t cost = 0;
+        for (uint32_t i = 0; i < rootSignatureDesc.NumParameters; ++i)
+        {
+            const auto& parameter = rootSignatureDesc.pParameters[i];
+            cost += parameter.ParameterType == D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS
+                        ? parameter.Constants.Num32BitValues
+                    : parameter.ParameterType == D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE ? 1
+                                                                                            : 2;
+        }
+        if (cost > 64)
+        {
+            device->printError(
+                "Push-constant block '%s' does not fit: the root signature needs %u DWORDs and D3D12 allows 64.",
+                builder.m_pushConstantBlockName,
+                cost
+            );
+            return SLANG_E_INVALID_ARG;
+        }
+    }
     D3D12_VERSIONED_ROOT_SIGNATURE_DESC versionedDesc = {};
     versionedDesc.Version = D3D_ROOT_SIGNATURE_VERSION_1_1;
     versionedDesc.Desc_1_1 = rootSignatureDesc;
@@ -1011,21 +1015,60 @@ Result RootShaderObjectLayoutImpl::createRootSignatureFromSlang(
     return SLANG_OK;
 }
 
-static bool canPromoteOrdinaryData(slang::TypeLayoutReflection* type)
+static bool holdsOnlyPlainData(slang::TypeLayoutReflection* type)
 {
     if (type->getKind() == slang::TypeReflection::Kind::Array ||
         type->getKind() == slang::TypeReflection::Kind::Interface)
         return false;
-    for (SlangInt i = 0; i < type->getBindingRangeCount(); ++i)
-        if (type->getBindingRangeType(i) == slang::BindingType::ExistentialValue)
-            return false;
     for (unsigned i = 0; i < type->getFieldCount(); ++i)
     {
         auto field = type->getFieldByIndex(i)->getTypeLayout();
-        if (field->getSize(SLANG_PARAMETER_CATEGORY_UNIFORM) && !canPromoteOrdinaryData(field))
+        if (field->getSize(SLANG_PARAMETER_CATEGORY_UNIFORM) && !holdsOnlyPlainData(field))
             return false;
     }
     return true;
+}
+
+// A push-constant block is copied into the command stream at every bind. Its bytes must fit the root signature and
+// read the same on every target, and nothing in it may need a descriptor table.
+static Result validatePushConstantBlock(DeviceImpl* device, slang::ProgramLayout* programLayout)
+{
+    ShaderObjectContainerType containerType;
+    auto globals = ShaderObjectLayout::_unwrapParameterGroups(
+        programLayout->getGlobalParamsVarLayout()->getTypeLayout(),
+        containerType
+    );
+    const char* blockName = nullptr;
+    for (SlangInt r = 0; r < globals->getBindingRangeCount(); ++r)
+    {
+        if (!isBindingRangePushConstantBlock(device->m_slangContext.globalSession, globals, uint32_t(r)))
+            continue;
+        const char* name = globals->getBindingRangeLeafVariable(r)->getName();
+        if (blockName)
+        {
+            device->printError(
+                "Program declares the push-constant blocks '%s' and '%s'; a program has one.",
+                blockName,
+                name
+            );
+            return SLANG_E_INVALID_ARG;
+        }
+        blockName = name;
+        auto element = globals->getBindingRangeLeafTypeLayout(r)->getElementTypeLayout();
+        auto size = element->getSize(SLANG_PARAMETER_CATEGORY_UNIFORM);
+        if (size == 0 || size > 64 || size % 4 != 0 || element->getBindingRangeCount() != 0 ||
+            !holdsOnlyPlainData(element))
+        {
+            device->printError(
+                "Push-constant block '%s' has %u bytes; it must hold 4 to 64 bytes in a multiple of 4, as plain data "
+                "and descriptor handles without arrays, interfaces or nested blocks.",
+                name,
+                uint32_t(size)
+            );
+            return SLANG_E_INVALID_ARG;
+        }
+    }
+    return SLANG_OK;
 }
 
 Result RootShaderObjectLayoutImpl::create(
@@ -1036,34 +1079,8 @@ Result RootShaderObjectLayoutImpl::create(
     ID3DBlob** outError
 )
 {
-    std::vector<bool> promoted(programLayout->getEntryPointCount(), false);
-    if (program->getSpecializationParamCount() == 0)
-    {
-        for (uint32_t i = 0; i < promoted.size(); ++i)
-        {
-            auto entry = programLayout->getEntryPointByIndex(i);
-            auto stage = entry->getStage();
-            ShaderObjectContainerType container;
-            auto type = _unwrapParameterGroups(entry->getTypeLayout(), container);
-            auto size = type->getSize(SLANG_PARAMETER_CATEGORY_UNIFORM);
-            promoted[i] = !(stage >= SLANG_STAGE_RAY_GENERATION && stage <= SLANG_STAGE_CALLABLE) && size > 0 &&
-                          size <= 64 && size % 4 == 0 && canPromoteOrdinaryData(type);
-        }
-        RootSignatureDescBuilder signature(device);
-        signature.addProgram(programLayout, promoted);
-        auto& desc = signature.build();
-        uint32_t cost = 0;
-        for (uint32_t i = 0; i < desc.NumParameters; ++i)
-        {
-            const auto& parameter = desc.pParameters[i];
-            cost += parameter.ParameterType == D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS
-                        ? parameter.Constants.Num32BitValues
-                    : parameter.ParameterType == D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE ? 1
-                                                                                            : 2;
-        }
-        if (cost > 64)
-            std::fill(promoted.begin(), promoted.end(), false);
-    }
+    SLANG_RETURN_ON_FAIL(validatePushConstantBlock(device, programLayout));
+
     RootShaderObjectLayoutImpl::Builder builder(device, program, programLayout);
     builder.addGlobalParams(programLayout->getGlobalParamsVarLayout());
 
@@ -1077,8 +1094,7 @@ Result RootShaderObjectLayoutImpl::create(
                 device,
                 program->getSession(),
                 slangEntryPoint->getTypeLayout(),
-                entryPointLayout.writeRef(),
-                promoted[e]
+                entryPointLayout.writeRef()
             )
         );
         builder.addEntryPoint(slangEntryPoint->getStage(), entryPointLayout);

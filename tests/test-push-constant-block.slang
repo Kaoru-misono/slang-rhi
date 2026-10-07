@@ -1,3 +1,5 @@
+import push_constants;
+
 struct Block
 {
     uint4 values;
@@ -9,10 +11,11 @@ struct Root
 };
 
 ParameterBlock<Block> params;
+[PushConstants] [[vk::push_constant]] ConstantBuffer<Root> root;
 
 [shader("compute")]
 [numthreads(1, 1, 1)]
-void computeMain(uniform Root root)
+void computeMain()
 {
     let p = params;
     p.output.Store<uint>(root.dispatch.x * 4, p.values.x + root.dispatch.y);
@@ -23,7 +26,7 @@ struct Vertex
     nointerpolation uint value : VALUE;
 };
 [shader("vertex")]
-Vertex vertexMain(uint id : SV_VertexID, uniform Root root)
+Vertex vertexMain(uint id : SV_VertexID)
 {
     let p = params;
     Vertex v;
@@ -33,13 +36,8 @@ Vertex vertexMain(uint id : SV_VertexID, uniform Root root)
 }
 struct Extra { uint bias; };
 [shader("fragment")]
-float4 fragmentMain(Vertex v, uniform Root root, uniform ConstantBuffer<Extra> extra) : SV_Target
+float4 fragmentMain(Vertex v, uniform ConstantBuffer<Extra> extra) : SV_Target
 {
     let p = params;
     return float4(v.value, p.values.y + root.dispatch.z + extra.bias, 0, 1);
-}
-[shader("fragment")]
-float4 fragmentTint(Vertex v, uniform float4 tint) : SV_Target
-{
-    return tint + float(v.value);
 }

@@ -213,6 +213,9 @@ protected:
         uint32_t m_totalOrdinaryDataSize = 0;
         bool m_ordinaryDataIsConstants = false;
 
+        /// Only a program's global scope may declare the push-constant block.
+        bool m_findPushConstantBlock = false;
+
         /// The container type of this shader object. When `m_containerType` is
         /// `StructuredBuffer` or `UnsizedArray`, this shader object represents a collection
         /// instead of a single object.
@@ -235,7 +238,6 @@ public:
     {
         RefPtr<ShaderObjectLayoutImpl> layout;
         BindingOffset offset;
-        uint32_t constantIndex = UINT32_MAX;
     };
 
     ComPtr<slang::IComponentType> m_program;
@@ -262,6 +264,8 @@ public:
     uint32_t m_rootSignatureRootParameterCount = 0;
     // Total number of parameters in the root signature (CBV/SRV/UAV + descriptor tables)
     uint32_t m_rootSignatureTotalParameterCount = 0;
+    // The root parameter that holds the push-constant block, when the program declares one.
+    uint32_t m_pushConstantRootParameterIndex = UINT32_MAX;
 
     // ShaderObjectLayout interface
     virtual uint32_t getEntryPointCount() const override { return m_entryPoints.size(); }
@@ -297,13 +301,16 @@ public:
         std::vector<D3D12_ROOT_PARAMETER1> m_rootDescTableParameters;
 
         D3D12_ROOT_SIGNATURE_DESC1 m_rootSignatureDesc = {};
-        bool m_promoteEntryOrdinaryData = false;
-        D3D12_ROOT_CONSTANTS m_constants = {};
+        slang::TypeLayoutReflection* m_globalsTypeLayout = nullptr;
+        bool m_hasPushConstantBlock = false;
+        D3D12_ROOT_PARAMETER1 m_pushConstantParameter = {};
+        const char* m_pushConstantBlockName = nullptr;
+        uint32_t m_pushConstantRootParameterIndex = UINT32_MAX;
 #if SLANG_RHI_ENABLE_NVAPI
         bool m_hasImplicitDescriptorRangeForNVAPI = false;
 #endif
 
-        void addProgram(slang::ProgramLayout* layout, const std::vector<bool>& promoted);
+        void addProgram(slang::ProgramLayout* layout);
 
         static Result translateDescriptorRangeType(slang::BindingType c, D3D12_DESCRIPTOR_RANGE_TYPE* outType);
 

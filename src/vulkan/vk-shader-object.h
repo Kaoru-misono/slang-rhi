@@ -54,6 +54,20 @@ struct BindingDataBuilder
         ShaderObjectLayoutImpl* specializedLayout
     );
 
+    /// Bind this object as a push-constant block that holds no descriptors.
+    Result bindAsPushConstantBlock(
+        ShaderObject* shaderObject,
+        const BindingOffset& inOffset,
+        ShaderObjectLayoutImpl* specializedLayout
+    );
+
+    /// Copy this object's ordinary data into the next push-constant range.
+    Result writePushConstantData(
+        ShaderObject* shaderObject,
+        BindingOffset& ioOffset,
+        ShaderObjectLayoutImpl* specializedLayout
+    );
+
     /// Bind the ordinary data buffer if needed.
     Result bindOrdinaryDataBufferIfNeeded(
         ShaderObject* shaderObject,
@@ -120,10 +134,14 @@ public:
         size_t size;
     };
 
+    /// The resource states one table or one push-constant block needs. A table owns its lists; a block's lists live
+    /// in the command allocator, because nothing about a block is cached.
     struct StateSlice
     {
-        const std::vector<BufferState>* buffers;
-        const std::vector<TextureState>* textures;
+        const BufferState* buffers;
+        uint32_t bufferCount;
+        const TextureState* textures;
+        uint32_t textureCount;
         StateSlice* next;
     };
     StateSlice* stateSlices;

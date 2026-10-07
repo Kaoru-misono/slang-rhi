@@ -1810,18 +1810,20 @@ void CommandRecorder::setBindings(BindingDataImpl* bindingData, BindMode bindMod
 {
     for (auto* slice = bindingData->stateSlices; slice; slice = slice->next)
     {
-        SLANG_RHI_BINDING_COUNT(stateEntries, slice->buffers->size() + slice->textures->size());
+        SLANG_RHI_BINDING_COUNT(stateEntries, slice->bufferCount + slice->textureCount);
         // First, we transition all resources to the required states.
-        for (const auto& bufferState : *slice->buffers)
+        for (uint32_t i = 0; i < slice->bufferCount; ++i)
         {
+            const auto& bufferState = slice->buffers[i];
             // Acceleration structure storage belongs to the device, so callers cannot declare it.
             if (bufferState.state == ResourceState::AccelerationStructureRead)
                 requireBufferState(bufferState.buffer, bufferState.state);
             else
                 requireBindingBufferState(bufferState.buffer, bufferState.state);
         }
-        for (const auto& textureState : *slice->textures)
+        for (uint32_t i = 0; i < slice->textureCount; ++i)
         {
+            const auto& textureState = slice->textures[i];
             requireBindingTextureState(textureState.texture, textureState.range, textureState.state);
         }
     }

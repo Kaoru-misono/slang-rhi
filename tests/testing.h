@@ -342,6 +342,11 @@ struct DeviceExtraOptions
     bool enableRayTracingValidation = false;
     bool enableAftermath = false;
 
+    ResourceStateMode resourceStateMode = ResourceStateMode::Automatic;
+    bool validateResourceStates = false;
+    // Replaces the harness callback, which fails the test on every error message.
+    IDebugCallback* debugCallback = nullptr;
+
     AftermathFlags aftermathFlags = AftermathFlags::Default;
 };
 

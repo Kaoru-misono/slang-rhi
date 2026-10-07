@@ -1,3 +1,5 @@
+import push_constants;
+
 struct Block
 {
     uint4 values;
@@ -9,7 +11,7 @@ struct Root
 };
 
 ParameterBlock<Block> params;
-[[vk::push_constant]] ConstantBuffer<Root> root;
+[PushConstants] [[vk::push_constant]] ConstantBuffer<Root> root;
 [shader("raygeneration")]
 void rayMain()
 {
