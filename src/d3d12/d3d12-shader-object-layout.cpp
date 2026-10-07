@@ -24,14 +24,32 @@ inline bool isBindingRangeRootParameter(
     return isRootParameter;
 }
 
+// HLSL reflection keeps no trace of `[[vk::push_constant]]`, so the program's push-constant block also carries this
+// user attribute on its `ConstantBuffer`.
+static const char* const kPushConstantsAttributeName = "PushConstants";
+
+inline bool isBindingRangePushConstantBlock(
+    SlangSession* globalSession,
+    slang::TypeLayoutReflection* typeLayout,
+    uint32_t bindingRangeIndex
+)
+{
+    if (typeLayout->getBindingRangeType(bindingRangeIndex) != slang::BindingType::ConstantBuffer)
+        return false;
+    auto leafVariable = typeLayout->getBindingRangeLeafVariable(bindingRangeIndex);
+    return leafVariable && leafVariable->findUserAttributeByName(globalSession, kPushConstantsAttributeName);
+}
+
 Result ShaderObjectLayoutImpl::createForElementType(
     Device* device,
     slang::ISession* session,
     slang::TypeLayoutReflection* elementType,
-    ShaderObjectLayoutImpl** outLayout
+    ShaderObjectLayoutImpl** outLayout,
+    bool ordinaryDataIsConstants
 )
 {
     Builder builder(device, session);
+    builder.m_ordinaryDataIsConstants = ordinaryDataIsConstants;
     builder.setElementTypeLayout(elementType);
     return builder.build(outLayout);
 }
@@ -54,6 +72,7 @@ Result ShaderObjectLayoutImpl::init(Builder* builder)
     m_subObjectCount = builder->m_subObjectCount;
     m_childRootParameterCount = builder->m_childRootParameterCount;
     m_totalOrdinaryDataSize = builder->m_totalOrdinaryDataSize;
+    m_ordinaryDataIsConstants = builder->m_ordinaryDataIsConstants;
 
     return SLANG_OK;
 }
@@ -67,7 +86,7 @@ Result ShaderObjectLayoutImpl::Builder::setElementTypeLayout(slang::TypeLayoutRe
     // descriptor to hold it when binding as a parameter block.
     //
     m_totalOrdinaryDataSize = (uint32_t)typeLayout->getSize();
-    if (m_totalOrdinaryDataSize != 0)
+    if (m_totalOrdinaryDataSize != 0 && !m_ordinaryDataIsConstants)
     {
         m_ownCounts.resource++;
     }
@@ -229,15 +248,21 @@ Result ShaderObjectLayoutImpl::Builder::setElementTypeLayout(slang::TypeLayoutRe
         // know the appropraite type/layout of sub-object to allocate.
         //
         RefPtr<ShaderObjectLayoutImpl> subObjectLayout;
+        const bool isPushConstantBlock =
+            m_findPushConstantBlock &&
+            isBindingRangePushConstantBlock(m_device->m_slangContext.globalSession, typeLayout, bindingRangeIndex);
         if (slangBindingType != slang::BindingType::ExistentialValue)
         {
+            // The block's bytes travel as root constants, so its layout reserves no constant-buffer view.
             createForElementType(
                 m_device,
                 m_session,
                 slangLeafTypeLayout->getElementTypeLayout(),
-                subObjectLayout.writeRef()
+                subObjectLayout.writeRef(),
+                isPushConstantBlock
             );
         }
+        m_bindingRanges[bindingRangeIndex].isPushConstantBlock = isPushConstantBlock;
 
         SubObjectRangeInfo subObjectRange;
         subObjectRange.bindingRangeIndex = bindingRangeIndex;
@@ -386,6 +411,7 @@ Result RootShaderObjectLayoutImpl::Builder::build(RootShaderObjectLayoutImpl** o
 
 void RootShaderObjectLayoutImpl::Builder::addGlobalParams(slang::VariableLayoutReflection* globalsLayout)
 {
+    m_findPushConstantBlock = true;
     setElementTypeLayout(globalsLayout->getTypeLayout());
 }
 
@@ -743,7 +769,25 @@ void RootShaderObjectLayoutImpl::RootSignatureDescBuilder::addAsValue(
             // Register-class spaces are independent of ParameterBlock space offsets.
             elementOffset.spaceOffset +=
                 (UINT)reflectedOffset->getBindingSpace(SLANG_PARAMETER_CATEGORY_CONSTANT_BUFFER);
-            addAsConstantBuffer(elementTypeLayout, physicalDescriptorSetIndex, containerOffset, elementOffset);
+            if (typeLayout == m_globalsTypeLayout &&
+                isBindingRangePushConstantBlock(m_device->m_slangContext.globalSession, typeLayout, bindingRangeIndex))
+            {
+                // The block takes the register and space its constant-buffer view would have had.
+                m_hasPushConstantBlock = true;
+                m_pushConstantBlockName = typeLayout->getBindingRangeLeafVariable(bindingRangeIndex)->getName();
+                m_pushConstantParameter = {};
+                m_pushConstantParameter.ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
+                m_pushConstantParameter.ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+                m_pushConstantParameter.Constants = {
+                    elementOffset[D3D12_DESCRIPTOR_RANGE_TYPE_CBV],
+                    elementOffset.spaceOffset,
+                    UINT(elementTypeLayout->getSize() / 4),
+                };
+            }
+            else
+            {
+                addAsConstantBuffer(elementTypeLayout, physicalDescriptorSetIndex, containerOffset, elementOffset);
+            }
             break;
         }
         case slang::BindingType::ParameterBlock:
@@ -833,62 +877,24 @@ D3D12_ROOT_SIGNATURE_DESC1& RootShaderObjectLayoutImpl::RootSignatureDescBuilder
     return m_rootSignatureDesc;
 }
 
-Result RootShaderObjectLayoutImpl::createRootSignatureFromSlang(
-    DeviceImpl* device,
-    RootShaderObjectLayoutImpl* rootLayout,
-    slang::IComponentType* program,
-    ID3D12RootSignature** outRootSignature,
-    ID3DBlob** outError
-)
+void RootShaderObjectLayoutImpl::RootSignatureDescBuilder::addProgram(slang::ProgramLayout* layout)
 {
-    // We are going to build up the root signature by adding
-    // binding/descritpor ranges and nested parameter blocks
-    // based on the computed layout information for `program`.
-    //
-    RootSignatureDescBuilder builder(device);
-    auto layout = program->getLayout();
-
-    // The layout information computed by Slang breaks up shader
-    // parameters into what we can think of as "logical" descriptor
-    // sets based on whether or not parameters have the same `space`.
-    //
-    // We want to basically ignore that decomposition and generate a
-    // single descriptor set to hold all top-level parameters, and only
-    // generate distinct descriptor sets when the shader has opted in
-    // via explicit parameter blocks.
-    //
-    // To achieve this goal, we will manually allocate a default descriptor
-    // set for root parameters in our signature, and then recursively
-    // add all the binding/descriptor ranges implied by the global-scope
-    // parameters.
-    //
-    auto rootDescriptorSetIndex = builder.addDescriptorSet();
-    builder.addAsValue(layout->getGlobalParamsVarLayout(), rootDescriptorSetIndex);
-
-    for (SlangUInt i = 0; i < layout->getEntryPointCount(); i++)
+    auto& builder = *this;
+    auto device = m_device;
+    builder.addDescriptorSet();
+    m_globalsTypeLayout = layout->getGlobalParamsVarLayout()->getTypeLayout();
+    builder.addAsValue(layout->getGlobalParamsVarLayout(), 0);
+    for (uint32_t i = 0; i < layout->getEntryPointCount(); ++i)
     {
-        // Entry-point parameters should also be added to the default root
-        // descriptor set.
-        //
-        // We add the parameters using the "variable layout" for the entry point
-        // and not just its type layout, to ensure that any offset information is
-        // applied correctly to the `register` and `space` information for entry-point
-        // parameters.
-        //
-        // Note: When we start to support DXR we will need to handle entry-point parameters
-        // differently because they will need to map to local root signatures rather than
-        // being included in the global root signature as is being done here.
-        //
-        auto entryPoint = layout->getEntryPointByIndex(i);
-        builder.addAsValue(entryPoint->getVarLayout(), rootDescriptorSetIndex);
+        auto entry = layout->getEntryPointByIndex(i);
+        builder.addAsValue(entry->getVarLayout(), 0);
     }
-
 #if SLANG_RHI_ENABLE_NVAPI
     // Create extra descriptor range for NVAPI UAV slot if a range does not yet exist.
     // This happens when the shader does not explicitly include the NVAPI header.
     if (device->m_nvapiShaderExtension)
     {
-        const DescriptorSetLayout& rootDescriptorSetLayout = builder.m_descriptorSets[rootDescriptorSetIndex];
+        const DescriptorSetLayout& rootDescriptorSetLayout = builder.m_descriptorSets[0];
         bool foundRange = false;
         for (const auto& range : rootDescriptorSetLayout.m_resourceRanges)
         {
@@ -901,17 +907,41 @@ Result RootShaderObjectLayoutImpl::createRootSignatureFromSlang(
         if (!foundRange)
         {
             builder.addDescriptorRange(
-                rootDescriptorSetIndex,
+                0,
                 D3D12_DESCRIPTOR_RANGE_TYPE_UAV,
                 device->m_nvapiShaderExtension.uavSlot,
                 device->m_nvapiShaderExtension.registerSpace,
                 1,
                 false
             );
-            rootLayout->m_totalCounts.resource += 1;
-            rootLayout->m_hasImplicitDescriptorRangeForNVAPI = true;
+            m_hasImplicitDescriptorRangeForNVAPI = true;
         }
     }
+#endif
+
+    // The constants follow the `[root]` descriptors and precede the tables that `build` appends.
+    if (m_hasPushConstantBlock)
+    {
+        m_pushConstantRootParameterIndex = uint32_t(m_rootParameters.size());
+        m_rootParameters.push_back(m_pushConstantParameter);
+    }
+}
+
+Result RootShaderObjectLayoutImpl::createRootSignatureFromSlang(
+    DeviceImpl* device,
+    RootShaderObjectLayoutImpl* rootLayout,
+    slang::IComponentType* program,
+    ID3D12RootSignature** outRootSignature,
+    ID3DBlob** outError
+)
+{
+    RootSignatureDescBuilder builder(device);
+    builder.addProgram(program->getLayout());
+    rootLayout->m_pushConstantRootParameterIndex = builder.m_pushConstantRootParameterIndex;
+#if SLANG_RHI_ENABLE_NVAPI
+    rootLayout->m_hasImplicitDescriptorRangeForNVAPI = builder.m_hasImplicitDescriptorRangeForNVAPI;
+    if (builder.m_hasImplicitDescriptorRangeForNVAPI)
+        rootLayout->m_totalCounts.resource++;
 #endif
 
     // This is hacky, before calling build(), m_rootParameters contains only the root parameters.
@@ -919,6 +949,28 @@ Result RootShaderObjectLayoutImpl::createRootSignatureFromSlang(
     auto& rootSignatureDesc = builder.build();
     // After build, m_rootParameters also contains the descriptor tables.
     rootLayout->m_rootSignatureTotalParameterCount = builder.m_rootParameters.size();
+    if (builder.m_hasPushConstantBlock)
+    {
+        // Root constants share the 64 DWORDs of a root signature with the tables and root descriptors.
+        uint32_t cost = 0;
+        for (uint32_t i = 0; i < rootSignatureDesc.NumParameters; ++i)
+        {
+            const auto& parameter = rootSignatureDesc.pParameters[i];
+            cost += parameter.ParameterType == D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS
+                        ? parameter.Constants.Num32BitValues
+                    : parameter.ParameterType == D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE ? 1
+                                                                                            : 2;
+        }
+        if (cost > 64)
+        {
+            device->printError(
+                "Push-constant block '%s' does not fit: the root signature needs %u DWORDs and D3D12 allows 64.",
+                builder.m_pushConstantBlockName,
+                cost
+            );
+            return SLANG_E_INVALID_ARG;
+        }
+    }
     D3D12_VERSIONED_ROOT_SIGNATURE_DESC versionedDesc = {};
     versionedDesc.Version = D3D_ROOT_SIGNATURE_VERSION_1_1;
     versionedDesc.Desc_1_1 = rootSignatureDesc;
@@ -963,6 +1015,62 @@ Result RootShaderObjectLayoutImpl::createRootSignatureFromSlang(
     return SLANG_OK;
 }
 
+static bool holdsOnlyPlainData(slang::TypeLayoutReflection* type)
+{
+    if (type->getKind() == slang::TypeReflection::Kind::Array ||
+        type->getKind() == slang::TypeReflection::Kind::Interface)
+        return false;
+    for (unsigned i = 0; i < type->getFieldCount(); ++i)
+    {
+        auto field = type->getFieldByIndex(i)->getTypeLayout();
+        if (field->getSize(SLANG_PARAMETER_CATEGORY_UNIFORM) && !holdsOnlyPlainData(field))
+            return false;
+    }
+    return true;
+}
+
+// A push-constant block is copied into the command stream at every bind. Its bytes must fit the root signature and
+// read the same on every target, and nothing in it may need a descriptor table.
+static Result validatePushConstantBlock(DeviceImpl* device, slang::ProgramLayout* programLayout)
+{
+    ShaderObjectContainerType containerType;
+    auto globals = ShaderObjectLayout::_unwrapParameterGroups(
+        programLayout->getGlobalParamsVarLayout()->getTypeLayout(),
+        containerType
+    );
+    const char* blockName = nullptr;
+    for (SlangInt r = 0; r < globals->getBindingRangeCount(); ++r)
+    {
+        if (!isBindingRangePushConstantBlock(device->m_slangContext.globalSession, globals, uint32_t(r)))
+            continue;
+        const char* name = globals->getBindingRangeLeafVariable(r)->getName();
+        if (blockName)
+        {
+            device->printError(
+                "Program declares the push-constant blocks '%s' and '%s'; a program has one.",
+                blockName,
+                name
+            );
+            return SLANG_E_INVALID_ARG;
+        }
+        blockName = name;
+        auto element = globals->getBindingRangeLeafTypeLayout(r)->getElementTypeLayout();
+        auto size = element->getSize(SLANG_PARAMETER_CATEGORY_UNIFORM);
+        if (size == 0 || size > 64 || size % 4 != 0 || element->getBindingRangeCount() != 0 ||
+            !holdsOnlyPlainData(element))
+        {
+            device->printError(
+                "Push-constant block '%s' has %u bytes; it must hold 4 to 64 bytes in a multiple of 4, as plain data "
+                "and descriptor handles without arrays, interfaces or nested blocks.",
+                name,
+                uint32_t(size)
+            );
+            return SLANG_E_INVALID_ARG;
+        }
+    }
+    return SLANG_OK;
+}
+
 Result RootShaderObjectLayoutImpl::create(
     DeviceImpl* device,
     slang::IComponentType* program,
@@ -971,6 +1079,8 @@ Result RootShaderObjectLayoutImpl::create(
     ID3DBlob** outError
 )
 {
+    SLANG_RETURN_ON_FAIL(validatePushConstantBlock(device, programLayout));
+
     RootShaderObjectLayoutImpl::Builder builder(device, program, programLayout);
     builder.addGlobalParams(programLayout->getGlobalParamsVarLayout());
 

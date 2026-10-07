@@ -3,7 +3,7 @@
 using namespace rhi;
 using namespace rhi::testing;
 
-GPU_TEST_CASE("explicit-push-constant", Vulkan)
+GPU_TEST_CASE("explicit-push-constant", D3D12 | Vulkan)
 {
     ComPtr<IShaderProgram> shaderProgram;
     REQUIRE_CALL(loadProgram(device, "test-push-constant", "computeMain", shaderProgram.writeRef()));

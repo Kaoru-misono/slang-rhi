@@ -158,13 +158,60 @@ Result DebugShaderObject::setBinding(const ShaderOffset& offset, const Binding& 
     return baseObject->setBinding(offset, binding);
 }
 
-Result DebugShaderObject::setDescriptorHandle(const ShaderOffset& offset, const DescriptorHandle& handle, IResource* owner)
+Result DebugShaderObject::setDescriptorHandle(const ShaderOffset& offset, const DescriptorHandle& handle)
 {
     SLANG_RHI_DEBUG_API(IShaderObject, setDescriptorHandle);
 
     SLANG_RETURN_ON_FAIL(checkNotFinalized());
 
-    return baseObject->setDescriptorHandle(offset, handle, owner);
+    return baseObject->setDescriptorHandle(offset, handle);
+}
+
+Result DebugShaderObject::setDescriptorHandle(
+    const ShaderOffset& offset,
+    ITextureView* textureView,
+    DescriptorHandleAccess access
+)
+{
+    SLANG_RHI_DEBUG_API(IShaderObject, setDescriptorHandle);
+
+    SLANG_RETURN_ON_FAIL(checkNotFinalized());
+
+    return baseObject->setDescriptorHandle(offset, textureView, access);
+}
+
+Result DebugShaderObject::setDescriptorHandle(
+    const ShaderOffset& offset,
+    IBuffer* buffer,
+    DescriptorHandleAccess access,
+    Format format,
+    uint32_t elementStride,
+    BufferRange range
+)
+{
+    SLANG_RHI_DEBUG_API(IShaderObject, setDescriptorHandle);
+
+    SLANG_RETURN_ON_FAIL(checkNotFinalized());
+
+    return baseObject->setDescriptorHandle(offset, buffer, access, format, elementStride, range);
+}
+
+Result DebugShaderObject::setDescriptorHandle(const ShaderOffset& offset, ISampler* sampler)
+{
+    SLANG_RHI_DEBUG_API(IShaderObject, setDescriptorHandle);
+
+    SLANG_RETURN_ON_FAIL(checkNotFinalized());
+
+    return baseObject->setDescriptorHandle(offset, sampler);
+}
+
+Result DebugShaderObject::setDescriptorHandle(const ShaderOffset& offset, IAccelerationStructure* accelerationStructure)
+{
+    SLANG_RHI_DEBUG_API(IShaderObject, setDescriptorHandle);
+
+    SLANG_RETURN_ON_FAIL(checkNotFinalized());
+
+    return baseObject->setDescriptorHandle(offset, accelerationStructure);
 }
 
 Result DebugShaderObject::setSpecializationArgs(

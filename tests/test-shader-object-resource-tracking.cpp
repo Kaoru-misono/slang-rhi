@@ -5,6 +5,8 @@
 #include "binding-table-cache.h"
 #include <array>
 #include <cstring>
+#include <string>
+#include <vector>
 
 #if SLANG_RHI_ENABLE_VULKAN
 #include "vulkan/vk-api.h"
@@ -61,9 +63,9 @@ void main(uint3 id : SV_DispatchThreadID) { output[id.x] = scene.input.Load<uint
         const uint32_t initial[4]{0xdeadbeef, 0xdeadbeef, 0xdeadbeef, 0xdeadbeef};
         outputs[batch] = device->createBuffer(outputDesc, initial);
         REQUIRE(outputs[batch] != nullptr);
-        DescriptorHandle descriptor{};
-        REQUIRE_CALL(input->getDescriptorHandle(DescriptorHandleAccess::Read, Format::Undefined, kEntireBuffer, &descriptor));
-        REQUIRE_CALL(fields["input"].setDescriptorHandle(descriptor, input));
+        REQUIRE_CALL(
+            fields["input"].setDescriptorHandle(input, DescriptorHandleAccess::Read, Format::Undefined, 0, kEntireBuffer)
+        );
         const uint32_t bias = batch ? 23 : 7;
         REQUIRE_CALL(fields["bias"].setData(bias));
         REQUIRE_CALL(cursor["output"].setBinding(outputs[batch]));
@@ -565,6 +567,91 @@ void main(uint3 id : SV_DispatchThreadID)
     compareComputeResult(device, output, std::array<uint32_t, 4>{112, 140, 162, 198});
 }
 
+namespace {
+class UndeclaredStateRecorder : public IDebugCallback
+{
+public:
+    std::vector<std::string> reports;
+
+    virtual SLANG_NO_THROW void SLANG_MCALL handleMessage(
+        DebugMessageType type,
+        DebugMessageSource source,
+        const char* message
+    ) override
+    {
+        SLANG_UNUSED(source);
+        if (type == DebugMessageType::Error && std::strstr(message, "which was not declared"))
+            reports.emplace_back(message);
+    }
+};
+} // namespace
+
+// A resource reached only through a typed descriptor handle is checked against the state its access needs, both when
+// the binding table is built and when a later bind reuses it.
+GPU_TEST_CASE("shader-object-typed-descriptor-owner-states", D3D12 | Vulkan)
+{
+    UndeclaredStateRecorder recorder;
+    DeviceExtraOptions options;
+    options.resourceStateMode = ResourceStateMode::Explicit;
+    options.validateResourceStates = true;
+    options.debugCallback = &recorder;
+    device = createTestingDevice(ctx, ctx->deviceType, false, &options);
+    REQUIRE(device != nullptr);
+
+    ComPtr<IShaderProgram> program;
+    REQUIRE_CALL(loadComputeProgramFromSource(
+        device,
+        R"(
+[shader("compute")][numthreads(1, 1, 1)]
+void main(uniform RWStructuredBuffer<uint>.Handle output)
+{
+    output[0] = 7;
+}
+)",
+        program.writeRef()
+    ));
+    auto pipeline = device->createComputePipeline({.program = program});
+    REQUIRE(pipeline != nullptr);
+    auto root = device->createRootShaderObject(program);
+    REQUIRE(root != nullptr);
+    BufferDesc outputDesc{};
+    outputDesc.size = sizeof(uint32_t);
+    outputDesc.elementSize = sizeof(uint32_t);
+    outputDesc.usage = BufferUsage::UnorderedAccess | BufferUsage::CopySource;
+    outputDesc.label = "TypedHandleOutput";
+    auto output = device->createBuffer(outputDesc);
+    REQUIRE(output != nullptr);
+    REQUIRE_CALL(ShaderCursor(root->getEntryPoint(0))["output"]
+                     .setDescriptorHandle(output, DescriptorHandleAccess::ReadWrite, Format::Undefined, 0, kEntireBuffer));
+
+    auto queue = device->getQueue(QueueType::Graphics);
+    auto dispatchTwice = [&](ResourceState declared)
+    {
+        auto encoder = queue->createCommandEncoder();
+        encoder->setBufferState(output, declared);
+        for (int dispatch = 0; dispatch < 2; ++dispatch)
+        {
+            auto* pass = encoder->beginComputePass();
+            pass->bindPipeline(pipeline, root);
+            pass->dispatchCompute(1, 1, 1);
+            pass->end();
+        }
+        REQUIRE_CALL(queue->submit(encoder->finish()));
+        REQUIRE_CALL(queue->waitOnHost());
+    };
+
+    dispatchTwice(ResourceState::UnorderedAccess);
+    CHECK(recorder.reports.empty());
+
+    dispatchTwice(ResourceState::ShaderResource);
+    REQUIRE(recorder.reports.size() == 2);
+    for (const auto& report : recorder.reports)
+    {
+        CHECK(report.find("TypedHandleOutput") != std::string::npos);
+        CHECK(report.find(enumToString(ResourceState::UnorderedAccess)) != std::string::npos);
+    }
+}
+
 // Legacy shader-object binding of the same lifetime regression.
 
 GPU_TEST_CASE("shader-object-resource-tracking", ALL & ~CPU)
@@ -910,9 +997,9 @@ uint value = 0;
 
 GPU_TEST_CASE("shader-object-table-cache-constant-rebind", D3D12 | Vulkan)
 {
-    bool entryConstants = false;
+    bool pushConstantBlock = false;
     SUBCASE("global CB") {}
-    SUBCASE("entry-point uniforms") { entryConstants = true; }
+    SUBCASE("push-constant block") { pushConstantBlock = true; }
     std::string source = R"(
 struct Constants { uint index; uint bias; uint2 padding; };
 struct Resources { StructuredBuffer<uint> input[15]; RWStructuredBuffer<uint> output; };
@@ -925,11 +1012,10 @@ void main() {
     resources.output[constants.index] = sum + constants.bias;
 }
 )";
-    if (entryConstants)
+    if (pushConstantBlock)
     {
-        const std::string declaration = "ConstantBuffer<Constants> constants;";
-        source.erase(source.find(declaration), declaration.size());
-        source.replace(source.find("void main()"), 11, "void main(uniform Constants constants)");
+        source.insert(0, "import push_constants;");
+        source.insert(source.find("ConstantBuffer<Constants> constants;"), "[PushConstants] [[vk::push_constant]] ");
     }
     ComPtr<IShaderProgram> program;
     REQUIRE_CALL(loadComputeProgramFromSource(device, source, program.writeRef()));
@@ -970,9 +1056,7 @@ void main() {
     for (uint32_t i = 0; i < expected.size(); ++i)
     {
         uint32_t constants[]{i, 7 * i + 3, 0, 0};
-        auto constantsCursor = entryConstants
-            ? ShaderCursor(root->getEntryPoint(0))["constants"] : cursor["constants"].getDereferenced();
-        REQUIRE_CALL(constantsCursor.setData(constants, sizeof(constants)));
+        REQUIRE_CALL(cursor["constants"].getDereferenced().setData(constants, sizeof(constants)));
         pass->dispatchCompute(1, 1, 1);
         expected[i] = inputSum + 7 * i + 3;
     }
@@ -986,13 +1070,16 @@ void main() {
 #if SLANG_RHI_ENABLE_BINDING_COUNTERS
     auto* wrapped = dynamic_cast<debug::DebugCommandBuffer*>(commands.get());
     auto* internal = checked_cast<CommandBuffer*>(wrapped ? wrapped->baseObject.get() : commands.get());
+    // A constant buffer is part of the root table, so every rewrite rebuilds it. A push-constant block is not.
+    const uint64_t rootTables = pushConstantBlock ? 1 : expected.size();
     CHECK(internal->m_bindingCounters.trackedRefs == 16);
-    CHECK(internal->m_bindingCounters.tableHits == 255);
-    CHECK(internal->m_bindingCounters.tableMisses == 257);
+    CHECK(internal->m_bindingCounters.tableMisses == 1 + rootTables);
+    CHECK(internal->m_bindingCounters.tableHits == 2 * expected.size() - 1 - rootTables);
     const uint64_t implicitNvapiDescriptors = device->getDeviceType() == DeviceType::D3D12 &&
-        device->hasCapability(Capability::hlsl_nvapi) ? expected.size() : 0;
-    const uint64_t ordinaryDescriptors = entryConstants && device->getDeviceType() == DeviceType::Vulkan ? 0 : 256;
+        device->hasCapability(Capability::hlsl_nvapi) ? rootTables : 0;
+    const uint64_t ordinaryDescriptors = pushConstantBlock ? 0 : expected.size();
     CHECK(internal->m_bindingCounters.descriptorsWritten == 16 + ordinaryDescriptors + implicitNvapiDescriptors);
+    CHECK(internal->m_bindingCounters.cbAllocations == ordinaryDescriptors);
 #endif
     REQUIRE_CALL(queue->submit(commands));
     REQUIRE_CALL(queue->waitOnHost());

@@ -59,8 +59,25 @@ public:
     virtual SLANG_NO_THROW Result SLANG_MCALL setBinding(const ShaderOffset& offset, const Binding& binding) override;
     virtual SLANG_NO_THROW Result SLANG_MCALL setDescriptorHandle(
         const ShaderOffset& offset,
-        const DescriptorHandle& handle,
-        IResource* owner = nullptr
+        const DescriptorHandle& handle
+    ) override;
+    virtual SLANG_NO_THROW Result SLANG_MCALL setDescriptorHandle(
+        const ShaderOffset& offset,
+        ITextureView* textureView,
+        DescriptorHandleAccess access
+    ) override;
+    virtual SLANG_NO_THROW Result SLANG_MCALL setDescriptorHandle(
+        const ShaderOffset& offset,
+        IBuffer* buffer,
+        DescriptorHandleAccess access,
+        Format format,
+        uint32_t elementStride,
+        BufferRange range
+    ) override;
+    virtual SLANG_NO_THROW Result SLANG_MCALL setDescriptorHandle(const ShaderOffset& offset, ISampler* sampler) override;
+    virtual SLANG_NO_THROW Result SLANG_MCALL setDescriptorHandle(
+        const ShaderOffset& offset,
+        IAccelerationStructure* accelerationStructure
     ) override;
     virtual SLANG_NO_THROW Result SLANG_MCALL setSpecializationArgs(
         const ShaderOffset& offset,

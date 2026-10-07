@@ -100,6 +100,10 @@ public:
 
         /// Is this binding range specializable, e.g. an existential value or ParameterBlock<IFoo>.
         bool isSpecializable;
+
+        /// The sub-object is a push-constant block that holds only plain data and descriptor handles. Every bind
+        /// copies its bytes and records the resources its handles name, so it belongs to no binding table.
+        bool isPushConstantBlock = false;
     };
 
     struct SubObjectRangeInfo
@@ -237,6 +241,8 @@ public:
     {
         size_t uniformOffset;
         InternalRefPtr<Resource> resource;
+        // The state the handle's access needs; Undefined for samplers, which carry no tracked state.
+        ResourceState requiredState;
     };
     std::vector<DescriptorOwner> m_descriptorOwners;
     short_vector<uint8_t> m_data;
@@ -282,8 +288,25 @@ public:
     virtual SLANG_NO_THROW Result SLANG_MCALL setBinding(const ShaderOffset& offset, const Binding& binding) override;
     virtual SLANG_NO_THROW Result SLANG_MCALL setDescriptorHandle(
         const ShaderOffset& offset,
-        const DescriptorHandle& handle,
-        IResource* owner = nullptr
+        const DescriptorHandle& handle
+    ) override;
+    virtual SLANG_NO_THROW Result SLANG_MCALL setDescriptorHandle(
+        const ShaderOffset& offset,
+        ITextureView* textureView,
+        DescriptorHandleAccess access
+    ) override;
+    virtual SLANG_NO_THROW Result SLANG_MCALL setDescriptorHandle(
+        const ShaderOffset& offset,
+        IBuffer* buffer,
+        DescriptorHandleAccess access,
+        Format format,
+        uint32_t elementStride,
+        BufferRange range
+    ) override;
+    virtual SLANG_NO_THROW Result SLANG_MCALL setDescriptorHandle(const ShaderOffset& offset, ISampler* sampler) override;
+    virtual SLANG_NO_THROW Result SLANG_MCALL setDescriptorHandle(
+        const ShaderOffset& offset,
+        IAccelerationStructure* accelerationStructure
     ) override;
     virtual SLANG_NO_THROW Result SLANG_MCALL setSpecializationArgs(
         const ShaderOffset& offset,
@@ -324,6 +347,12 @@ protected:
 
     inline void incrementVersion() { m_version++; }
     void clearDescriptorOwners(size_t offset, size_t size);
+    Result writeDescriptorHandle(
+        const ShaderOffset& offset,
+        const DescriptorHandle& handle,
+        Resource* owner,
+        ResourceState requiredState
+    );
 
     inline Result checkFinalized() { return m_finalized ? SLANG_FAIL : SLANG_OK; }
 

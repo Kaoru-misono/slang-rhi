@@ -7,7 +7,7 @@
 
 namespace rhi {
 
-// A closure stops at PB edges. Entry points share the root table.
+// A closure stops at PB edges and leaves out push-constant blocks. Entry points share the root table.
 template<typename Visitor>
 bool visitBindingClosure(ShaderObject* object, bool root, Visitor& visitor)
 {
@@ -18,6 +18,8 @@ bool visitBindingClosure(ShaderObject* object, bool root, Visitor& visitor)
     for (uint32_t i = 0; i < object->m_layout->getBindingRangeCount(); ++i)
     {
         const auto& range = object->m_layout->getBindingRange(i);
+        if (range.isPushConstantBlock)
+            continue;
         switch (range.bindingType)
         {
         case slang::BindingType::ConstantBuffer:

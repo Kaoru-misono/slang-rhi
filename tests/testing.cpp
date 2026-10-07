@@ -648,12 +648,16 @@ ComPtr<IDevice> createTestingDevice(
         deviceDesc.enableRayTracingValidation = extraOptions->enableRayTracingValidation;
         deviceDesc.enableValidation = extraOptions->enableValidation;
         deviceDesc.aftermathFlags = extraOptions->aftermathFlags;
+        deviceDesc.resourceStateMode = extraOptions->resourceStateMode;
+        deviceDesc.validateResourceStates = extraOptions->validateResourceStates;
     }
 
 #ifdef SLANG_RHI_DEBUG
     deviceDesc.debugCallback =
         extraOptions && extraOptions->debugCallback ? extraOptions->debugCallback : &sDebugCallback;
 #endif
+    if (extraOptions && extraOptions->debugCallback)
+        deviceDesc.debugCallback = extraOptions->debugCallback;
 
     std::vector<slang::PreprocessorMacroDesc> preprocessorMacros;
     std::vector<slang::CompilerOptionEntry> compilerOptions;
