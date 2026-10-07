@@ -34,6 +34,7 @@ struct BindingDataBuilder
     BindingTableEntry* m_table = nullptr;
     bool m_tableHit = false;
     uint32_t m_rootDescriptorCursor = 0;
+    uint32_t m_pushConstantRootParameterIndex = UINT32_MAX;
 
     TransientBufferArena* m_constantBufferArena;
     GPUDescriptorArena* m_cbvSrvUavArena;
@@ -85,6 +86,9 @@ struct BindingDataBuilder
         ShaderObjectLayoutImpl* specializedLayout
     );
 
+    /// Bind this object as the program's push-constant block.
+    Result bindAsPushConstantBlock(ShaderObject* shaderObject, ShaderObjectLayoutImpl* specializedLayout);
+
     Result bindAsValue(
         ShaderObject* shaderObject,
         const DescriptorSet& descriptorSet,
@@ -120,6 +124,7 @@ public:
     {
         enum Type
         {
+            Constants,
             CBV,
             UAV,
             SRV,
@@ -127,6 +132,8 @@ public:
         };
         Type type;
         UINT index;
+        uint32_t* constants;
+        uint32_t constantCount;
         union
         {
             D3D12_GPU_VIRTUAL_ADDRESS bufferLocation;
@@ -134,10 +141,14 @@ public:
         };
     };
 
+    /// The resource states one table or one push-constant block needs. A table owns its lists; a block's lists live
+    /// in the command allocator, because nothing about a block is cached.
     struct StateSlice
     {
-        const std::vector<BufferState>* buffers;
-        const std::vector<TextureState>* textures;
+        const BufferState* buffers;
+        uint32_t bufferCount;
+        const TextureState* textures;
+        uint32_t textureCount;
         StateSlice* next;
     };
     StateSlice* stateSlices;

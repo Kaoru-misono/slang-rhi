@@ -1952,10 +1952,30 @@ public:
     virtual SLANG_NO_THROW Result SLANG_MCALL getObject(const ShaderOffset& offset, IShaderObject** outObject) = 0;
     virtual SLANG_NO_THROW Result SLANG_MCALL setObject(const ShaderOffset& offset, IShaderObject* object) = 0;
     virtual SLANG_NO_THROW Result SLANG_MCALL setBinding(const ShaderOffset& offset, const Binding& binding) = 0;
+    /// Writes a raw descriptor handle. The caller keeps the resource alive and in the state the shader needs.
     virtual SLANG_NO_THROW Result SLANG_MCALL setDescriptorHandle(
         const ShaderOffset& offset,
-        const DescriptorHandle& handle,
-        IResource* owner = nullptr
+        const DescriptorHandle& handle
+    ) = 0;
+    /// Writes the resource's descriptor handle. The shader object keeps the resource alive until it is
+    /// overwritten and transitions it to the state the access needs, as a direct binding would.
+    virtual SLANG_NO_THROW Result SLANG_MCALL setDescriptorHandle(
+        const ShaderOffset& offset,
+        ITextureView* textureView,
+        DescriptorHandleAccess access
+    ) = 0;
+    virtual SLANG_NO_THROW Result SLANG_MCALL setDescriptorHandle(
+        const ShaderOffset& offset,
+        IBuffer* buffer,
+        DescriptorHandleAccess access,
+        Format format,
+        uint32_t elementStride,
+        BufferRange range
+    ) = 0;
+    virtual SLANG_NO_THROW Result SLANG_MCALL setDescriptorHandle(const ShaderOffset& offset, ISampler* sampler) = 0;
+    virtual SLANG_NO_THROW Result SLANG_MCALL setDescriptorHandle(
+        const ShaderOffset& offset,
+        IAccelerationStructure* accelerationStructure
     ) = 0;
 
     /// Reserves a block of memory within the shader object's internal data buffer at the specified offset.

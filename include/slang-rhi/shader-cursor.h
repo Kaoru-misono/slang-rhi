@@ -101,9 +101,32 @@ struct ShaderCursor
 
     Result setBinding(const Binding& binding) const { return m_baseObject->setBinding(m_offset, binding); }
 
-    Result setDescriptorHandle(const DescriptorHandle& handle, IResource* owner = nullptr) const
+    Result setDescriptorHandle(const DescriptorHandle& handle) const
     {
-        return m_baseObject->setDescriptorHandle(m_offset, handle, owner);
+        return m_baseObject->setDescriptorHandle(m_offset, handle);
+    }
+
+    Result setDescriptorHandle(ITextureView* textureView, DescriptorHandleAccess access) const
+    {
+        return m_baseObject->setDescriptorHandle(m_offset, textureView, access);
+    }
+
+    Result setDescriptorHandle(
+        IBuffer* buffer,
+        DescriptorHandleAccess access,
+        Format format,
+        uint32_t elementStride,
+        BufferRange range
+    ) const
+    {
+        return m_baseObject->setDescriptorHandle(m_offset, buffer, access, format, elementStride, range);
+    }
+
+    Result setDescriptorHandle(ISampler* sampler) const { return m_baseObject->setDescriptorHandle(m_offset, sampler); }
+
+    Result setDescriptorHandle(IAccelerationStructure* accelerationStructure) const
+    {
+        return m_baseObject->setDescriptorHandle(m_offset, accelerationStructure);
     }
 
     Result setSpecializationArgs(const slang::SpecializationArg* args, uint32_t count) const

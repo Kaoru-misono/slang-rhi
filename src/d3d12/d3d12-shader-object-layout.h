@@ -102,12 +102,14 @@ public:
     uint32_t m_childRootParameterCount = 0;
 
     uint32_t m_totalOrdinaryDataSize = 0;
+    bool m_ordinaryDataIsConstants = false;
 
     static Result createForElementType(
         Device* device,
         slang::ISession* session,
         slang::TypeLayoutReflection* elementType,
-        ShaderObjectLayoutImpl** outLayout
+        ShaderObjectLayoutImpl** outLayout,
+        bool ordinaryDataIsConstants = false
     );
 
 #if 0
@@ -127,9 +129,9 @@ public:
     uint32_t getTotalResourceDescriptorCount() { return m_totalCounts.resource; }
     uint32_t getTotalSamplerDescriptorCount() { return m_totalCounts.sampler; }
 
-    uint32_t getOrdinaryDataBufferCount() { return m_totalOrdinaryDataSize ? 1 : 0; }
+    uint32_t getOrdinaryDataBufferCount() { return m_totalOrdinaryDataSize && !m_ordinaryDataIsConstants ? 1 : 0; }
 #if 0
-    bool hasOrdinaryDataBuffer() { return m_totalOrdinaryDataSize != 0; }
+    bool hasOrdinaryDataBuffer() { return m_totalOrdinaryDataSize != 0 && !m_ordinaryDataIsConstants; }
 #endif
 
     uint32_t getTotalResourceDescriptorCountWithoutOrdinaryDataBuffer()
@@ -209,6 +211,10 @@ protected:
         /// The total size in bytes of the ordinary data for this object and transitive
         /// sub-object.
         uint32_t m_totalOrdinaryDataSize = 0;
+        bool m_ordinaryDataIsConstants = false;
+
+        /// Only a program's global scope may declare the push-constant block.
+        bool m_findPushConstantBlock = false;
 
         /// The container type of this shader object. When `m_containerType` is
         /// `StructuredBuffer` or `UnsizedArray`, this shader object represents a collection
@@ -258,6 +264,8 @@ public:
     uint32_t m_rootSignatureRootParameterCount = 0;
     // Total number of parameters in the root signature (CBV/SRV/UAV + descriptor tables)
     uint32_t m_rootSignatureTotalParameterCount = 0;
+    // The root parameter that holds the push-constant block, when the program declares one.
+    uint32_t m_pushConstantRootParameterIndex = UINT32_MAX;
 
     // ShaderObjectLayout interface
     virtual uint32_t getEntryPointCount() const override { return m_entryPoints.size(); }
@@ -293,6 +301,16 @@ public:
         std::vector<D3D12_ROOT_PARAMETER1> m_rootDescTableParameters;
 
         D3D12_ROOT_SIGNATURE_DESC1 m_rootSignatureDesc = {};
+        slang::TypeLayoutReflection* m_globalsTypeLayout = nullptr;
+        bool m_hasPushConstantBlock = false;
+        D3D12_ROOT_PARAMETER1 m_pushConstantParameter = {};
+        const char* m_pushConstantBlockName = nullptr;
+        uint32_t m_pushConstantRootParameterIndex = UINT32_MAX;
+#if SLANG_RHI_ENABLE_NVAPI
+        bool m_hasImplicitDescriptorRangeForNVAPI = false;
+#endif
+
+        void addProgram(slang::ProgramLayout* layout);
 
         static Result translateDescriptorRangeType(slang::BindingType c, D3D12_DESCRIPTOR_RANGE_TYPE* outType);
 

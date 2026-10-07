@@ -12,7 +12,7 @@ namespace rhi::d3d12 {
 
 inline BindingDataImpl::RootParameter createRootDescriptorTable(UINT index, D3D12_GPU_DESCRIPTOR_HANDLE baseDescriptor)
 {
-    BindingDataImpl::RootParameter result;
+    BindingDataImpl::RootParameter result = {};
     result.type = BindingDataImpl::RootParameter::DescriptorTable;
     result.index = index;
     result.baseDescriptor = baseDescriptor;
@@ -21,7 +21,7 @@ inline BindingDataImpl::RootParameter createRootDescriptorTable(UINT index, D3D1
 
 inline BindingDataImpl::RootParameter createRootSRV(UINT index, D3D12_GPU_VIRTUAL_ADDRESS bufferLocation)
 {
-    BindingDataImpl::RootParameter result;
+    BindingDataImpl::RootParameter result = {};
     result.type = BindingDataImpl::RootParameter::SRV;
     result.index = index;
     result.bufferLocation = bufferLocation;
@@ -30,11 +30,23 @@ inline BindingDataImpl::RootParameter createRootSRV(UINT index, D3D12_GPU_VIRTUA
 
 inline BindingDataImpl::RootParameter createRootUAV(UINT index, D3D12_GPU_VIRTUAL_ADDRESS bufferLocation)
 {
-    BindingDataImpl::RootParameter result;
+    BindingDataImpl::RootParameter result = {};
     result.type = BindingDataImpl::RootParameter::UAV;
     result.index = index;
     result.bufferLocation = bufferLocation;
     return result;
+}
+
+inline BindingDataImpl::StateSlice* appendStateSlice(BindingDataBuilder& builder)
+{
+    auto* slice = builder.m_allocator->allocate<BindingDataImpl::StateSlice>();
+    *slice = {};
+    if (builder.m_bindingData->lastStateSlice)
+        builder.m_bindingData->lastStateSlice->next = slice;
+    else
+        builder.m_bindingData->stateSlices = slice;
+    builder.m_bindingData->lastStateSlice = slice;
+    return slice;
 }
 
 struct TableScope
@@ -44,6 +56,8 @@ struct TableScope
     bool previousHit;
     uint32_t previousCursor;
     std::unique_ptr<BindingTableEntry> pending;
+    BindingTableEntry* table;
+    BindingDataImpl::StateSlice* slice;
     ShaderObject* object;
     ShaderObjectLayoutImpl* layout;
     bool root;
@@ -63,13 +77,8 @@ struct TableScope
         }
         SLANG_RHI_BINDING_COUNT(tableHits, b.m_tableHit ? 1 : 0);
         SLANG_RHI_BINDING_COUNT(tableMisses, b.m_tableHit ? 0 : 1);
-        auto* slice = b.m_allocator->allocate<BindingDataImpl::StateSlice>();
-        *slice = {&b.m_table->buffers, &b.m_table->textures, nullptr};
-        if (b.m_bindingData->lastStateSlice)
-            b.m_bindingData->lastStateSlice->next = slice;
-        else
-            b.m_bindingData->stateSlices = slice;
-        b.m_bindingData->lastStateSlice = slice;
+        table = b.m_table;
+        slice = appendStateSlice(b);
     }
     void publish()
     {
@@ -81,6 +90,11 @@ struct TableScope
     }
     ~TableScope()
     {
+        // A missed table has only now collected its states; a cached one never changes again.
+        slice->buffers = table->buffers.data();
+        slice->bufferCount = uint32_t(table->buffers.size());
+        slice->textures = table->textures.data();
+        slice->textureCount = uint32_t(table->textures.size());
         builder.m_table = previous;
         builder.m_tableHit = previousHit;
         builder.m_rootDescriptorCursor = previousCursor;
@@ -95,6 +109,48 @@ inline void writeBufferState(BindingDataBuilder* builder, BufferImpl* buffer, Re
 inline void writeTextureState(BindingDataBuilder* builder, TextureViewImpl* textureView, ResourceState state)
 {
     builder->m_table->textures.push_back({textureView->m_texture, textureView->m_desc.subresourceRange, state});
+}
+
+// Resources reached through descriptor handles get the same state checks and transitions as direct bindings.
+inline void writeDescriptorOwnerStates(BindingDataBuilder* builder, ShaderObject* object)
+{
+    for (const auto& owner : object->m_descriptorOwners)
+    {
+        if (owner.requiredState == ResourceState::Undefined)
+            continue;
+        if (auto buffer = dynamic_cast<BufferImpl*>(owner.resource.get()))
+            writeBufferState(builder, buffer, owner.requiredState);
+        else if (auto textureView = dynamic_cast<TextureViewImpl*>(owner.resource.get()))
+            writeTextureState(builder, textureView, owner.requiredState);
+        else if (auto as = dynamic_cast<AccelerationStructureImpl*>(owner.resource.get()))
+            writeBufferState(builder, as->m_buffer, owner.requiredState);
+    }
+}
+
+// A push-constant block is in no cached table, so every bind names the resources its handles reach.
+inline void writePushConstantBlockOwners(BindingDataBuilder* builder, ShaderObject* block)
+{
+    const auto& owners = block->m_descriptorOwners;
+    if (owners.empty())
+        return;
+    auto* buffers = builder->m_allocator->allocate<BindingDataImpl::BufferState>(owners.size());
+    auto* textures = builder->m_allocator->allocate<BindingDataImpl::TextureState>(owners.size());
+    auto* slice = appendStateSlice(*builder);
+    slice->buffers = buffers;
+    slice->textures = textures;
+    for (const auto& owner : owners)
+    {
+        builder->m_retained->emplace_back(owner.resource);
+        if (owner.requiredState == ResourceState::Undefined)
+            continue;
+        if (auto buffer = dynamic_cast<BufferImpl*>(owner.resource.get()))
+            buffers[slice->bufferCount++] = {buffer, owner.requiredState};
+        else if (auto textureView = dynamic_cast<TextureViewImpl*>(owner.resource.get()))
+            textures[slice->textureCount++] =
+                {textureView->m_texture, textureView->m_desc.subresourceRange, owner.requiredState};
+        else if (auto as = dynamic_cast<AccelerationStructureImpl*>(owner.resource.get()))
+            buffers[slice->bufferCount++] = {as->m_buffer, owner.requiredState};
+    }
 }
 
 void BindingDataBuilder::writeRootParameter(uint32_t index, uint64_t address, bool uav)
@@ -116,6 +172,7 @@ Result BindingDataBuilder::bindAsRoot(
 
     m_bindingData->stateSlices = nullptr;
     m_bindingData->lastStateSlice = nullptr;
+    m_pushConstantRootParameterIndex = specializedLayout->m_pushConstantRootParameterIndex;
     TableScope table(*this, shaderObject, specializedLayout, true);
 
     uint32_t rootParameterCount = specializedLayout->m_rootSignatureTotalParameterCount;
@@ -320,6 +377,31 @@ Result BindingDataBuilder::bindAsConstantBuffer(
     return SLANG_OK;
 }
 
+/// Bind this object as the program's push-constant block
+Result BindingDataBuilder::bindAsPushConstantBlock(ShaderObject* shaderObject, ShaderObjectLayoutImpl* specializedLayout)
+{
+    uint32_t size = specializedLayout->getTotalOrdinaryDataSize();
+    if (shaderObject->m_data.size() > size)
+    {
+        m_device->printError(
+            "Push-constant block object holds %u bytes; the block has %u.",
+            uint32_t(shaderObject->m_data.size()),
+            size
+        );
+        return SLANG_E_INVALID_ARG;
+    }
+    auto& parameter = m_bindingData->rootParameters[m_pushConstantRootParameterIndex];
+    parameter = {};
+    parameter.type = BindingDataImpl::RootParameter::Constants;
+    parameter.index = m_pushConstantRootParameterIndex;
+    parameter.constantCount = size / 4;
+    parameter.constants = m_allocator->allocate<uint32_t>(parameter.constantCount);
+    memset(parameter.constants, 0, size);
+    SLANG_RETURN_ON_FAIL(shaderObject->writeOrdinaryData(parameter.constants, size, specializedLayout));
+    writePushConstantBlockOwners(this, shaderObject);
+    return SLANG_OK;
+}
+
 /// Bind this object as a `ParameterBlock<X>`
 Result BindingDataBuilder::bindAsParameterBlock(
     ShaderObject* shaderObject,
@@ -360,6 +442,9 @@ Result BindingDataBuilder::bindAsValue(
 )
 {
     ID3D12Device* d3dDevice = m_device->m_device;
+
+    if (!m_tableHit)
+        writeDescriptorOwnerStates(this, shaderObject);
 
     // We start by iterating over the "simple" (non-sub-object) binding
     // ranges and writing them to the descriptor sets that are being
@@ -650,9 +735,16 @@ Result BindingDataBuilder::bindAsValue(
                 // bindings it recursively contains.
                 //
                 ShaderObject* subObject = shaderObject->m_objects[subObjectIndex + i];
-                SLANG_RETURN_ON_FAIL(
-                    bindAsConstantBuffer(subObject, descriptorSet, objOffset, rootParamIndex, subObjectLayout)
-                );
+                if (bindingRangeInfo.isPushConstantBlock)
+                {
+                    SLANG_RETURN_ON_FAIL(bindAsPushConstantBlock(subObject, subObjectLayout));
+                }
+                else
+                {
+                    SLANG_RETURN_ON_FAIL(
+                        bindAsConstantBuffer(subObject, descriptorSet, objOffset, rootParamIndex, subObjectLayout)
+                    );
+                }
 
                 // When dealing with arrays of sub-objects, we need to make
                 // sure to increment the offset for each subsequent object

@@ -455,6 +455,10 @@ Result ShaderObjectLayoutImpl::Builder::addBindingRanges(slang::TypeLayoutReflec
         subObjectRange.bindingRangeIndex = bindingRangeIndex;
         subObjectRange.layout = subObjectLayout;
 
+        // A push-constant block with descriptors of its own still writes them into the enclosing table.
+        m_bindingRanges[bindingRangeIndex].isPushConstantBlock =
+            slangBindingType == slang::BindingType::PushConstant && subObjectLayout->getBindingRangeCount() == 0;
+
         // We will use Slang reflection infromation to extract the offset information
         // for each sub-object range.
         //
@@ -830,13 +834,6 @@ Result RootShaderObjectLayoutImpl::_init(Builder* builder)
 
 Result RootShaderObjectLayoutImpl::addDescriptorSetLayout(uint64_t setIndex, VkDescriptorSetLayout layout)
 {
-    if (m_descriptorSetComposition)
-    {
-        for (const auto& set : getOwnDescriptorSets())
-            m_vkDescriptorSetLayouts.push_back(set.descriptorSetLayout);
-        return SLANG_OK;
-    }
-
     if (setIndex >= kMaxDescriptorSets || setIndex >= m_device->m_api.m_deviceProperties.limits.maxBoundDescriptorSets)
         return SLANG_E_NOT_AVAILABLE;
     if (setIndex >= m_vkDescriptorSetLayouts.size())
