@@ -29,7 +29,7 @@ static void syncQueues(IDevice* device, ICommandQueue* srcQueue, ICommandQueue* 
 
 // ------------------------------------------------------------------
 // Test: async buffer load using transfer queue
-// Simulates the pattern: staging buffer → transfer queue copy → fence poll → acquire → use
+// Simulates the pattern: staging buffer -> transfer queue copy -> fence poll -> acquire -> use
 // ------------------------------------------------------------------
 GPU_TEST_CASE("async-load-buffer", D3D12 | Vulkan | Metal)
 {
@@ -129,7 +129,7 @@ GPU_TEST_CASE("async-load-buffer", D3D12 | Vulkan | Metal)
 
 // ------------------------------------------------------------------
 // Test: async texture load using transfer queue
-// Staging buffer → copyBufferToTexture on transfer queue → fence → acquire → readTexture
+// Staging buffer -> copyBufferToTexture on transfer queue -> fence -> acquire -> readTexture
 // ------------------------------------------------------------------
 GPU_TEST_CASE("async-load-texture", D3D12 | Vulkan | Metal)
 {
@@ -299,7 +299,7 @@ GPU_TEST_CASE("async-load-texture", D3D12 | Vulkan | Metal)
 }
 
 // ------------------------------------------------------------------
-// Test: batch async load — multiple buffers in one submission
+// Test: batch async load - multiple buffers in one submission
 // ------------------------------------------------------------------
 GPU_TEST_CASE("async-load-batch", D3D12 | Vulkan | Metal)
 {
@@ -314,7 +314,7 @@ GPU_TEST_CASE("async-load-batch", D3D12 | Vulkan | Metal)
     float dataB[] = {100.0f, 200.0f, 300.0f, 400.0f};
     float dataC[] = {-1.0f, -2.0f, -3.0f, -4.0f};
 
-    // Create 3 GPU buffers — use CopyDestination as default state for transfer queue.
+    // Create 3 GPU buffers - use CopyDestination as default state for transfer queue.
     BufferDesc gpuDesc = {};
     gpuDesc.size = dataSize;
     gpuDesc.usage = BufferUsage::ShaderResource | BufferUsage::CopyDestination | BufferUsage::CopySource;
@@ -398,7 +398,7 @@ GPU_TEST_CASE("async-load-batch", D3D12 | Vulkan | Metal)
 }
 
 // ------------------------------------------------------------------
-// Test: fence polling — verify non-blocking getCurrentValue works
+// Test: fence polling - verify non-blocking getCurrentValue works
 // ------------------------------------------------------------------
 GPU_TEST_CASE("async-load-fence-polling", D3D12 | Vulkan | Metal)
 {

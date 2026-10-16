@@ -4,7 +4,7 @@ using namespace rhi;
 using namespace rhi::testing;
 
 // ------------------------------------------------------------------
-// Test: Multi-pass compute — exercises barrier merging and split barriers.
+// Test: Multi-pass compute - exercises barrier merging and split barriers.
 // Two compute passes in one command buffer: pass 1 writes buffer A,
 // pass 2 reads A and writes B. The state transitions between passes
 // exercise both barrier merging (redundant transitions collapsed)
@@ -39,7 +39,7 @@ static void runStateTrackingMultiPass(IDevice* device)
     {
         auto encoder = queue->createCommandEncoder();
 
-        // Pass 1: buffer[i] = buffer[i] + 1 + value(10) → A becomes {11, 12, 13, 14}
+        // Pass 1: buffer[i] = buffer[i] + 1 + value(10) -> A becomes {11, 12, 13, 14}
         {
             auto pass = encoder->beginComputePass();
             float value = 10.0f;
@@ -48,7 +48,7 @@ static void runStateTrackingMultiPass(IDevice* device)
             pass->end();
         }
 
-        // Pass 2: buffer[i] = buffer[i] + 1 + value(5) → B becomes {106, 206, 306, 406}
+        // Pass 2: buffer[i] = buffer[i] + 1 + value(5) -> B becomes {106, 206, 306, 406}
         {
             auto pass = encoder->beginComputePass();
             float value = 5.0f;
@@ -71,8 +71,8 @@ GPU_TEST_CASE("state-tracking-multi-pass", D3D12 | Vulkan)
 }
 
 // ------------------------------------------------------------------
-// Test: Copy chain — buffer goes through multiple state transitions
-// in one command buffer: CopySrc → CopyDst → CopySrc → CopyDst.
+// Test: Copy chain - buffer goes through multiple state transitions
+// in one command buffer: CopySrc -> CopyDst -> CopySrc -> CopyDst.
 // This exercises barrier merging when the same buffer transitions
 // multiple times within one commit batch.
 // ------------------------------------------------------------------
@@ -87,7 +87,7 @@ GPU_TEST_CASE("state-tracking-copy-chain", D3D12 | Vulkan)
     desc.usage = BufferUsage::CopySource | BufferUsage::CopyDestination;
     desc.memoryType = MemoryType::DeviceLocal;
 
-    // Chain: src → mid → dst
+    // Chain: src -> mid -> dst
     desc.defaultState = ResourceState::CopySource;
     ComPtr<IBuffer> src;
     REQUIRE_CALL(device->createBuffer(desc, (void*)srcData, src.writeRef()));
@@ -105,12 +105,12 @@ GPU_TEST_CASE("state-tracking-copy-chain", D3D12 | Vulkan)
     {
         auto encoder = queue->createCommandEncoder();
 
-        // Copy 1: src → mid
+        // Copy 1: src -> mid
         encoder->setBufferState(src, ResourceState::CopySource);
         encoder->setBufferState(mid, ResourceState::CopyDestination);
         encoder->copyBuffer(mid, 0, src, 0, dataSize);
 
-        // Copy 2: mid → dst (mid transitions CopyDst → CopySrc)
+        // Copy 2: mid -> dst (mid transitions CopyDst -> CopySrc)
         encoder->setBufferState(mid, ResourceState::CopySource);
         encoder->setBufferState(dst, ResourceState::CopyDestination);
         encoder->copyBuffer(dst, 0, mid, 0, dataSize);
@@ -124,8 +124,8 @@ GPU_TEST_CASE("state-tracking-copy-chain", D3D12 | Vulkan)
 
 // ------------------------------------------------------------------
 // Test: Compute then copy in one command buffer.
-// Compute writes to buffer, then copy reads it — exercises the
-// UAV → CopySrc transition with barrier merging and split barriers.
+// Compute writes to buffer, then copy reads it - exercises the
+// UAV -> CopySrc transition with barrier merging and split barriers.
 // ------------------------------------------------------------------
 static void runStateTrackingComputeThenCopy(IDevice* device)
 {
@@ -161,7 +161,7 @@ static void runStateTrackingComputeThenCopy(IDevice* device)
     {
         auto encoder = queue->createCommandEncoder();
 
-        // Compute pass: buffer[i] += 1 + value(0) → {2, 3, 4, 5}
+        // Compute pass: buffer[i] += 1 + value(0) -> {2, 3, 4, 5}
         {
             auto pass = encoder->beginComputePass();
             float value = 0.0f;
@@ -171,7 +171,7 @@ static void runStateTrackingComputeThenCopy(IDevice* device)
         }
         // EndComputePass triggers split barrier (D3D12)
 
-        // Copy: computeBuffer (UAV→CopySrc transition) → copyDst
+        // Copy: computeBuffer (UAV->CopySrc transition) -> copyDst
         encoder->setBufferState(computeBuffer, ResourceState::CopySource);
         encoder->setBufferState(copyDst, ResourceState::CopyDestination);
         encoder->copyBuffer(copyDst, 0, computeBuffer, 0, dataSize);
@@ -189,8 +189,8 @@ GPU_TEST_CASE("state-tracking-compute-then-copy", D3D12 | Vulkan)
 }
 
 // ------------------------------------------------------------------
-// Test: Repeated UAV dispatches — same buffer written multiple times.
-// Exercises UAV→UAV barrier handling (must not be merged away).
+// Test: Repeated UAV dispatches - same buffer written multiple times.
+// Exercises UAV->UAV barrier handling (must not be merged away).
 // ------------------------------------------------------------------
 static void runStateTrackingRepeatedUav(IDevice* device)
 {
@@ -244,7 +244,7 @@ GPU_TEST_CASE("state-tracking-repeated-uav", D3D12 | Vulkan)
 }
 
 // ------------------------------------------------------------------
-// Test: Descriptor heap stress — allocate many buffers to exercise
+// Test: Descriptor heap stress - allocate many buffers to exercise
 // the descriptor heap near its limits and verify diagnostics work.
 // ------------------------------------------------------------------
 GPU_TEST_CASE("state-tracking-many-buffers", D3D12 | Vulkan)
@@ -276,7 +276,7 @@ GPU_TEST_CASE("state-tracking-many-buffers", D3D12 | Vulkan)
 
     {
         auto encoder = queue->createCommandEncoder();
-        // Copy buffer[0] → finalDst
+        // Copy buffer[0] -> finalDst
         encoder->setBufferState(buffers[0], ResourceState::CopySource);
         encoder->setBufferState(finalDst, ResourceState::CopyDestination);
         encoder->copyBuffer(finalDst, 0, buffers[0], 0, dataSize);
