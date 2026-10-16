@@ -2520,7 +2520,7 @@ Result CommandEncoderImpl::finish(const CommandBufferDesc& desc, ICommandBuffer*
     // Set the d3d command list debug name only when THIS finish provides a non-null
     // label. The previous logic derived `hadLabel` from the command buffer's prior
     // (possibly pooled/stale) label and then passed the encoder's `m_desc.label`
-    // (set at createCommandEncoder, normally null) to SetName — so a reused pooled
+    // (set at createCommandEncoder, normally null) to SetName - so a reused pooled
     // buffer finished without a new label called SetName(nullptr) -> wcslen(nullptr)
     // -> crash. Triggered by the retained-labeled-command-buffer + pool-reuse path.
     if (desc.label)

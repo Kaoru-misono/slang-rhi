@@ -80,7 +80,7 @@ GPU_TEST_CASE("transfer-queue-copy", D3D12 | Vulkan)
         transferQueue->waitOnHost();
     }
 
-    // readBuffer uses the graphics queue internally — need GPU-GPU sync from transfer queue.
+    // readBuffer uses the graphics queue internally - need GPU-GPU sync from transfer queue.
     syncQueues(device, transferQueue, device->getQueue(QueueType::Graphics));
 
     compareComputeResult(device, dstBuffer, makeArray<float>(1.0f, 2.0f, 3.0f, 4.0f));

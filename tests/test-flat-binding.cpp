@@ -1174,7 +1174,7 @@ GPU_TEST_CASE("shader-object-binding-handle-access-transition", D3D12 | Vulkan)
 // descriptors for its whole lifetime, so rebinding one costs nothing and cannot exhaust a heap.
 // Vulkan descriptor pool and constant arena exhaustion is likewise not covered, for want of a
 // device-side limit knob that would trigger it without making device creation itself fail; see
-// §19.8 of the binding framework design for the full list of what this file does not cover.
+// section 19.8 of the binding framework design for the full list of what this file does not cover.
 GPU_TEST_CASE("shader-object-binding-d3d12-sampler-dedup-and-exhaustion", D3D12 | DontCreateDevice)
 {
     // createBindingSession uses getSlangSearchPaths() in its own Slang session, so devices need no test search paths.
