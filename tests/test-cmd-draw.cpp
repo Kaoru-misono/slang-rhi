@@ -424,18 +424,24 @@ struct DrawIndexedInstancedTest : BaseDrawTest
 struct DrawIndirectTest : BaseDrawTest
 {
     ComPtr<IBuffer> indirectBuffer;
+    // Draws `empty` and `args` up to a count of 2 read from `count`. A count read from the argument offset is 0.
+    bool useCountBuffer = false;
 
     struct IndirectArgData
     {
         float padding; // Ensure args and count don't start at 0 offset for testing purposes
+        IndirectDrawArguments empty;
         IndirectDrawArguments args;
+        uint32_t count;
     };
 
     ComPtr<IBuffer> createIndirectBuffer()
     {
         static const IndirectArgData kIndirectData = {
             42.0f,        // padding
+            {0, 0, 0, 0}, // empty
             {6, 2, 0, 0}, // args
+            2,            // count
         };
 
         BufferDesc bufferDesc;
@@ -478,9 +484,18 @@ struct DrawIndirectTest : BaseDrawTest
         state.scissorRectCount = 1;
         passEncoder->setRenderState(state);
 
-        uint32_t maxDrawCount = 1;
-        BufferOffsetPair argBuffer = {indirectBuffer, offsetof(IndirectArgData, args)};
-        passEncoder->drawIndirect(maxDrawCount, argBuffer);
+        if (useCountBuffer)
+        {
+            BufferOffsetPair argBuffer = {indirectBuffer, offsetof(IndirectArgData, empty)};
+            BufferOffsetPair countBuffer = {indirectBuffer, offsetof(IndirectArgData, count)};
+            passEncoder->drawIndirect(2, argBuffer, countBuffer);
+        }
+        else
+        {
+            uint32_t maxDrawCount = 1;
+            BufferOffsetPair argBuffer = {indirectBuffer, offsetof(IndirectArgData, args)};
+            passEncoder->drawIndirect(maxDrawCount, argBuffer);
+        }
         passEncoder->end();
 
         queue->submit(commandEncoder->finish());
@@ -625,6 +640,14 @@ static void runCmdDrawIndirect(IDevice* device)
 GPU_TEST_CASE("cmd-draw-indirect", D3D11 | D3D12 | Vulkan | WGPU)
 {
     runCmdDrawIndirect(device);
+}
+
+GPU_TEST_CASE("cmd-draw-indirect-count", D3D12 | Vulkan)
+{
+    DrawIndirectTest test;
+    test.init(device);
+    test.useCountBuffer = true;
+    test.run();
 }
 
 static void runCmdDrawIndexedIndirect(IDevice* device)

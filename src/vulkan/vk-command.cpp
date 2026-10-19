@@ -1103,7 +1103,7 @@ void CommandRecorder::cmdDrawIndirect(const commands::DrawIndirect& cmd)
             argBuffer->m_buffer.m_buffer,
             cmd.argBuffer.offset,
             countBuffer->m_buffer.m_buffer,
-            cmd.argBuffer.offset,
+            cmd.countBuffer.offset,
             cmd.maxDrawCount,
             sizeof(VkDrawIndirectCommand)
         );
