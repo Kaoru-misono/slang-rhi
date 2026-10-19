@@ -416,22 +416,30 @@ struct DrawIndirectTest : BaseDrawTest
     ComPtr<IBuffer> indirectBuffer;
     // Number of draws to issue. With more than one draw, each draw renders a single instance.
     uint32_t drawCount = 1;
+    // Draws `empty` and `args[0]` up to a count of 2 read from `count`. A count read from the argument offset is 0.
+    bool useCountBuffer = false;
 
     struct IndirectArgData
     {
         float padding; // Ensure args and count don't start at 0 offset for testing purposes
+        IndirectDrawArguments empty;
         IndirectDrawArguments args[2];
+        uint32_t count;
     };
 
     ComPtr<IBuffer> createIndirectBuffer()
     {
         static const IndirectArgData kSingleDrawData = {
             42.0f,          // padding
+            {0, 0, 0, 0},   // empty
             {{6, 2, 0, 0}}, // args
+            2,              // count
         };
         static const IndirectArgData kMultiDrawData = {
             42.0f,                        // padding
+            {0, 0, 0, 0},                 // empty
             {{6, 1, 0, 0}, {6, 1, 0, 1}}, // args
+            2,                            // count
         };
         const IndirectArgData& kIndirectData = drawCount == 1 ? kSingleDrawData : kMultiDrawData;
 
@@ -475,8 +483,17 @@ struct DrawIndirectTest : BaseDrawTest
         state.scissorRectCount = 1;
         passEncoder->setRenderState(state);
 
-        BufferOffsetPair argBuffer = {indirectBuffer, offsetof(IndirectArgData, args)};
-        passEncoder->drawIndirect(drawCount, argBuffer);
+        if (useCountBuffer)
+        {
+            BufferOffsetPair argBuffer = {indirectBuffer, offsetof(IndirectArgData, empty)};
+            BufferOffsetPair countBuffer = {indirectBuffer, offsetof(IndirectArgData, count)};
+            passEncoder->drawIndirect(2, argBuffer, countBuffer);
+        }
+        else
+        {
+            BufferOffsetPair argBuffer = {indirectBuffer, offsetof(IndirectArgData, args)};
+            passEncoder->drawIndirect(drawCount, argBuffer);
+        }
         passEncoder->end();
 
         queue->submit(commandEncoder->finish());
@@ -612,6 +629,14 @@ GPU_TEST_CASE("cmd-draw-indexed-instanced", D3D11 | D3D12 | Vulkan | Metal | WGP
 GPU_TEST_CASE("cmd-draw-indirect", D3D11 | D3D12 | Vulkan | Metal | WGPU)
 {
     testDraw<DrawIndirectTest>(device);
+}
+
+GPU_TEST_CASE("cmd-draw-indirect-count", D3D12 | Vulkan)
+{
+    DrawIndirectTest test;
+    test.init(device);
+    test.useCountBuffer = true;
+    test.run();
 }
 
 GPU_TEST_CASE("cmd-draw-indexed-indirect", D3D11 | D3D12 | Vulkan | Metal | WGPU)
