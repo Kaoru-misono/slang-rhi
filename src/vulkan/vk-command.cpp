@@ -204,6 +204,7 @@ public:
     void cmdDrawIndirect(const commands::DrawIndirect& cmd);
     void cmdDrawIndexedIndirect(const commands::DrawIndexedIndirect& cmd);
     void cmdDrawMeshTasks(const commands::DrawMeshTasks& cmd);
+    void cmdDrawMeshTasksIndirect(const commands::DrawMeshTasksIndirect& cmd);
     void cmdBeginComputePass(const commands::BeginComputePass& cmd);
     void cmdEndComputePass(const commands::EndComputePass& cmd);
     void cmdSetComputeState(const commands::SetComputeState& cmd);
@@ -306,6 +307,19 @@ Result CommandRecorder::record(CommandBufferImpl* commandBuffer)
                 else if (subCmdSlot->id == CommandID::DrawIndexedIndirect)
                 {
                     const auto& draw = commandList.getCommand<commands::DrawIndexedIndirect>(subCmdSlot);
+                    requireBufferState(
+                        checked_cast<BufferImpl*>(draw.argBuffer.buffer),
+                        ResourceState::IndirectArgument
+                    );
+                    if (draw.countBuffer)
+                        requireBufferState(
+                            checked_cast<BufferImpl*>(draw.countBuffer.buffer),
+                            ResourceState::IndirectArgument
+                        );
+                }
+                else if (subCmdSlot->id == CommandID::DrawMeshTasksIndirect)
+                {
+                    const auto& draw = commandList.getCommand<commands::DrawMeshTasksIndirect>(subCmdSlot);
                     requireBufferState(
                         checked_cast<BufferImpl*>(draw.argBuffer.buffer),
                         ResourceState::IndirectArgument
@@ -1145,6 +1159,39 @@ void CommandRecorder::cmdDrawMeshTasks(const commands::DrawMeshTasks& cmd)
         return;
 
     m_api.vkCmdDrawMeshTasksEXT(m_cmdBuffer, cmd.x, cmd.y, cmd.z);
+}
+
+void CommandRecorder::cmdDrawMeshTasksIndirect(const commands::DrawMeshTasksIndirect& cmd)
+{
+    if (!m_renderStateValid)
+        return;
+
+    // The argument buffer states were required before the render pass began.
+    auto argBuffer = checked_cast<BufferImpl*>(cmd.argBuffer.buffer);
+    auto countBuffer = checked_cast<BufferImpl*>(cmd.countBuffer.buffer);
+
+    if (countBuffer)
+    {
+        m_api.vkCmdDrawMeshTasksIndirectCountEXT(
+            m_cmdBuffer,
+            argBuffer->m_buffer.m_buffer,
+            cmd.argBuffer.offset,
+            countBuffer->m_buffer.m_buffer,
+            cmd.countBuffer.offset,
+            cmd.maxDrawCount,
+            sizeof(VkDrawMeshTasksIndirectCommandEXT)
+        );
+    }
+    else
+    {
+        m_api.vkCmdDrawMeshTasksIndirectEXT(
+            m_cmdBuffer,
+            argBuffer->m_buffer.m_buffer,
+            cmd.argBuffer.offset,
+            cmd.maxDrawCount,
+            sizeof(VkDrawMeshTasksIndirectCommandEXT)
+        );
+    }
 }
 
 void CommandRecorder::cmdBeginComputePass(const commands::BeginComputePass& cmd)

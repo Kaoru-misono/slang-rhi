@@ -89,6 +89,8 @@ public:
     ComPtr<ID3D12CommandSignature> drawIndirectCmdSignature;
     ComPtr<ID3D12CommandSignature> drawIndexedIndirectCmdSignature;
     ComPtr<ID3D12CommandSignature> dispatchIndirectCmdSignature;
+    // Null on devices without mesh shaders.
+    ComPtr<ID3D12CommandSignature> drawMeshTasksIndirectCmdSignature;
 
 public:
     using Device::readBuffer;

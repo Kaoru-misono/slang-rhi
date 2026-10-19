@@ -255,6 +255,7 @@ Entry-point-scoped descriptors return `SLANG_E_NOT_IMPLEMENTED` at program creat
 | `drawIndirect`        | :x: | :x:  | yes   | yes   | yes    | :x:   | yes  |
 | `drawIndexedIndirect` | :x: | :x:  | yes   | yes   | yes    | :x:   | yes  |
 | `drawMeshTasks`       | :x: | :x:  | :x:   | yes   | yes    | :x:   | :x:  |
+| `drawMeshTasksIndirect` | :x: | :x:  | :x:   | yes   | yes    | :x:   | :x:  |
 
 `RenderState::stencilRef` is dynamic and initially zero. Both backends apply it
 at draw time, independently of pipeline changes.

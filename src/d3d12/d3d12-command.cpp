@@ -121,6 +121,7 @@ public:
     void cmdDrawIndirect(const commands::DrawIndirect& cmd);
     void cmdDrawIndexedIndirect(const commands::DrawIndexedIndirect& cmd);
     void cmdDrawMeshTasks(const commands::DrawMeshTasks& cmd);
+    void cmdDrawMeshTasksIndirect(const commands::DrawMeshTasksIndirect& cmd);
     void cmdBeginComputePass(const commands::BeginComputePass& cmd);
     void cmdEndComputePass(const commands::EndComputePass& cmd);
     void cmdSetComputeState(const commands::SetComputeState& cmd);
@@ -1114,6 +1115,38 @@ void CommandRecorder::cmdDrawMeshTasks(const commands::DrawMeshTasks& cmd)
         return;
 
     m_cmdList6->DispatchMesh(cmd.x, cmd.y, cmd.z);
+}
+
+void CommandRecorder::cmdDrawMeshTasksIndirect(const commands::DrawMeshTasksIndirect& cmd)
+{
+    if (!m_renderStateValid)
+        return;
+
+    if (!m_device->drawMeshTasksIndirectCmdSignature)
+    {
+        NOT_SUPPORTED(IRenderPassEncoder, drawMeshTasksIndirect);
+        return;
+    }
+
+    BufferImpl* argBuffer = checked_cast<BufferImpl*>(cmd.argBuffer.buffer);
+    BufferImpl* countBuffer = checked_cast<BufferImpl*>(cmd.countBuffer.buffer);
+
+    requireBufferState(argBuffer, ResourceState::IndirectArgument);
+    if (countBuffer)
+    {
+        requireBufferState(countBuffer, ResourceState::IndirectArgument);
+    }
+
+    commitBarriers();
+
+    m_cmdList->ExecuteIndirect(
+        m_device->drawMeshTasksIndirectCmdSignature,
+        cmd.maxDrawCount,
+        argBuffer->m_resource,
+        cmd.argBuffer.offset,
+        countBuffer ? countBuffer->m_resource.getResource() : nullptr,
+        cmd.countBuffer.offset
+    );
 }
 
 void CommandRecorder::cmdBeginComputePass(const commands::BeginComputePass& cmd)

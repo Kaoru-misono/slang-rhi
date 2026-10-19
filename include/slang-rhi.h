@@ -2782,6 +2782,13 @@ public:
         BufferOffsetPair countBuffer = {}
     ) = 0;
     virtual SLANG_NO_THROW void SLANG_MCALL drawMeshTasks(uint32_t x, uint32_t y, uint32_t z) = 0;
+    /// Draws mesh tasks whose group counts are read from `argBuffer`: up to `maxDrawCount` tightly packed records of
+    /// three uint32 (x, y, z). With `countBuffer`, the draw count is the uint32 at its offset, at most `maxDrawCount`.
+    virtual SLANG_NO_THROW void SLANG_MCALL drawMeshTasksIndirect(
+        uint32_t maxDrawCount,
+        BufferOffsetPair argBuffer,
+        BufferOffsetPair countBuffer = {}
+    ) = 0;
 };
 
 class IComputePassEncoder : public IPassEncoder
