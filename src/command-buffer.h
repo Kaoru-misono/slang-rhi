@@ -132,6 +132,11 @@ public:
         BufferOffsetPair countBuffer
     ) override;
     virtual SLANG_NO_THROW void SLANG_MCALL drawMeshTasks(uint32_t x, uint32_t y, uint32_t z) override;
+    virtual SLANG_NO_THROW void SLANG_MCALL drawMeshTasksIndirect(
+        uint32_t maxDrawCount,
+        BufferOffsetPair argBuffer,
+        BufferOffsetPair countBuffer
+    ) override;
 
     // IPassEncoder implementation
     virtual SLANG_NO_THROW void SLANG_MCALL pushDebugGroup(const char* name, const MarkerColor& color) override;

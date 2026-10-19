@@ -167,6 +167,24 @@ void RenderPassEncoder::drawMeshTasks(uint32_t x, uint32_t y, uint32_t z)
     }
 }
 
+void RenderPassEncoder::drawMeshTasksIndirect(
+    uint32_t maxDrawCount,
+    BufferOffsetPair argBuffer,
+    BufferOffsetPair countBuffer
+)
+{
+    if (m_commandList)
+    {
+        if (SLANG_FAILED(writeRenderState()))
+            return;
+        commands::DrawMeshTasksIndirect cmd;
+        cmd.maxDrawCount = maxDrawCount;
+        cmd.argBuffer = argBuffer;
+        cmd.countBuffer = countBuffer;
+        m_commandList->write(std::move(cmd));
+    }
+}
+
 void RenderPassEncoder::pushDebugGroup(const char* name, const MarkerColor& color)
 {
     if (m_commandList)
