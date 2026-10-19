@@ -18,16 +18,17 @@ struct DrawMeshTasksArgs
     uint32_t z;
 };
 
-// The count and the records start away from offset 0. The first record lights column 0, the second all columns.
+// The count and the records start away from offset 0. The first record draws nothing, the second lights column 0,
+// the third all columns. A count read at the records' offset would be the first record's 0.
 struct IndirectData
 {
     uint32_t padding0;
     uint32_t count;
     uint32_t padding1[2];
-    DrawMeshTasksArgs args[2];
+    DrawMeshTasksArgs args[3];
 };
 
-const IndirectData kIndirectData = {0, 1, {0, 0}, {{1, 1, 1}, {kColumnCount, 1, 1}}};
+const IndirectData kIndirectData = {0, 2, {0, 0}, {{0, 1, 1}, {1, 1, 1}, {kColumnCount, 1, 1}}};
 
 // Draws up to `maxDrawCount` records, counted by `kIndirectData.count` when `useCount` is set, and returns which
 // columns were lit.
@@ -113,8 +114,8 @@ GPU_TEST_CASE("cmd-draw-mesh-tasks-indirect", D3D12 | Vulkan)
     if (!device->hasFeature(Feature::MeshShader))
         SKIP("mesh shaders not supported");
 
-    CHECK(drawColumns(device, 1, false) == std::array<bool, kColumnCount>{true, false, false, false});
-    CHECK(drawColumns(device, 2, false) == std::array<bool, kColumnCount>{true, true, true, true});
+    CHECK(drawColumns(device, 2, false) == std::array<bool, kColumnCount>{true, false, false, false});
+    CHECK(drawColumns(device, 3, false) == std::array<bool, kColumnCount>{true, true, true, true});
 }
 
 GPU_TEST_CASE("cmd-draw-mesh-tasks-indirect-count", D3D12 | Vulkan)
@@ -122,6 +123,6 @@ GPU_TEST_CASE("cmd-draw-mesh-tasks-indirect-count", D3D12 | Vulkan)
     if (!device->hasFeature(Feature::MeshShader))
         SKIP("mesh shaders not supported");
 
-    // The count buffer holds 1, below the maximum of 2.
-    CHECK(drawColumns(device, 2, true) == std::array<bool, kColumnCount>{true, false, false, false});
+    // The count buffer holds 2, below the maximum of 3.
+    CHECK(drawColumns(device, 3, true) == std::array<bool, kColumnCount>{true, false, false, false});
 }
