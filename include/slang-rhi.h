@@ -3670,7 +3670,8 @@ struct DeviceDesc
 
     // Interface to persistent shader cache.
     IPersistentCache* persistentShaderCache = nullptr;
-    // Interface to persistent pipeline cache.
+    // Interface to persistent pipeline cache, used only when the device reports Feature::PipelineCache.
+    // A Vulkan device reports it when the driver leaves keeping pipeline binaries to the application.
     IPersistentCache* persistentPipelineCache = nullptr;
 
     /// NVAPI shader extension uav slot (-1 disables the extension).

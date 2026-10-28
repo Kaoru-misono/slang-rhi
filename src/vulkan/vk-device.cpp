@@ -1250,10 +1250,7 @@ Result DeviceImpl::initVulkanDevice(
             extendedFeatures.pipelineBinaryFeatures,
             pipelineBinaries,
             VK_KHR_PIPELINE_BINARY_EXTENSION_NAME,
-            {
-                deviceExtensions.push_back(VK_KHR_MAINTENANCE_5_EXTENSION_NAME);
-                availableFeatures.push_back(Feature::PipelineCache);
-            }
+            { deviceExtensions.push_back(VK_KHR_MAINTENANCE_5_EXTENSION_NAME); }
         );
 
         SIMPLE_EXTENSION_FEATURE(
@@ -1323,12 +1320,26 @@ Result DeviceImpl::initVulkanDevice(
             VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_PIPELINE_PROPERTIES_KHR
         };
         VkPhysicalDeviceSubgroupProperties subgroupProps = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SUBGROUP_PROPERTIES};
+        VkPhysicalDevicePipelineBinaryPropertiesKHR pipelineBinaryProps = {
+            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PIPELINE_BINARY_PROPERTIES_KHR
+        };
 
         EXTEND_DESC_CHAIN(extendedProps, rtpProps);
         EXTEND_DESC_CHAIN(extendedProps, subgroupProps);
+        if (extendedFeatures.pipelineBinaryFeatures.pipelineBinaries)
+        {
+            EXTEND_DESC_CHAIN(extendedProps, pipelineBinaryProps);
+        }
 
         m_api.vkGetPhysicalDeviceProperties2(m_api.m_physicalDevice, &extendedProps);
         m_api.m_rayTracingPipelineProperties = rtpProps;
+
+        // Pipeline binaries are worth capturing only for a driver that leaves keeping them to the application.
+        if (extendedFeatures.pipelineBinaryFeatures.pipelineBinaries &&
+            !pipelineBinaryProps.pipelineBinaryPrefersInternalCache)
+        {
+            availableFeatures.push_back(Feature::PipelineCache);
+        }
 
         // Approximate DX12's WaveOps boolean
         if (subgroupProps.supportedOperations & kWaveOpsSubgroupFeatureMask)
