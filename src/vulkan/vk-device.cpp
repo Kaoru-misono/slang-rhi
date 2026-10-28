@@ -682,6 +682,7 @@ Result DeviceImpl::initVulkanDevice(
                                extensionNames.count(VK_EXT_SUBGROUP_SIZE_CONTROL_EXTENSION_NAME) != 0;
 
     auto& extendedFeatures = m_api.m_extendedFeatures;
+    bool pipelineBinaryPrefersInternalCache = false;
 
 #define EXTEND_DESC_CHAIN(head_, desc_)                                                                                \
     {                                                                                                                  \
@@ -1361,12 +1362,20 @@ Result DeviceImpl::initVulkanDevice(
             VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_PIPELINE_PROPERTIES_KHR
         };
         VkPhysicalDeviceSubgroupProperties subgroupProps = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SUBGROUP_PROPERTIES};
+        VkPhysicalDevicePipelineBinaryPropertiesKHR pipelineBinaryProps = {
+            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PIPELINE_BINARY_PROPERTIES_KHR
+        };
 
         EXTEND_DESC_CHAIN(extendedProps, rtpProps);
         EXTEND_DESC_CHAIN(extendedProps, subgroupProps);
+        if (extendedFeatures.pipelineBinaryFeatures.pipelineBinaries)
+        {
+            EXTEND_DESC_CHAIN(extendedProps, pipelineBinaryProps);
+        }
 
         m_api.vkGetPhysicalDeviceProperties2(m_api.m_physicalDevice, &extendedProps);
         m_api.m_rayTracingPipelineProperties = rtpProps;
+        pipelineBinaryPrefersInternalCache = pipelineBinaryProps.pipelineBinaryPrefersInternalCache;
 
         // Approximate DX12's WaveOps boolean
         if (subgroupProps.supportedOperations & kWaveOpsSubgroupFeatureMask)
@@ -1678,9 +1687,10 @@ Result DeviceImpl::initVulkanDevice(
         m_calibratedTimestampSupport = {};
     }
 
-    if (m_api.m_extendedFeatures.pipelineBinaryFeatures.pipelineBinaries && m_api.vkGetPipelineKeyKHR &&
-        m_api.vkCreatePipelineBinariesKHR && m_api.vkGetPipelineBinaryDataKHR && m_api.vkDestroyPipelineBinaryKHR &&
-        m_api.vkReleaseCapturedPipelineDataKHR)
+    // Pipeline binaries are worth capturing only for a driver that leaves keeping them to the application.
+    if (m_api.m_extendedFeatures.pipelineBinaryFeatures.pipelineBinaries && !pipelineBinaryPrefersInternalCache &&
+        m_api.vkGetPipelineKeyKHR && m_api.vkCreatePipelineBinariesKHR && m_api.vkGetPipelineBinaryDataKHR &&
+        m_api.vkDestroyPipelineBinaryKHR && m_api.vkReleaseCapturedPipelineDataKHR)
     {
         availableFeatures.push_back(Feature::PipelineCache);
     }
