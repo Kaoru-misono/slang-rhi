@@ -14,6 +14,7 @@
 #include <climits>
 
 #include <string>
+#include <type_traits>
 
 namespace rhi::d3d12 {
 
@@ -54,6 +55,40 @@ inline void hashDevice(SHA1& sha1, DeviceImpl* device)
     sha1.update(luid.luid, sizeof(luid.luid));
 }
 
+template<typename PipelineDesc>
+void hashGraphicsState(SHA1& sha1, const PipelineDesc* desc)
+{
+    hashValue(sha1, desc->BlendState);
+    hashValue(sha1, desc->SampleMask);
+    hashValue(sha1, desc->RasterizerState);
+    hashValue(sha1, desc->DepthStencilState);
+    if constexpr (std::is_same_v<PipelineDesc, D3D12_GRAPHICS_PIPELINE_STATE_DESC>)
+    {
+        for (uint32_t i = 0; i < desc->InputLayout.NumElements; ++i)
+        {
+            const D3D12_INPUT_ELEMENT_DESC& element = desc->InputLayout.pInputElementDescs[i];
+            hashString(sha1, element.SemanticName);
+            hashValue(sha1, element.SemanticIndex);
+            hashValue(sha1, element.Format);
+            hashValue(sha1, element.InputSlot);
+            hashValue(sha1, element.AlignedByteOffset);
+            hashValue(sha1, element.InputSlotClass);
+            hashValue(sha1, element.InstanceDataStepRate);
+        }
+        hashValue(sha1, desc->IBStripCutValue);
+    }
+    hashValue(sha1, desc->PrimitiveTopologyType);
+    hashValue(sha1, desc->NumRenderTargets);
+    for (uint32_t i = 0; i < desc->NumRenderTargets; i++)
+    {
+        hashValue(sha1, desc->RTVFormats[i]);
+    }
+    hashValue(sha1, desc->DSVFormat);
+    hashValue(sha1, desc->SampleDesc);
+    hashValue(sha1, desc->NodeMask);
+    hashValue(sha1, desc->Flags);
+}
+
 inline void hashPipelineDesc(SHA1& sha1, const D3D12_GRAPHICS_PIPELINE_STATE_DESC* desc)
 {
     hashShader(sha1, desc->VS);
@@ -76,32 +111,15 @@ inline void hashPipelineDesc(SHA1& sha1, const D3D12_GRAPHICS_PIPELINE_STATE_DES
         hashValue(sha1, desc->StreamOutput.pBufferStrides[i]);
     }
     hashValue(sha1, desc->StreamOutput.RasterizedStream);
-    hashValue(sha1, desc->BlendState);
-    hashValue(sha1, desc->SampleMask);
-    hashValue(sha1, desc->RasterizerState);
-    hashValue(sha1, desc->DepthStencilState);
-    for (uint32_t i = 0; i < desc->InputLayout.NumElements; ++i)
-    {
-        const D3D12_INPUT_ELEMENT_DESC& element = desc->InputLayout.pInputElementDescs[i];
-        hashString(sha1, element.SemanticName);
-        hashValue(sha1, element.SemanticIndex);
-        hashValue(sha1, element.Format);
-        hashValue(sha1, element.InputSlot);
-        hashValue(sha1, element.AlignedByteOffset);
-        hashValue(sha1, element.InputSlotClass);
-        hashValue(sha1, element.InstanceDataStepRate);
-    }
-    hashValue(sha1, desc->IBStripCutValue);
-    hashValue(sha1, desc->PrimitiveTopologyType);
-    hashValue(sha1, desc->NumRenderTargets);
-    for (uint32_t i = 0; i < desc->NumRenderTargets; i++)
-    {
-        hashValue(sha1, desc->RTVFormats[i]);
-    }
-    hashValue(sha1, desc->DSVFormat);
-    hashValue(sha1, desc->SampleDesc);
-    hashValue(sha1, desc->NodeMask);
-    hashValue(sha1, desc->Flags);
+    hashGraphicsState(sha1, desc);
+}
+
+inline void hashPipelineDesc(SHA1& sha1, const D3DX12_MESH_SHADER_PIPELINE_STATE_DESC* desc)
+{
+    hashShader(sha1, desc->AS);
+    hashShader(sha1, desc->MS);
+    hashShader(sha1, desc->PS);
+    hashGraphicsState(sha1, desc);
 }
 
 inline void hashPipelineDesc(SHA1& sha1, const D3D12_COMPUTE_PIPELINE_STATE_DESC* desc)
@@ -111,21 +129,8 @@ inline void hashPipelineDesc(SHA1& sha1, const D3D12_COMPUTE_PIPELINE_STATE_DESC
     hashValue(sha1, desc->Flags);
 }
 
-inline void getPipelineCacheKey(
-    DeviceImpl* device,
-    const D3D12_GRAPHICS_PIPELINE_STATE_DESC* desc,
-    ISlangBlob** outBlob
-)
-{
-    SHA1 sha1;
-    hashDevice(sha1, device);
-    hashPipelineDesc(sha1, desc);
-    SHA1::Digest digest = sha1.getDigest();
-    ComPtr<ISlangBlob> blob = OwnedBlob::create(digest.data(), digest.size());
-    returnComPtr(outBlob, blob);
-}
-
-inline void getPipelineCacheKey(DeviceImpl* device, const D3D12_COMPUTE_PIPELINE_STATE_DESC* desc, ISlangBlob** outBlob)
+template<typename PipelineDesc>
+void getPipelineCacheKey(DeviceImpl* device, const PipelineDesc* desc, ISlangBlob** outBlob)
 {
     SHA1 sha1;
     hashDevice(sha1, device);
@@ -368,12 +373,26 @@ Result DeviceImpl::createRenderPipeline2(const RenderPipelineDesc& desc, IRender
             }
         }
         fillCommonGraphicsState(meshDesc);
-        CD3DX12_PIPELINE_STATE_STREAM2 meshStateStream{meshDesc};
-        D3D12_PIPELINE_STATE_STREAM_DESC streamDesc{sizeof(meshStateStream), &meshStateStream};
-        SLANG_D3D_RETURN_ON_FAIL_REPORT(
-            m_device5->CreatePipelineState(&streamDesc, IID_PPV_ARGS(pipelineState.writeRef())),
-            this
+        Result result = createPipelineWithCache<D3DX12_MESH_SHADER_PIPELINE_STATE_DESC, ID3D12PipelineState>(
+            this,
+            &meshDesc,
+            [](DeviceImpl* device,
+               D3DX12_MESH_SHADER_PIPELINE_STATE_DESC* desc,
+               ID3D12PipelineState** outPipeline) -> Result
+            {
+                CD3DX12_PIPELINE_STATE_STREAM2 meshStateStream{*desc};
+                D3D12_PIPELINE_STATE_STREAM_DESC streamDesc{sizeof(meshStateStream), &meshStateStream};
+                SLANG_D3D_RETURN_ON_FAIL(
+                    device->m_device5->CreatePipelineState(&streamDesc, IID_PPV_ARGS(outPipeline))
+                );
+                return SLANG_OK;
+            },
+            pipelineState.writeRef(),
+            cached,
+            cacheSize,
+            cacheKey
         );
+        SLANG_RETURN_ON_FAIL(result);
     }
     else
     {

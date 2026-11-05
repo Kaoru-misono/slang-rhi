@@ -282,7 +282,7 @@ struct PipelineCacheTestCompute : PipelineCacheTest
     }
 };
 
-template<bool Corrupt>
+template<bool Corrupt, bool Mesh = false>
 struct PipelineCacheTestRender : PipelineCacheTest
 {
     ComPtr<IRenderPipeline> renderPipeline;
@@ -290,13 +290,6 @@ struct PipelineCacheTestRender : PipelineCacheTest
 
     std::string renderShaderMagenta = std::string(
         R"(
-        [shader("vertex")]
-        float4 vertexMain(uint vid: SV_VertexID) : SV_Position
-        {
-            float2 uv = float2((vid << 1) & 2, vid & 2);
-            return float4(uv * float2(2, -2) + float2(-1, 1), 0, 1);
-        }
-
         // Fragment Shader
 
         [shader("fragment")]
@@ -310,13 +303,6 @@ struct PipelineCacheTestRender : PipelineCacheTest
 
     std::string renderShaderCyan = std::string(
         R"(
-        [shader("vertex")]
-        float4 vertexMain(uint vid: SV_VertexID) : SV_Position
-        {
-            float2 uv = float2((vid << 1) & 2, vid & 2);
-            return float4(uv * float2(2, -2) + float2(-1, 1), 0, 1);
-        }
-
         [shader("fragment")]
         float4 fragmentMain()
             : SV_Target
@@ -344,9 +330,49 @@ struct PipelineCacheTestRender : PipelineCacheTest
     void createRenderPipeline(std::string_view shaderSource, bool enableBlend)
     {
         ComPtr<IShaderProgram> shaderProgram;
-        REQUIRE_CALL(
-            loadRenderProgramFromSource(device, shaderSource, "vertexMain", "fragmentMain", shaderProgram.writeRef())
-        );
+        std::string source = R"(
+            float4 vertexPosition(uint vid)
+            {
+                float2 uv = float2((vid << 1) & 2, vid & 2);
+                return float4(uv * float2(2, -2) + float2(-1, 1), 0, 1);
+            }
+        )";
+        source += shaderSource;
+        if constexpr (Mesh)
+        {
+            source += R"(
+                struct MeshVertex { float4 position : SV_Position; };
+                [shader("mesh")]
+                [numthreads(1, 1, 1)]
+                [outputtopology("triangle")]
+                void meshMain(OutputVertices<MeshVertex, 3> vertices, OutputIndices<uint3, 1> triangles)
+                {
+                    SetMeshOutputCounts(3, 1);
+                    for (uint i = 0; i < 3; ++i)
+                    {
+                        vertices[i].position = vertexPosition(i);
+                    }
+                    triangles[0] = uint3(0, 1, 2);
+                }
+            )";
+        }
+        else
+        {
+            source += R"(
+                [shader("vertex")]
+                float4 vertexMain(uint vid: SV_VertexID) : SV_Position
+                {
+                    return vertexPosition(vid);
+                }
+            )";
+        }
+        REQUIRE_CALL(loadRenderProgramFromSource(
+            device,
+            source,
+            Mesh ? "meshMain" : "vertexMain",
+            "fragmentMain",
+            shaderProgram.writeRef()
+        ));
 
         RenderPipelineDesc pipelineDesc = {};
         pipelineDesc.program = shaderProgram.get();
@@ -375,9 +401,16 @@ struct PipelineCacheTestRender : PipelineCacheTest
         renderState.scissorRects[0] = ScissorRect::fromSize(2, 2);
         renderState.scissorRectCount = 1;
         passEncoder->setRenderState(renderState);
-        DrawArguments drawArgs = {};
-        drawArgs.vertexCount = 3;
-        passEncoder->draw(drawArgs);
+        if constexpr (Mesh)
+        {
+            passEncoder->drawMeshTasks(1, 1, 1);
+        }
+        else
+        {
+            DrawArguments drawArgs = {};
+            drawArgs.vertexCount = 3;
+            passEncoder->draw(drawArgs);
+        }
         passEncoder->end();
         queue->submit(commandEncoder->finish());
         queue->waitOnHost();
@@ -406,17 +439,27 @@ struct PipelineCacheTestRender : PipelineCacheTest
 
     void runTests()
     {
-        // Cache is cold and we expect 2 misses for different programs and blend configurations.
+        // Vary the shader and blend state independently so either missing key input causes a collision.
         createDevice();
         if (!device->hasFeature(Feature::PipelineCache))
             SKIP("Pipeline cache is not supported on this device type.");
-        runRenderPipeline(renderShaderMagenta, false, {1.f, 0.f, 1.f, 1.f});
-        runRenderPipeline(renderShaderCyan, true, {0.f, 1.f, 1.f, 1.f});
-        CHECK_EQ(getStats().writeCount, 2);
-        CHECK_EQ(getStats().queryCount, 2);
-        CHECK_EQ(getStats().missCount, 2);
+        if constexpr (Mesh)
+        {
+            if (!device->hasFeature(Feature::MeshShader))
+                SKIP("Mesh shaders are not supported on this device type.");
+        }
+        const auto runPipelines = [&]()
+        {
+            runRenderPipeline(renderShaderMagenta, false, {1.f, 0.f, 1.f, 1.f});
+            runRenderPipeline(renderShaderCyan, false, {0.f, 1.f, 1.f, 1.f});
+            runRenderPipeline(renderShaderMagenta, true, {1.f, 0.f, 1.f, 1.f});
+        };
+        runPipelines();
+        CHECK_EQ(getStats().writeCount, 3);
+        CHECK_EQ(getStats().queryCount, 3);
+        CHECK_EQ(getStats().missCount, 3);
         CHECK_EQ(getStats().hitCount, 0);
-        CHECK_EQ(getStats().entryCount, 2);
+        CHECK_EQ(getStats().entryCount, 3);
 
         // Corrupt the cache.
         if constexpr (Corrupt)
@@ -424,15 +467,14 @@ struct PipelineCacheTestRender : PipelineCacheTest
             pipelineCache.corrupt();
         }
 
-        // Cache is hot and we expect 2 hits.
+        // A new device must load the same pipelines without rewriting their blobs.
         createDevice();
-        runRenderPipeline(renderShaderMagenta, false, {1.f, 0.f, 1.f, 1.f});
-        runRenderPipeline(renderShaderCyan, true, {0.f, 1.f, 1.f, 1.f});
-        CHECK_EQ(getStats().writeCount, Corrupt ? 4 : 2);
-        CHECK_EQ(getStats().queryCount, 4);
-        CHECK_EQ(getStats().missCount, 2);
-        CHECK_EQ(getStats().hitCount, 2);
-        CHECK_EQ(getStats().entryCount, 2);
+        runPipelines();
+        CHECK_EQ(getStats().writeCount, Corrupt ? 6 : 3);
+        CHECK_EQ(getStats().queryCount, 6);
+        CHECK_EQ(getStats().missCount, 3);
+        CHECK_EQ(getStats().hitCount, 3);
+        CHECK_EQ(getStats().entryCount, 3);
     }
 };
 
@@ -549,7 +591,14 @@ GPU_TEST_CASE("pipeline-cache-compute-corrupt", Vulkan | DontCreateDevice)
 
 GPU_TEST_CASE("pipeline-cache-render", D3D12 | Vulkan | DontCreateDevice)
 {
-    runTest<PipelineCacheTestRender<false>>(ctx);
+    SUBCASE("vertex")
+    {
+        runTest<PipelineCacheTestRender<false>>(ctx);
+    }
+    SUBCASE("mesh")
+    {
+        runTest<PipelineCacheTestRender<false, true>>(ctx);
+    }
 }
 
 GPU_TEST_CASE("pipeline-cache-ray-tracing", Vulkan | DontCreateDevice)
