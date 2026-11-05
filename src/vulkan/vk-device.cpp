@@ -1927,11 +1927,10 @@ Result DeviceImpl::initialize(const DeviceDesc& desc, BackendImpl* backend)
         m_api.vkGetPhysicalDeviceFormatProperties2(m_api.m_physicalDevice, vkFormat, &props2);
 
         VkFormatFeatureFlags bf = props2.formatProperties.bufferFeatures;
-        VkFormatFeatureFlags ltf = props2.formatProperties.linearTilingFeatures;
         VkFormatFeatureFlags otf = props2.formatProperties.optimalTilingFeatures;
 
-        UPDATE_FLAGS(ltf, VK_FORMAT_FEATURE_2_TRANSFER_SRC_BIT, FormatSupport::CopySource);
-        UPDATE_FLAGS(ltf, VK_FORMAT_FEATURE_2_TRANSFER_DST_BIT, FormatSupport::CopyDestination);
+        UPDATE_FLAGS(otf, VK_FORMAT_FEATURE_2_TRANSFER_SRC_BIT, FormatSupport::CopySource);
+        UPDATE_FLAGS(otf, VK_FORMAT_FEATURE_2_TRANSFER_DST_BIT, FormatSupport::CopyDestination);
 
         if (otf)
         {
@@ -1957,8 +1956,10 @@ Result DeviceImpl::initialize(const DeviceDesc& desc, BackendImpl* backend)
             imageInfo.flags = 0; // TODO: kinda needed, but unknown here
 
             imageInfo.usage = VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
-            if (is_set(formatSupport, FormatSupport::Texture))
+            if (is_set(formatSupport, FormatSupport::ShaderLoad))
                 imageInfo.usage |= VK_IMAGE_USAGE_SAMPLED_BIT;
+            if (is_set(formatSupport, FormatSupport::ShaderUavStore))
+                imageInfo.usage |= VK_IMAGE_USAGE_STORAGE_BIT;
             if (is_set(formatSupport, FormatSupport::RenderTarget))
                 imageInfo.usage |= VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
             if (is_set(formatSupport, FormatSupport::DepthStencil))

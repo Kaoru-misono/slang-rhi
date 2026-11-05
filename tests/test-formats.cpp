@@ -4,6 +4,15 @@
 
 #include <map>
 
+#if SLANG_RHI_ENABLE_D3D12
+#include "d3d/d3d-utils.h"
+#include <d3d12.h>
+#endif
+#if SLANG_RHI_ENABLE_VULKAN
+#include "vulkan/vk-api.h"
+#include "vulkan/vk-utils.h"
+#endif
+
 using namespace rhi;
 using namespace rhi::testing;
 
@@ -731,4 +740,93 @@ GPU_TEST_CASE("formats", ALL & ~CPU)
     TestFormats test;
     test.init(device);
     test.run();
+}
+
+GPU_TEST_CASE("format-support-native", D3D12 | Vulkan)
+{
+    DeviceNativeHandles handles{};
+    REQUIRE_CALL(device->getNativeDeviceHandles(&handles));
+#if SLANG_RHI_ENABLE_D3D12
+    if (device->getDeviceType() == DeviceType::D3D12)
+    {
+        auto nativeDevice = reinterpret_cast<ID3D12Device*>(handles.handles[0].value);
+        for (Format format : {Format::D16Unorm, Format::D32Float, Format::D32FloatS8Uint})
+        {
+            CAPTURE(format);
+            const auto& mapping = getFormatMapping(format);
+            D3D12_FEATURE_DATA_FORMAT_SUPPORT resourceSupport{mapping.rtvFormat};
+            D3D12_FEATURE_DATA_FORMAT_SUPPORT srvSupport{mapping.srvFormat};
+            REQUIRE(SUCCEEDED(nativeDevice->CheckFeatureSupport(
+                D3D12_FEATURE_FORMAT_SUPPORT,
+                &resourceSupport,
+                sizeof(resourceSupport)
+            )));
+            REQUIRE(SUCCEEDED(
+                nativeDevice->CheckFeatureSupport(D3D12_FEATURE_FORMAT_SUPPORT, &srvSupport, sizeof(srvSupport))
+            ));
+            FormatSupport support{};
+            REQUIRE_CALL(device->getFormatSupport(format, &support));
+            const bool nativeDepth = (resourceSupport.Support1 & D3D12_FORMAT_SUPPORT1_DEPTH_STENCIL) != 0;
+            const bool nativeStore = (resourceSupport.Support2 & D3D12_FORMAT_SUPPORT2_UAV_TYPED_STORE) != 0;
+            CHECK(is_set(support, FormatSupport::DepthStencil) == nativeDepth);
+            CHECK(is_set(support, FormatSupport::ShaderUavStore) == nativeStore);
+            CHECK(
+                is_set(support, FormatSupport::ShaderLoad) ==
+                bool(srvSupport.Support1 & D3D12_FORMAT_SUPPORT1_SHADER_LOAD)
+            );
+        }
+    }
+#endif
+#if SLANG_RHI_ENABLE_VULKAN
+    if (device->getDeviceType() == DeviceType::Vulkan)
+    {
+        rhi::vk::VulkanModule module;
+        REQUIRE_CALL(module.init());
+        rhi::vk::VulkanApi api{};
+        REQUIRE_CALL(api.initGlobalProcs(module));
+        REQUIRE_CALL(api.initInstanceProcs(reinterpret_cast<VkInstance>(handles.handles[0].value)));
+        auto physicalDevice = reinterpret_cast<VkPhysicalDevice>(handles.handles[1].value);
+        for (Format format : {Format::R64Uint, Format::D16Unorm, Format::D32Float, Format::D32FloatS8Uint})
+        {
+            CAPTURE(format);
+            VkFormatProperties2 properties{VK_STRUCTURE_TYPE_FORMAT_PROPERTIES_2};
+            api.vkGetPhysicalDeviceFormatProperties2(physicalDevice, rhi::vk::getVkFormat(format), &properties);
+            const auto features = properties.formatProperties.optimalTilingFeatures;
+            FormatSupport support{};
+            REQUIRE_CALL(device->getFormatSupport(format, &support));
+            VkPhysicalDeviceImageFormatInfo2 imageInfo{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_IMAGE_FORMAT_INFO_2};
+            imageInfo.format = rhi::vk::getVkFormat(format);
+            imageInfo.type = VK_IMAGE_TYPE_2D;
+            imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
+            imageInfo.usage = VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+            if (features & VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT)
+                imageInfo.usage |= VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+            if (features & VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT)
+                imageInfo.usage |= VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
+            if (features & VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT)
+                imageInfo.usage |= VK_IMAGE_USAGE_SAMPLED_BIT;
+            if (features & VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT)
+                imageInfo.usage |= VK_IMAGE_USAGE_STORAGE_BIT;
+            VkImageFormatProperties2 imageProperties{VK_STRUCTURE_TYPE_IMAGE_FORMAT_PROPERTIES_2};
+            const VkResult result =
+                api.vkGetPhysicalDeviceImageFormatProperties2(physicalDevice, &imageInfo, &imageProperties);
+            if (format == Format::R64Uint && (features & VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT))
+                REQUIRE(result == VK_SUCCESS);
+            if (!features || result != VK_SUCCESS)
+            {
+                CHECK_FALSE(is_set(support, FormatSupport::Texture));
+                continue;
+            }
+            CHECK(is_set(support, FormatSupport::Texture));
+            CHECK(is_set(support, FormatSupport::ShaderLoad) == bool(features & VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT));
+            CHECK(
+                is_set(support, FormatSupport::ShaderUavStore) == bool(features & VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT)
+            );
+            CHECK(is_set(support, FormatSupport::CopySource) == bool(features & VK_FORMAT_FEATURE_TRANSFER_SRC_BIT));
+            CHECK(
+                is_set(support, FormatSupport::CopyDestination) == bool(features & VK_FORMAT_FEATURE_TRANSFER_DST_BIT)
+            );
+        }
+    }
+#endif
 }

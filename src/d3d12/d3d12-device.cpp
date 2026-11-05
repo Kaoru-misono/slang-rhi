@@ -1186,7 +1186,7 @@ Result DeviceImpl::initialize(const DeviceDesc& desc, BackendImpl* backend)
 #define UPDATE_FLAGS(d3dFlags, formatSupportFlags)                                                                     \
     formatSupport |= (flags & d3dFlags) ? formatSupportFlags : FormatSupport::None;
 
-        D3D12_FEATURE_DATA_FORMAT_SUPPORT d3dFormatSupport = {formatMapping.srvFormat};
+        D3D12_FEATURE_DATA_FORMAT_SUPPORT d3dFormatSupport = {formatMapping.rtvFormat};
         if (SLANG_SUCCEEDED(
                 m_device->CheckFeatureSupport(D3D12_FEATURE_FORMAT_SUPPORT, &d3dFormatSupport, sizeof(d3dFormatSupport))
             ))
@@ -1219,6 +1219,20 @@ Result DeviceImpl::initialize(const DeviceDesc& desc, BackendImpl* backend)
                      D3D12_FORMAT_SUPPORT2_UAV_ATOMIC_UNSIGNED_MIN_OR_MAX),
                     FormatSupport::ShaderAtomic
                 );
+            }
+        }
+
+        // Depth resources and their shader views use different typed formats.
+        if (formatMapping.srvFormat != formatMapping.rtvFormat)
+        {
+            D3D12_FEATURE_DATA_FORMAT_SUPPORT srvSupport = {formatMapping.srvFormat};
+            if (SLANG_SUCCEEDED(
+                    m_device->CheckFeatureSupport(D3D12_FEATURE_FORMAT_SUPPORT, &srvSupport, sizeof(srvSupport))
+                ))
+            {
+                UINT flags = srvSupport.Support1;
+                UPDATE_FLAGS(D3D12_FORMAT_SUPPORT1_SHADER_LOAD, FormatSupport::ShaderLoad);
+                UPDATE_FLAGS(D3D12_FORMAT_SUPPORT1_SHADER_SAMPLE, FormatSupport::ShaderSample);
             }
         }
 
