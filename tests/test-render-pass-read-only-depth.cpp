@@ -86,8 +86,7 @@ static void testReadOnlyDepth(IDevice* device, Format depthFormat)
     CHECK(equal);
 }
 
-// D3D12 is excluded: it binds a writable DSV while the depth texture is in the DepthRead state.
-GPU_TEST_CASE("render-pass-read-only-depth", Vulkan | Metal | WGPU)
+GPU_TEST_CASE("render-pass-read-only-depth", D3D12 | Vulkan | Metal | WGPU)
 {
     testReadOnlyDepth(device, Format::D32Float);
     testReadOnlyDepth(device, Format::D32FloatS8Uint);

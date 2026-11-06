@@ -774,6 +774,11 @@ void CommandRecorder::cmdBeginRenderPass(const commands::BeginRenderPass& cmd)
             attachment.depthReadOnly ? ResourceState::DepthRead : ResourceState::DepthWrite;
         requireTextureState(view->m_texture, view->m_desc.subresourceRange, depthStencilState);
         VkImageLayout depthStencilLayout = translateImageLayout(depthStencilState);
+        // A read-only attachment keeps its contents, and STORE would count as an attachment write for synchronization.
+        auto storeOp = [&](StoreOp op)
+        {
+            return attachment.depthReadOnly ? VK_ATTACHMENT_STORE_OP_NONE : translateStoreOp(op);
+        };
 
         // Determine render area
         const TextureViewDesc& viewDesc = view->m_desc;
@@ -791,7 +796,7 @@ void CommandRecorder::cmdBeginRenderPass(const commands::BeginRenderPass& cmd)
             depthAttachmentInfo.imageView = checked_cast<TextureViewImpl*>(dsa.view)->getRenderTargetView().imageView;
             depthAttachmentInfo.imageLayout = depthStencilLayout;
             depthAttachmentInfo.loadOp = translateLoadOp(dsa.depthLoadOp);
-            depthAttachmentInfo.storeOp = translateStoreOp(dsa.depthStoreOp);
+            depthAttachmentInfo.storeOp = storeOp(dsa.depthStoreOp);
             depthAttachmentInfo.clearValue.depthStencil.depth = dsa.depthClearValue;
         }
         if (isStencilFormat(view->m_texture->m_vkformat))
@@ -801,7 +806,7 @@ void CommandRecorder::cmdBeginRenderPass(const commands::BeginRenderPass& cmd)
             stencilAttachmentInfo.imageView = checked_cast<TextureViewImpl*>(dsa.view)->getRenderTargetView().imageView;
             stencilAttachmentInfo.imageLayout = depthStencilLayout;
             stencilAttachmentInfo.loadOp = translateLoadOp(dsa.stencilLoadOp);
-            stencilAttachmentInfo.storeOp = translateStoreOp(dsa.stencilStoreOp);
+            stencilAttachmentInfo.storeOp = storeOp(dsa.stencilStoreOp);
             stencilAttachmentInfo.clearValue.depthStencil.stencil = dsa.stencilClearValue;
         }
     }
