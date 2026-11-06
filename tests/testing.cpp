@@ -257,7 +257,8 @@ public:
         }
         else if (type == DebugMessageType::Error)
         {
-            FAIL(msg);
+            // Throwing here would unwind through the native API's callback frames and leave its locks held.
+            FAIL_CHECK(msg);
         }
     }
 
