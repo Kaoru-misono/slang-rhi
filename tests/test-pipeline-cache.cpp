@@ -455,11 +455,17 @@ struct PipelineCacheTestRender : PipelineCacheTest
             runRenderPipeline(renderShaderMagenta, true, {1.f, 0.f, 1.f, 1.f});
         };
         runPipelines();
-        CHECK_EQ(getStats().writeCount, 3);
+        // Vulkan keys a pipeline by the driver's pipeline binary key, which may leave out state the binaries do not
+        // depend on, such as blending, so the two blend states of one shader can share an entry there.
+        const uint32_t entryCount = getStats().entryCount;
+        if (device->getDeviceType() == DeviceType::Vulkan)
+            CHECK_GE(entryCount, 2);
+        else
+            CHECK_EQ(entryCount, 3);
+        CHECK_EQ(getStats().writeCount, entryCount);
         CHECK_EQ(getStats().queryCount, 3);
-        CHECK_EQ(getStats().missCount, 3);
-        CHECK_EQ(getStats().hitCount, 0);
-        CHECK_EQ(getStats().entryCount, 3);
+        CHECK_EQ(getStats().missCount, entryCount);
+        CHECK_EQ(getStats().hitCount, 3 - entryCount);
 
         // Corrupt the cache.
         if constexpr (Corrupt)
@@ -470,11 +476,11 @@ struct PipelineCacheTestRender : PipelineCacheTest
         // A new device must load the same pipelines without rewriting their blobs.
         createDevice();
         runPipelines();
-        CHECK_EQ(getStats().writeCount, Corrupt ? 6 : 3);
+        CHECK_EQ(getStats().writeCount, Corrupt ? 2 * entryCount : entryCount);
         CHECK_EQ(getStats().queryCount, 6);
-        CHECK_EQ(getStats().missCount, 3);
-        CHECK_EQ(getStats().hitCount, 3);
-        CHECK_EQ(getStats().entryCount, 3);
+        CHECK_EQ(getStats().missCount, entryCount);
+        CHECK_EQ(getStats().hitCount, 6 - entryCount);
+        CHECK_EQ(getStats().entryCount, entryCount);
     }
 };
 
