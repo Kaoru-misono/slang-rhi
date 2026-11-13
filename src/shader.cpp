@@ -161,7 +161,19 @@ Result ShaderProgram::prepareEntryPointCompilation(Device* device, std::vector<C
         entryPoint.name = string::from_cstr(reflection->getNameOverride());
         if (device->m_persistentShaderCache)
         {
-            componentType->getEntryPointHash(entryPointIndex, 0, entryPoint.cacheKey.writeRef());
+            // Slang's entry point hash omits the program's other entry points, which can change the
+            // parameter layout (e.g. Vulkan descriptor set assignment), so the key covers all of them.
+            // See https://github.com/shader-slang/slang/issues/14469.
+            SHA1 sha1;
+            for (uint32_t i = 0; i < layout->getEntryPointCount(); i++)
+            {
+                ComPtr<ISlangBlob> hash;
+                componentType->getEntryPointHash(i, 0, hash.writeRef());
+                sha1.update(hash->getBufferPointer(), hash->getBufferSize());
+            }
+            sha1.update(&entryPointIndex, sizeof(entryPointIndex));
+            SHA1::Digest digest = sha1.getDigest();
+            entryPoint.cacheKey = OwnedBlob::create(digest.data(), digest.size());
         }
         outEntryPoints.push_back(std::move(entryPoint));
         return SLANG_OK;
