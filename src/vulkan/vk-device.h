@@ -64,6 +64,14 @@ public:
         const void* initData,
         IBuffer** outBuffer
     ) override;
+    /// Create a buffer that prefers memory with preferredMemoryProperties in addition to what desc selects.
+    Result createBuffer(
+        const BufferDesc& desc,
+        const void* initData,
+        VkMemoryPropertyFlags preferredMemoryProperties,
+        IBuffer** outBuffer
+    );
+    virtual Result createTransientBufferPage(const BufferDesc& desc, IBuffer** outBuffer) override;
 
     /// Stage and submit initialization data for a newly created buffer.
     Result uploadBufferInitData(IBuffer* buffer, Offset offset, Size size, const void* data);

@@ -489,7 +489,24 @@ Result DeviceImpl::uploadBufferInitData(IBuffer* buffer, Offset offset, Size siz
     return SLANG_OK;
 }
 
-Result DeviceImpl::createBuffer(const BufferDesc& desc_, const void* initData, IBuffer** outBuffer)
+Result DeviceImpl::createBuffer(const BufferDesc& desc, const void* initData, IBuffer** outBuffer)
+{
+    return createBuffer(desc, initData, 0, outBuffer);
+}
+
+Result DeviceImpl::createTransientBufferPage(const BufferDesc& desc, IBuffer** outBuffer)
+{
+    // Host-visible memory is system memory that shaders read over PCIe on discrete GPUs. Device-local host-visible
+    // memory (resizable BAR) lets them read transient constants from video memory.
+    return createBuffer(desc, nullptr, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, outBuffer);
+}
+
+Result DeviceImpl::createBuffer(
+    const BufferDesc& desc_,
+    const void* initData,
+    VkMemoryPropertyFlags preferredMemoryProperties,
+    IBuffer** outBuffer
+)
 {
     BufferDesc desc = fixupBufferDesc(desc_);
     if (desc.sharingMode != SharingMode::Exclusive && desc.sharingMode != SharingMode::Concurrent)
@@ -498,7 +515,6 @@ Result DeviceImpl::createBuffer(const BufferDesc& desc_, const void* initData, I
     const Size bufferSize = desc.size;
 
     VkMemoryPropertyFlags reqMemoryProperties = 0;
-    VkMemoryPropertyFlags preferredMemoryProperties = 0;
 
     VkBufferUsageFlags usage = getBufferUsageFlags(m_api, desc);
 
@@ -515,7 +531,7 @@ Result DeviceImpl::createBuffer(const BufferDesc& desc_, const void* initData, I
     {
         // Readback memory is read by the CPU, so prefer a cached memory type.
         // Uncached (write-combined) memory is very slow to read from the CPU.
-        preferredMemoryProperties = VK_MEMORY_PROPERTY_HOST_CACHED_BIT;
+        preferredMemoryProperties |= VK_MEMORY_PROPERTY_HOST_CACHED_BIT;
     }
 
     uint32_t queueFamilies[3] = {};
