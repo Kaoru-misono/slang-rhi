@@ -509,6 +509,10 @@ public:
     /// kept mapped. The default implementation maps the buffer, copies the data and unmaps it.
     virtual Result writeUploadBuffer(Buffer* buffer, Offset offset, Size size, const void* data);
 
+    /// Create a page of a transient buffer heap. Backends may place it in faster memory than the memory type in
+    /// desc alone selects. The default implementation calls createBuffer.
+    virtual Result createTransientBufferPage(const BufferDesc& desc, IBuffer** outBuffer);
+
     virtual Result createRenderPipeline2(const RenderPipelineDesc& desc, IRenderPipeline** outPipeline);
     virtual Result createComputePipeline2(const ComputePipelineDesc& desc, IComputePipeline** outPipeline);
     virtual Result createRayTracingPipeline2(const RayTracingPipelineDesc& desc, IRayTracingPipeline** outPipeline);

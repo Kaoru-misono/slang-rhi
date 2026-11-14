@@ -1072,6 +1072,13 @@ Result DeviceImpl::initialize(const DeviceDesc& desc, BackendImpl* backend)
             }
         }
     }
+    {
+        D3D12_FEATURE_DATA_D3D12_OPTIONS16 options = {};
+        if (SLANG_SUCCEEDED(m_device->CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS16, &options, sizeof(options))))
+        {
+            m_gpuUploadHeapSupported = options.GPUUploadHeapSupported;
+        }
+    }
 
     // Initialize NVAPI
 #if SLANG_RHI_ENABLE_NVAPI
@@ -1360,7 +1367,7 @@ Result DeviceImpl::createBuffer(
     D3D12_RESOURCE_STATES finalState,
     D3D12Resource& resourceOut,
     bool isShared,
-    MemoryType memoryType
+    D3D12_HEAP_TYPE heapType
 )
 {
     const Size bufferSize = Size(resourceDesc.Width);
@@ -1375,23 +1382,21 @@ Result DeviceImpl::createBuffer(
 
     D3D12_RESOURCE_STATES initialState = finalState;
 
-    switch (memoryType)
+    heapProps.Type = heapType;
+    switch (heapType)
     {
-    case MemoryType::ReadBack:
+    case D3D12_HEAP_TYPE_READBACK:
         SLANG_RHI_ASSERT(!srcData);
 
-        heapProps.Type = D3D12_HEAP_TYPE_READBACK;
         desc.Flags = D3D12_RESOURCE_FLAG_NONE;
         initialState |= D3D12_RESOURCE_STATE_COPY_DEST;
         break;
-    case MemoryType::Upload:
-
-        heapProps.Type = D3D12_HEAP_TYPE_UPLOAD;
+    case D3D12_HEAP_TYPE_UPLOAD:
+    case D3D12_HEAP_TYPE_GPU_UPLOAD:
         desc.Flags = D3D12_RESOURCE_FLAG_NONE;
         initialState |= D3D12_RESOURCE_STATE_GENERIC_READ;
         break;
-    case MemoryType::DeviceLocal:
-        heapProps.Type = D3D12_HEAP_TYPE_DEFAULT;
+    case D3D12_HEAP_TYPE_DEFAULT:
         if (initialState != D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE)
             initialState = D3D12_RESOURCE_STATE_COMMON;
         break;
@@ -1408,7 +1413,7 @@ Result DeviceImpl::createBuffer(
     {
         D3D12Resource uploadResource;
 
-        if (memoryType == MemoryType::DeviceLocal)
+        if (heapType == D3D12_HEAP_TYPE_DEFAULT)
         {
             // If the buffer is on the default heap, create upload buffer.
             D3D12_RESOURCE_DESC uploadDesc(resourceDesc);
@@ -1427,7 +1432,7 @@ Result DeviceImpl::createBuffer(
         }
 
         // Be careful not to actually copy a resource here.
-        D3D12Resource& uploadResourceRef = (memoryType == MemoryType::DeviceLocal) ? uploadResource : resourceOut;
+        D3D12Resource& uploadResourceRef = (heapType == D3D12_HEAP_TYPE_DEFAULT) ? uploadResource : resourceOut;
 
         // Copy data to the intermediate upload heap and then schedule a copy
         // from the upload heap to the vertex buffer.
@@ -1440,7 +1445,7 @@ Result DeviceImpl::createBuffer(
         ::memcpy(dstData, srcData, srcDataSize);
         dxUploadResource->Unmap(0, nullptr);
 
-        if (memoryType == MemoryType::DeviceLocal)
+        if (heapType == D3D12_HEAP_TYPE_DEFAULT)
         {
             ID3D12GraphicsCommandList* commandList = beginImmediateCommandList();
             commandList->CopyBufferRegion(resourceOut, 0, uploadResourceRef, 0, bufferSize);
@@ -1730,7 +1735,27 @@ Result DeviceImpl::createTextureFromNativeHandle(NativeHandle handle, const Text
     return SLANG_OK;
 }
 
-Result DeviceImpl::createBuffer(const BufferDesc& desc_, const void* initData, IBuffer** outBuffer)
+Result DeviceImpl::createBuffer(const BufferDesc& desc, const void* initData, IBuffer** outBuffer)
+{
+    return createBuffer(desc, initData, translateHeapType(desc.memoryType), outBuffer);
+}
+
+Result DeviceImpl::createTransientBufferPage(const BufferDesc& desc, IBuffer** outBuffer)
+{
+    // An upload heap lives in system memory, so shaders read transient constants over PCIe. A GPU upload heap is
+    // video memory the CPU writes.
+    D3D12_HEAP_TYPE heapType = translateHeapType(desc.memoryType);
+    if (heapType == D3D12_HEAP_TYPE_UPLOAD && m_gpuUploadHeapSupported)
+        heapType = D3D12_HEAP_TYPE_GPU_UPLOAD;
+    return createBuffer(desc, nullptr, heapType, outBuffer);
+}
+
+Result DeviceImpl::createBuffer(
+    const BufferDesc& desc_,
+    const void* initData,
+    D3D12_HEAP_TYPE heapType,
+    IBuffer** outBuffer
+)
 {
     BufferDesc desc = fixupBufferDesc(desc_);
 
@@ -1820,7 +1845,7 @@ Result DeviceImpl::createBuffer(const BufferDesc& desc_, const void* initData, I
             initialState,
             buffer->m_resource,
             is_set(desc.usage, BufferUsage::Shared),
-            desc.memoryType
+            heapType
         ));
     }
 

@@ -87,7 +87,7 @@ Result TransientBufferHeap::allocatePageLocked(Size size, Page** outPage)
     desc.defaultState = m_desc.defaultState;
 
     ComPtr<IBuffer> buffer;
-    SLANG_RETURN_ON_FAIL(m_device->createBuffer(desc, nullptr, buffer.writeRef()));
+    SLANG_RETURN_ON_FAIL(m_device->createTransientBufferPage(desc, buffer.writeRef()));
 
     RefPtr<Page> page = new Page(m_nextPageId, checked_cast<Buffer*>(buffer.get()));
     SLANG_RETURN_ON_FAIL(m_device->mapBuffer(page->m_buffer, CpuAccessMode::Write, &page->m_mappedData));

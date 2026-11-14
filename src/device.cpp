@@ -395,6 +395,11 @@ Result Device::writeUploadBuffer(Buffer* buffer, Offset offset, Size size, const
     return unmapBuffer(buffer);
 }
 
+Result Device::createTransientBufferPage(const BufferDesc& desc, IBuffer** outBuffer)
+{
+    return createBuffer(desc, nullptr, outBuffer);
+}
+
 Result Device::createRenderPipeline2(const RenderPipelineDesc& desc, IRenderPipeline** outPipeline)
 {
     SLANG_UNUSED(desc);

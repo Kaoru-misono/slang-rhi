@@ -74,6 +74,10 @@ public:
     PFN_EndEventOnCommandList m_EndEventOnCommandList = nullptr;
     PFN_SetMarkerOnCommandList m_SetMarkerOnCommandList = nullptr;
 
+    // A GPU upload heap is CPU-writable video memory: constants written there are read by shaders without a trip
+    // over PCIe to system memory, which is where an upload heap places them.
+    bool m_gpuUploadHeapSupported = false;
+
 #if SLANG_RHI_ENABLE_NVAPI
     bool m_nvapiEnabled = false;
     NVAPIShaderExtension m_nvapiShaderExtension;
@@ -122,6 +126,9 @@ public:
         const void* initData,
         IBuffer** outBuffer
     ) override;
+    /// Create a committed buffer on heapType. A placed buffer (desc.heap) ignores heapType.
+    Result createBuffer(const BufferDesc& desc, const void* initData, D3D12_HEAP_TYPE heapType, IBuffer** outBuffer);
+    virtual Result createTransientBufferPage(const BufferDesc& desc, IBuffer** outBuffer) override;
     virtual SLANG_NO_THROW Result SLANG_MCALL createBufferFromNativeHandle(
         NativeHandle handle,
         const BufferDesc& desc,
@@ -283,7 +290,7 @@ public:
         D3D12_RESOURCE_STATES finalState,
         D3D12Resource& resourceOut,
         bool isShared,
-        MemoryType access = MemoryType::DeviceLocal
+        D3D12_HEAP_TYPE heapType = D3D12_HEAP_TYPE_DEFAULT
     );
 
     struct
