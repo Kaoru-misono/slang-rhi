@@ -61,24 +61,6 @@ public:
         const ShaderOffset& offset,
         const DescriptorHandle& handle
     ) override;
-    virtual SLANG_NO_THROW Result SLANG_MCALL setDescriptorHandle(
-        const ShaderOffset& offset,
-        ITextureView* textureView,
-        DescriptorHandleAccess access
-    ) override;
-    virtual SLANG_NO_THROW Result SLANG_MCALL setDescriptorHandle(
-        const ShaderOffset& offset,
-        IBuffer* buffer,
-        DescriptorHandleAccess access,
-        Format format,
-        uint32_t elementStride,
-        BufferRange range
-    ) override;
-    virtual SLANG_NO_THROW Result SLANG_MCALL setDescriptorHandle(const ShaderOffset& offset, ISampler* sampler) override;
-    virtual SLANG_NO_THROW Result SLANG_MCALL setDescriptorHandle(
-        const ShaderOffset& offset,
-        IAccelerationStructure* accelerationStructure
-    ) override;
     virtual SLANG_NO_THROW Result SLANG_MCALL setSpecializationArgs(
         const ShaderOffset& offset,
         const slang::SpecializationArg* args,
@@ -91,7 +73,6 @@ public:
 
     virtual SLANG_NO_THROW Result SLANG_MCALL finalize() override;
     virtual SLANG_NO_THROW bool SLANG_MCALL isFinalized() override;
-    virtual SLANG_NO_THROW Result SLANG_MCALL reset() override;
 
 public:
     void checkCompleteness();
@@ -137,7 +118,7 @@ public:
     ) override;
 
 public:
-    void detachBaseObject();
+    void reset();
 };
 
 } // namespace rhi::debug

@@ -141,14 +141,10 @@ public:
         };
     };
 
-    /// The resource states one table or one push-constant block needs. A table owns its lists; a block's lists live
-    /// in the command allocator, because nothing about a block is cached.
     struct StateSlice
     {
-        const BufferState* buffers;
-        uint32_t bufferCount;
-        const TextureState* textures;
-        uint32_t textureCount;
+        const std::vector<BufferState>* buffers;
+        const std::vector<TextureState>* textures;
         StateSlice* next;
     };
     StateSlice* stateSlices;

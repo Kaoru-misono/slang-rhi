@@ -808,12 +808,15 @@ GPU_TEST_CASE("bindless-acceleration-structure-handle", D3D12 | Vulkan)
     ComPtr<IBuffer> result;
     REQUIRE_CALL(device->createBuffer(bufferDesc, &zero, result.writeRef()));
 
+    DescriptorHandle sceneHandle;
+    REQUIRE_CALL(tlas.tlas->getDescriptorHandle(&sceneHandle));
+
     auto encoder = queue->createCommandEncoder();
     auto pass = encoder->beginComputePass();
     auto root = pass->bindPipeline(pipeline);
     REQUIRE(root);
     ShaderCursor entry(root->getEntryPoint(0));
-    REQUIRE_CALL(entry["scene"].setDescriptorHandle(tlas.tlas.get()));
+    REQUIRE_CALL(entry["scene"].setDescriptorHandle(sceneHandle));
     REQUIRE_CALL(entry["result"].setBinding(result));
     pass->dispatchCompute(1, 1, 1);
     pass->end();

@@ -649,8 +649,6 @@ ComPtr<IDevice> createTestingDevice(
         deviceDesc.enableRayTracingValidation = extraOptions->enableRayTracingValidation;
         deviceDesc.enableValidation = extraOptions->enableValidation;
         deviceDesc.aftermathFlags = extraOptions->aftermathFlags;
-        deviceDesc.resourceStateMode = extraOptions->resourceStateMode;
-        deviceDesc.validateResourceStates = extraOptions->validateResourceStates;
     }
 
 #ifdef SLANG_RHI_DEBUG

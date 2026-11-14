@@ -1982,26 +1982,6 @@ public:
         const ShaderOffset& offset,
         const DescriptorHandle& handle
     ) = 0;
-    /// Writes the resource's descriptor handle. The shader object keeps the resource alive until it is
-    /// overwritten and transitions it to the state the access needs, as a direct binding would.
-    virtual SLANG_NO_THROW Result SLANG_MCALL setDescriptorHandle(
-        const ShaderOffset& offset,
-        ITextureView* textureView,
-        DescriptorHandleAccess access
-    ) = 0;
-    virtual SLANG_NO_THROW Result SLANG_MCALL setDescriptorHandle(
-        const ShaderOffset& offset,
-        IBuffer* buffer,
-        DescriptorHandleAccess access,
-        Format format,
-        uint32_t elementStride,
-        BufferRange range
-    ) = 0;
-    virtual SLANG_NO_THROW Result SLANG_MCALL setDescriptorHandle(const ShaderOffset& offset, ISampler* sampler) = 0;
-    virtual SLANG_NO_THROW Result SLANG_MCALL setDescriptorHandle(
-        const ShaderOffset& offset,
-        IAccelerationStructure* accelerationStructure
-    ) = 0;
 
     /// Reserves a block of memory within the shader object's internal data buffer at the specified offset.
     /// WARNING: This function bypasses the immutability of a ShaderObject. To use safely, ensure that the address
@@ -2030,13 +2010,6 @@ public:
 
     /// Returns true if the shader object has been finalized.
     virtual SLANG_NO_THROW bool SLANG_MCALL isFinalized() = 0;
-
-    /// Restores the state the shader object had when it was created, so it can be reused for another binding.
-    /// Uniform data is zeroed; bindings, descriptor handles and specialization arguments are cleared; sub-objects
-    /// replaced by `setObject` are restored to the ones created with this object, which are reset recursively, as
-    /// are the entry points of a root object. Objects set from elsewhere are released, never modified.
-    /// Fails if the shader object is finalized.
-    virtual SLANG_NO_THROW Result SLANG_MCALL reset() = 0;
 
     inline ComPtr<IShaderObject> getObject(const ShaderOffset& offset)
     {

@@ -343,10 +343,6 @@ struct DeviceExtraOptions
     bool enableRayTracingValidation = false;
     bool enableAftermath = false;
 
-    ResourceStateMode resourceStateMode = ResourceStateMode::Automatic;
-    bool validateResourceStates = false;
-
-
     AftermathFlags aftermathFlags = AftermathFlags::Default;
 };
 

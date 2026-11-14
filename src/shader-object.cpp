@@ -3,7 +3,6 @@
 #include "rhi-shared.h"
 
 #include <atomic>
-#include <algorithm>
 
 namespace rhi {
 
@@ -96,7 +95,6 @@ Result ShaderObject::setData(const ShaderOffset& offset, const void* data, Size 
         dataSize = availableSize - dataOffset;
     }
 
-    clearDescriptorOwners(dataOffset, dataSize);
     ::memcpy(dest + dataOffset, data, dataSize);
 
     incrementVersion();
@@ -120,7 +118,6 @@ Result ShaderObject::reserveData(const ShaderOffset& offset, Size size, void** o
         return SLANG_E_INVALID_ARG;
     }
 
-    clearDescriptorOwners(dataOffset, dataSize);
     *outData = dest + dataOffset;
 
     incrementVersion();
@@ -392,104 +389,20 @@ Result ShaderObject::setBinding(const ShaderOffset& offset, const Binding& bindi
     return SLANG_OK;
 }
 
-void ShaderObject::clearDescriptorOwners(size_t offset, size_t size)
-{
-    if (!size)
-        return;
-    m_descriptorOwners.erase(
-        std::remove_if(m_descriptorOwners.begin(), m_descriptorOwners.end(), [&](const DescriptorOwner& entry)
-        {
-            return entry.uniformOffset >= offset ? entry.uniformOffset - offset < size
-                                                 : offset - entry.uniformOffset < sizeof(uint64_t);
-        }),
-        m_descriptorOwners.end());
-}
-
-static ResourceState descriptorAccessState(DescriptorHandleAccess access)
-{
-    return access == DescriptorHandleAccess::ReadWrite ? ResourceState::UnorderedAccess
-                                                       : ResourceState::ShaderResource;
-}
-
-Result ShaderObject::writeDescriptorHandle(
-    const ShaderOffset& offset,
-    const DescriptorHandle& handle,
-    Resource* owner,
-    ResourceState requiredState
-)
+Result ShaderObject::setDescriptorHandle(const ShaderOffset& offset, const DescriptorHandle& handle)
 {
     SLANG_RETURN_ON_FAIL(checkFinalized());
 
-    if (offset.uniformOffset > m_data.size() || m_data.size() - offset.uniformOffset < sizeof(uint64_t))
+    if (offset.uniformOffset + 8 > m_data.size())
     {
         return SLANG_E_INVALID_ARG;
     }
 
-    clearDescriptorOwners(offset.uniformOffset, sizeof(uint64_t));
-    if (owner)
-        m_descriptorOwners.push_back({offset.uniformOffset, owner, requiredState});
-    ::memcpy(m_data.data() + offset.uniformOffset, &handle.value, sizeof(uint64_t));
+    ::memcpy(m_data.data() + offset.uniformOffset, &handle.value, 8);
 
     incrementVersion();
 
     return SLANG_OK;
-}
-
-Result ShaderObject::setDescriptorHandle(const ShaderOffset& offset, const DescriptorHandle& handle)
-{
-    return writeDescriptorHandle(offset, handle, nullptr, ResourceState::Undefined);
-}
-
-Result ShaderObject::setDescriptorHandle(
-    const ShaderOffset& offset,
-    ITextureView* textureView,
-    DescriptorHandleAccess access
-)
-{
-    if (!textureView)
-        return SLANG_E_INVALID_ARG;
-    DescriptorHandle handle;
-    SLANG_RETURN_ON_FAIL(textureView->getDescriptorHandle(access, &handle));
-    return writeDescriptorHandle(offset, handle, checked_cast<TextureView*>(textureView), descriptorAccessState(access));
-}
-
-Result ShaderObject::setDescriptorHandle(
-    const ShaderOffset& offset,
-    IBuffer* buffer,
-    DescriptorHandleAccess access,
-    Format format,
-    uint32_t elementStride,
-    BufferRange range
-)
-{
-    if (!buffer)
-        return SLANG_E_INVALID_ARG;
-    DescriptorHandle handle;
-    SLANG_RETURN_ON_FAIL(buffer->getDescriptorHandle(access, format, elementStride, range, &handle));
-    return writeDescriptorHandle(offset, handle, checked_cast<Buffer*>(buffer), descriptorAccessState(access));
-}
-
-Result ShaderObject::setDescriptorHandle(const ShaderOffset& offset, ISampler* sampler)
-{
-    if (!sampler)
-        return SLANG_E_INVALID_ARG;
-    DescriptorHandle handle;
-    SLANG_RETURN_ON_FAIL(sampler->getDescriptorHandle(&handle));
-    return writeDescriptorHandle(offset, handle, checked_cast<Sampler*>(sampler), ResourceState::Undefined);
-}
-
-Result ShaderObject::setDescriptorHandle(const ShaderOffset& offset, IAccelerationStructure* accelerationStructure)
-{
-    if (!accelerationStructure)
-        return SLANG_E_INVALID_ARG;
-    DescriptorHandle handle;
-    SLANG_RETURN_ON_FAIL(accelerationStructure->getDescriptorHandle(&handle));
-    return writeDescriptorHandle(
-        offset,
-        handle,
-        checked_cast<AccelerationStructure*>(accelerationStructure),
-        ResourceState::AccelerationStructureRead
-    );
 }
 
 Result ShaderObject::setSpecializationArgs(
@@ -564,42 +477,6 @@ bool ShaderObject::isFinalized()
     return m_finalized;
 }
 
-Result ShaderObject::reset()
-{
-    SLANG_RETURN_ON_FAIL(checkFinalized());
-
-    incrementVersion();
-
-    m_data.resize(getInitialUniformSize(m_layout));
-    if (m_data.size())
-        ::memset(m_data.data(), 0, m_data.size());
-
-    m_slots.clear();
-    m_slots.resize(m_layout->getSlotCount());
-    m_descriptorOwners.clear();
-
-    m_objects = m_ownedObjects;
-    for (auto& object : m_ownedObjects)
-    {
-        if (object)
-            SLANG_RETURN_ON_FAIL(object->reset());
-    }
-
-    m_userProvidedSpecializationArgs.clear();
-    m_structuredBufferSpecializationArgs.clear();
-    m_specializedLayout = nullptr;
-    m_shaderObjectType = {nullptr, kInvalidComponentID};
-
-    return SLANG_OK;
-}
-
-size_t ShaderObject::getInitialUniformSize(ShaderObjectLayout* layout)
-{
-    if (layout->getContainerType() == ShaderObjectContainerType::ParameterBlock)
-        return layout->getParameterBlockTypeLayout()->getSize();
-    return layout->getUniformBufferSize();
-}
-
 Result ShaderObject::create(
     Device* device,
     ShaderObjectLayout* layout,
@@ -630,7 +507,17 @@ Result ShaderObject::init(ShaderObjectLayout* layout, ShaderProgram* program)
     // uniform data (which includes values from this object and
     // any existential-type sub-objects).
     //
-    size_t uniformSize = getInitialUniformSize(layout);
+    size_t uniformSize = 0;
+    if (layout->getContainerType() == ShaderObjectContainerType::ParameterBlock)
+    {
+        auto parameterBlockTypeLayout = layout->getParameterBlockTypeLayout();
+        uniformSize = parameterBlockTypeLayout->getSize();
+    }
+    else
+    {
+        uniformSize = layout->getUniformBufferSize();
+    }
+
     if (uniformSize)
     {
         m_data.resize(uniformSize);
@@ -672,7 +559,6 @@ Result ShaderObject::init(ShaderObjectLayout* layout, ShaderProgram* program)
             m_objects[bindingRange.subObjectIndex + i] = subObject;
         }
     }
-    m_ownedObjects = m_objects;
 
     m_device->customizeShaderObject(this);
 
@@ -958,14 +844,6 @@ Result RootShaderObject::init(ShaderProgram* program)
         SLANG_RETURN_ON_FAIL(ShaderObject::create(m_device, entryPointLayout, entryPoint.writeRef(), program));
         m_entryPoints.push_back(entryPoint);
     }
-    return SLANG_OK;
-}
-
-Result RootShaderObject::reset()
-{
-    SLANG_RETURN_ON_FAIL(ShaderObject::reset());
-    for (auto& entryPoint : m_entryPoints)
-        SLANG_RETURN_ON_FAIL(entryPoint->reset());
     return SLANG_OK;
 }
 

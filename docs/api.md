@@ -126,7 +126,6 @@
 | `setConstantBufferOverride` | :x: | :x:  | :x:   | :x:   | :x:    | :x:   | :x:  |
 | `finalize`                  | yes | yes  | yes   | yes   | yes    | yes   | yes  |
 | `isFinalized`               | yes | yes  | yes   | yes   | yes    | yes   | yes  |
-| `reset`                     | :x: | :x:  | :x:   | yes   | yes    | :x:   | :x:  |
 
 ## `ISyntheticShaderProgram` interface
 

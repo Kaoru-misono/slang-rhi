@@ -102,7 +102,7 @@ public:
         bool isSpecializable;
 
         /// The sub-object is a push-constant block that holds only plain data and descriptor handles. Every bind
-        /// copies its bytes and records the resources its handles name, so it belongs to no binding table.
+        /// copies its bytes, so it belongs to no binding table.
         bool isPushConstantBlock = false;
     };
 
@@ -237,18 +237,8 @@ public:
     RefPtr<ShaderObjectLayout> m_specializedLayout;
 
     short_vector<ResourceSlot> m_slots;
-    struct DescriptorOwner
-    {
-        size_t uniformOffset;
-        InternalRefPtr<Resource> resource;
-        // The state the handle's access needs; Undefined for samplers, which carry no tracked state.
-        ResourceState requiredState;
-    };
-    std::vector<DescriptorOwner> m_descriptorOwners;
     short_vector<uint8_t> m_data;
     short_vector<InternalRefPtr<ShaderObject>> m_objects;
-    // The sub-objects created by `init`; `reset` restores `m_objects` to them.
-    short_vector<InternalRefPtr<ShaderObject>> m_ownedObjects;
     short_vector<RefPtr<ExtendedShaderObjectTypeListObject>> m_userProvidedSpecializationArgs;
 
     // Specialization args for a StructuredBuffer object.
@@ -290,24 +280,6 @@ public:
         const ShaderOffset& offset,
         const DescriptorHandle& handle
     ) override;
-    virtual SLANG_NO_THROW Result SLANG_MCALL setDescriptorHandle(
-        const ShaderOffset& offset,
-        ITextureView* textureView,
-        DescriptorHandleAccess access
-    ) override;
-    virtual SLANG_NO_THROW Result SLANG_MCALL setDescriptorHandle(
-        const ShaderOffset& offset,
-        IBuffer* buffer,
-        DescriptorHandleAccess access,
-        Format format,
-        uint32_t elementStride,
-        BufferRange range
-    ) override;
-    virtual SLANG_NO_THROW Result SLANG_MCALL setDescriptorHandle(const ShaderOffset& offset, ISampler* sampler) override;
-    virtual SLANG_NO_THROW Result SLANG_MCALL setDescriptorHandle(
-        const ShaderOffset& offset,
-        IAccelerationStructure* accelerationStructure
-    ) override;
     virtual SLANG_NO_THROW Result SLANG_MCALL setSpecializationArgs(
         const ShaderOffset& offset,
         const slang::SpecializationArg* args,
@@ -318,7 +290,6 @@ public:
     virtual SLANG_NO_THROW Result SLANG_MCALL setConstantBufferOverride(IBuffer* outBuffer) override;
     virtual SLANG_NO_THROW Result SLANG_MCALL finalize() override;
     virtual SLANG_NO_THROW bool SLANG_MCALL isFinalized() override;
-    virtual SLANG_NO_THROW Result SLANG_MCALL reset() override;
 
 public:
     static Result create(
@@ -343,16 +314,7 @@ public:
     );
 
 protected:
-    static size_t getInitialUniformSize(ShaderObjectLayout* layout);
-
     inline void incrementVersion() { m_version++; }
-    void clearDescriptorOwners(size_t offset, size_t size);
-    Result writeDescriptorHandle(
-        const ShaderOffset& offset,
-        const DescriptorHandle& handle,
-        Resource* owner,
-        ResourceState requiredState
-    );
 
     inline Result checkFinalized() { return m_finalized ? SLANG_FAIL : SLANG_OK; }
 
@@ -391,7 +353,6 @@ public:
     // IShaderObject implementation
     virtual SLANG_NO_THROW uint32_t SLANG_MCALL getEntryPointCount() override;
     virtual SLANG_NO_THROW Result SLANG_MCALL getEntryPoint(uint32_t index, IShaderObject** outEntryPoint) override;
-    virtual SLANG_NO_THROW Result SLANG_MCALL reset() override;
 
 public:
     static Result create(Device* device, ShaderProgram* program, RootShaderObject** outRootShaderObject);

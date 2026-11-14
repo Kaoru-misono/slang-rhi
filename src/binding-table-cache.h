@@ -70,11 +70,6 @@ struct BindingClosureKey
             objects.push_back(node ? ShaderObjectID{node->m_uid, node->m_version} : ShaderObjectID{0, 0});
             if (node)
             {
-                for (const auto& owner : node->m_descriptorOwners)
-                {
-                    retained.emplace_back(owner.resource);
-                    SLANG_RHI_BINDING_COUNT(trackedRefs, 1);
-                }
                 for (const auto& slot : node->m_slots)
                 {
                     if (slot.resource)

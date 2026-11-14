@@ -320,131 +320,6 @@ GPU_TEST_CASE("push-constant-block-ray-tracing", D3D12 | Vulkan)
     compareComputeResult(device, resources.output, std::array<uint32_t, 2>{22, 29});
 }
 
-// No cached table covers the block, so every bind checks the state of the resources its handles name.
-GPU_TEST_CASE("push-constant-block-handle-states", D3D12 | Vulkan)
-{
-    ErrorRecorder recorder;
-    DeviceExtraOptions options;
-    options.resourceStateMode = ResourceStateMode::Explicit;
-    options.validateResourceStates = true;
-    options.debugCallback = &recorder;
-    device = createTestingDevice(ctx, ctx->deviceType, false, &options);
-    REQUIRE(device != nullptr);
-    if (!device->hasFeature(Feature::Bindless))
-        SKIP("bindless unsupported");
-
-    ComPtr<IShaderProgram> program;
-    REQUIRE_CALL(loadComputeProgramFromSource(
-        device,
-        R"(
-import push_constants;
-struct Dispatch { RWStructuredBuffer<uint>.Handle output; uint value; };
-[PushConstants] [[vk::push_constant]] ConstantBuffer<Dispatch> dispatch;
-[shader("compute")][numthreads(1, 1, 1)]
-void main()
-{
-    dispatch.output[0] = dispatch.value;
-}
-)",
-        program.writeRef()
-    ));
-    checkBlockLayout(device, program, 12);
-    auto pipeline = device->createComputePipeline({.program = program});
-    REQUIRE(pipeline != nullptr);
-    auto root = device->createRootShaderObject(program);
-    REQUIRE(root != nullptr);
-    BufferDesc outputDesc{};
-    outputDesc.size = sizeof(uint32_t);
-    outputDesc.elementSize = sizeof(uint32_t);
-    outputDesc.usage = BufferUsage::UnorderedAccess | BufferUsage::CopySource;
-    outputDesc.label = "BlockHandleOutput";
-    auto output = device->createBuffer(outputDesc);
-    REQUIRE(output != nullptr);
-    ShaderCursor block = ShaderCursor(root)["dispatch"];
-    REQUIRE_CALL(block["output"]
-                     .setDescriptorHandle(output, DescriptorHandleAccess::ReadWrite, Format::Undefined, 0, kEntireBuffer));
-    REQUIRE_CALL(block["value"].setData(uint32_t(7)));
-
-    auto queue = device->getQueue(QueueType::Graphics);
-    auto dispatchTwice = [&](ResourceState declared)
-    {
-        auto encoder = queue->createCommandEncoder();
-        encoder->setBufferState(output, declared);
-        auto* pass = encoder->beginComputePass();
-        pass->bindPipeline(pipeline, root);
-        // The second dispatch finds the root table cached.
-        pass->dispatchCompute(1, 1, 1);
-        pass->dispatchCompute(1, 1, 1);
-        pass->end();
-        REQUIRE_CALL(queue->submit(encoder->finish()));
-        REQUIRE_CALL(queue->waitOnHost());
-    };
-
-    dispatchTwice(ResourceState::UnorderedAccess);
-    CHECK(recorder.errors.empty());
-
-    dispatchTwice(ResourceState::ShaderResource);
-    CHECK(recorder.errors.size() == 2);
-    CHECK(recorder.count("BlockHandleOutput") == 2);
-    CHECK(recorder.count(enumToString(ResourceState::UnorderedAccess)) == 2);
-}
-
-// A resource written into the block may lose its last caller reference before the commands run.
-GPU_TEST_CASE("push-constant-block-handle-lifetime", D3D12 | Vulkan)
-{
-    if (!device->hasFeature(Feature::Bindless))
-        SKIP("bindless unsupported");
-    ComPtr<IShaderProgram> program;
-    REQUIRE_CALL(loadComputeProgramFromSource(
-        device,
-        R"(
-import push_constants;
-struct Dispatch
-{
-    StructuredBuffer<uint>.Handle input;
-    RWStructuredBuffer<uint>.Handle output;
-    uint index;
-};
-[PushConstants] [[vk::push_constant]] ConstantBuffer<Dispatch> dispatch;
-[shader("compute")][numthreads(1, 1, 1)]
-void main()
-{
-    dispatch.output[dispatch.index] = dispatch.input[0] + dispatch.index;
-}
-)",
-        program.writeRef()
-    ));
-    checkBlockLayout(device, program, 20);
-    auto pipeline = device->createComputePipeline({.program = program});
-    REQUIRE(pipeline);
-    auto output = createUintBuffer(device, BufferUsage::UnorderedAccess, {0, 0});
-    auto root = device->createRootShaderObject(program);
-    REQUIRE(root);
-    ShaderCursor block = ShaderCursor(root)["dispatch"];
-    REQUIRE_CALL(block["output"]
-                     .setDescriptorHandle(output, DescriptorHandleAccess::ReadWrite, Format::Undefined, 0, kEntireBuffer));
-
-    auto queue = device->getQueue(QueueType::Graphics);
-    auto encoder = queue->createCommandEncoder();
-    auto* pass = encoder->beginComputePass();
-    pass->bindPipeline(pipeline, root);
-    for (uint32_t index = 0; index < 2; ++index)
-    {
-        auto input = createUintBuffer(device, BufferUsage::ShaderResource, {40 + index * 10});
-        REQUIRE_CALL(block["input"]
-                         .setDescriptorHandle(input, DescriptorHandleAccess::Read, Format::Undefined, 0, kEntireBuffer));
-        REQUIRE_CALL(block["index"].setData(index));
-        pass->dispatchCompute(1, 1, 1);
-    }
-    pass->end();
-    root.setNull();
-    auto commands = encoder->finish();
-    REQUIRE(commands);
-    REQUIRE_CALL(queue->submit(commands));
-    REQUIRE_CALL(queue->waitOnHost());
-    compareComputeResult(device, output, std::array<uint32_t, 2>{40, 51});
-}
-
 GPU_TEST_CASE("push-constant-block-acceleration-structure", D3D12 | Vulkan)
 {
     if (!device->hasFeature(Feature::Bindless) || !device->hasFeature(Feature::RayQuery))
@@ -486,15 +361,22 @@ void main()
     auto pipeline = device->createComputePipeline({.program = program});
     REQUIRE(pipeline);
     auto result = createUintBuffer(device, BufferUsage::UnorderedAccess, {0});
+    DescriptorHandle sceneHandle;
+    REQUIRE_CALL(tlas.tlas->getDescriptorHandle(&sceneHandle));
+    DescriptorHandle resultHandle;
+    REQUIRE_CALL(
+        result->getDescriptorHandle(DescriptorHandleAccess::ReadWrite, Format::Undefined, kEntireBuffer, &resultHandle)
+    );
 
     auto encoder = queue->createCommandEncoder();
+    // A descriptor handle carries no state, so the caller puts the buffer in the state the shader needs.
+    encoder->setBufferState(result, ResourceState::UnorderedAccess);
     auto pass = encoder->beginComputePass();
     auto root = pass->bindPipeline(pipeline);
     REQUIRE(root);
     ShaderCursor block = ShaderCursor(root)["query"];
-    REQUIRE_CALL(block["scene"].setDescriptorHandle(tlas.tlas.get()));
-    REQUIRE_CALL(block["result"]
-                     .setDescriptorHandle(result, DescriptorHandleAccess::ReadWrite, Format::Undefined, 0, kEntireBuffer));
+    REQUIRE_CALL(block["scene"].setDescriptorHandle(sceneHandle));
+    REQUIRE_CALL(block["result"].setDescriptorHandle(resultHandle));
     pass->dispatchCompute(1, 1, 1);
     pass->end();
     submit(device, encoder);
@@ -531,11 +413,14 @@ void main()
     float initial = 1.f;
     auto output = device->createBuffer(desc, &initial);
     REQUIRE(output);
+    DescriptorHandle outputHandle;
+    REQUIRE_CALL(
+        output->getDescriptorHandle(DescriptorHandleAccess::ReadWrite, Format::Undefined, kEntireBuffer, &outputHandle)
+    );
     auto encoder = device->getQueue(QueueType::Graphics)->createCommandEncoder();
     auto pass = encoder->beginComputePass();
     auto root = pass->bindPipeline(pipeline);
-    REQUIRE_CALL(ShaderCursor(root)["root"]["output"]
-                     .setDescriptorHandle(output, DescriptorHandleAccess::ReadWrite, Format::Undefined, 0, kEntireBuffer));
+    REQUIRE_CALL(ShaderCursor(root)["root"]["output"].setDescriptorHandle(outputHandle));
     pass->dispatchCompute(1, 1, 1);
     pass->end();
     submit(device, encoder);

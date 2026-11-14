@@ -167,53 +167,6 @@ Result DebugShaderObject::setDescriptorHandle(const ShaderOffset& offset, const 
     return baseObject->setDescriptorHandle(offset, handle);
 }
 
-Result DebugShaderObject::setDescriptorHandle(
-    const ShaderOffset& offset,
-    ITextureView* textureView,
-    DescriptorHandleAccess access
-)
-{
-    SLANG_RHI_DEBUG_API(IShaderObject, setDescriptorHandle);
-
-    SLANG_RETURN_ON_FAIL(checkNotFinalized());
-
-    return baseObject->setDescriptorHandle(offset, textureView, access);
-}
-
-Result DebugShaderObject::setDescriptorHandle(
-    const ShaderOffset& offset,
-    IBuffer* buffer,
-    DescriptorHandleAccess access,
-    Format format,
-    uint32_t elementStride,
-    BufferRange range
-)
-{
-    SLANG_RHI_DEBUG_API(IShaderObject, setDescriptorHandle);
-
-    SLANG_RETURN_ON_FAIL(checkNotFinalized());
-
-    return baseObject->setDescriptorHandle(offset, buffer, access, format, elementStride, range);
-}
-
-Result DebugShaderObject::setDescriptorHandle(const ShaderOffset& offset, ISampler* sampler)
-{
-    SLANG_RHI_DEBUG_API(IShaderObject, setDescriptorHandle);
-
-    SLANG_RETURN_ON_FAIL(checkNotFinalized());
-
-    return baseObject->setDescriptorHandle(offset, sampler);
-}
-
-Result DebugShaderObject::setDescriptorHandle(const ShaderOffset& offset, IAccelerationStructure* accelerationStructure)
-{
-    SLANG_RHI_DEBUG_API(IShaderObject, setDescriptorHandle);
-
-    SLANG_RETURN_ON_FAIL(checkNotFinalized());
-
-    return baseObject->setDescriptorHandle(offset, accelerationStructure);
-}
-
 Result DebugShaderObject::setSpecializationArgs(
     const ShaderOffset& offset,
     const slang::SpecializationArg* args,
@@ -275,20 +228,6 @@ bool DebugShaderObject::isFinalized()
     return baseObject->isFinalized();
 }
 
-Result DebugShaderObject::reset()
-{
-    SLANG_RHI_DEBUG_API(IShaderObject, reset);
-
-    SLANG_RETURN_ON_FAIL(checkNotFinalized());
-
-    SLANG_RETURN_ON_FAIL(baseObject->reset());
-    // Cached child wrappers hold the objects set before the reset; drop them so they are released.
-    m_objects.clear();
-    for (auto& entryPoint : m_entryPoints)
-        entryPoint->m_objects.clear();
-    return SLANG_OK;
-}
-
 void DebugShaderObject::checkCompleteness()
 {
     // TODO(shaderobject): Implement better validation for bindings but make that optional as it's expensive.
@@ -343,7 +282,7 @@ Result DebugRootShaderObject::setSpecializationArgs(
     return baseObject->setSpecializationArgs(offset, args, count);
 }
 
-void DebugRootShaderObject::detachBaseObject()
+void DebugRootShaderObject::reset()
 {
     m_entryPoints.clear();
     m_objects.clear();
