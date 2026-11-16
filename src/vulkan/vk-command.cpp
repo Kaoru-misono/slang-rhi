@@ -1004,7 +1004,10 @@ void CommandRecorder::cmdSetRenderState(const commands::SetRenderState& cmd)
             dst.minDepth = src.minZ;
             dst.maxDepth = src.maxZ;
         }
-        api.vkCmdSetViewport(m_cmdBuffer, 0, state.viewportCount, viewports);
+        if (m_device->m_hasExtendedDynamicState)
+            api.vkCmdSetViewportWithCountEXT(m_cmdBuffer, state.viewportCount, viewports);
+        else
+            api.vkCmdSetViewport(m_cmdBuffer, 0, state.viewportCount, viewports);
     }
 
     if (updateScissorRects)
@@ -1019,7 +1022,10 @@ void CommandRecorder::cmdSetRenderState(const commands::SetRenderState& cmd)
             dst.extent.width = src.maxX - src.minX;
             dst.extent.height = src.maxY - src.minY;
         }
-        api.vkCmdSetScissor(m_cmdBuffer, 0, state.scissorRectCount, scissorRects);
+        if (m_device->m_hasExtendedDynamicState)
+            api.vkCmdSetScissorWithCountEXT(m_cmdBuffer, state.scissorRectCount, scissorRects);
+        else
+            api.vkCmdSetScissor(m_cmdBuffer, 0, state.scissorRectCount, scissorRects);
     }
 
     m_renderStateValid = true;
