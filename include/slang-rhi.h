@@ -1115,6 +1115,13 @@ struct TextureDesc
     SharingMode sharingMode = SharingMode::Exclusive;
     TextureUsage usage = TextureUsage::None;
     ResourceState defaultState = ResourceState::Undefined;
+    /// Skip the transition to the default state at creation; the first command buffer that uses the texture starts
+    /// it from an undefined state. Contents are undefined until written. That command buffer, in recording order,
+    /// must be submitted before any other use, and no shader may read the texture before it. D3D12 creates the
+    /// texture in COMMON, so that command buffer may run on a transfer queue; the queue that uses it next acquires it
+    /// (`acquireTextureFromQueue`), which on D3D12 transitions it out of COMMON.
+    /// Creation fails with SLANG_E_INVALID_ARG when combined with initial data or a heap.
+    bool deferInitialTransition = false;
 
     const ClearValue* optimalClearValue = nullptr;
 
@@ -3119,7 +3126,8 @@ public:
     acquireBufferFromQueue(IBuffer* buffer, ResourceState desiredState, QueueType srcQueue) = 0;
 
     /// Takes ownership of a texture subresource range from `srcQueue`, which must have released it
-    /// first. See `acquireBufferFromQueue` for the pairing rules.
+    /// first. See `acquireBufferFromQueue` for the pairing rules. On D3D12, a texture acquired from
+    /// the transfer queue is transitioned from COMMON, where a copy queue leaves every texture it uses.
     virtual SLANG_NO_THROW void SLANG_MCALL acquireTextureFromQueue(
         ITexture* texture,
         SubresourceRange subresourceRange,

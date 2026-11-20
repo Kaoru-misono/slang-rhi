@@ -44,6 +44,56 @@ GPU_TEST_CASE("cmd-upload-texture-simple", D3D12 | Vulkan | Metal | CUDA | WGPU)
     );
 }
 
+GPU_TEST_CASE("cmd-upload-texture-deferred-initial-transition", D3D12 | Vulkan)
+{
+    TextureDesc desc = {};
+    desc.type = TextureType::Texture2D;
+    desc.size = {33, 17, 1};
+    desc.mipCount = kAllMips;
+    desc.format = Format::RGBA8Unorm;
+    desc.usage = TextureUsage::ShaderResource;
+    desc.defaultState = ResourceState::ShaderResource;
+    desc.deferInitialTransition = true;
+
+    TextureData data;
+    data.init(device, desc, TextureInitMode::Random);
+
+    ComPtr<ITexture> texture;
+    CHECK(device->createTexture(data.desc, data.subresourceData.data(), texture.writeRef()) == SLANG_E_INVALID_ARG);
+
+    auto graphicsQueue = device->getQueue(QueueType::Graphics);
+    auto transferQueue = device->getQueue(QueueType::Transfer);
+    for (ICommandQueue* uploadQueue : {graphicsQueue.get(), transferQueue.get()})
+    {
+        const bool handOver = uploadQueue == transferQueue.get();
+        CAPTURE(handOver);
+        REQUIRE_CALL(device->createTexture(data.desc, nullptr, texture.writeRef()));
+
+        auto uploadEncoder = uploadQueue->createCommandEncoder();
+        uploadEncoder->uploadTextureData(
+            texture,
+            {0, 1, 0, data.desc.mipCount},
+            {0, 0, 0},
+            Extent3D::kWholeTexture,
+            data.subresourceData.data(),
+            data.subresourceData.size()
+        );
+        if (handOver)
+            uploadEncoder->releaseTextureForQueue(texture, kEntireTexture, desc.defaultState, QueueType::Graphics);
+        REQUIRE_CALL(uploadQueue->submit(uploadEncoder->finish()));
+        REQUIRE_CALL(uploadQueue->waitOnHost());
+
+        if (handOver)
+        {
+            auto acquireEncoder = graphicsQueue->createCommandEncoder();
+            acquireEncoder->acquireTextureFromQueue(texture, kEntireTexture, desc.defaultState, QueueType::Transfer);
+            REQUIRE_CALL(graphicsQueue->submit(acquireEncoder->finish()));
+        }
+
+        data.checkEqual(texture);
+    }
+}
+
 GPU_TEST_CASE("cmd-upload-texture-subresource-offset-alignment", D3D12 | Vulkan | Metal | CUDA | WGPU)
 {
     TextureTestOptions options(device);

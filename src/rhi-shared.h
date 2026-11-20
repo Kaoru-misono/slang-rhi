@@ -214,6 +214,8 @@ public:
     StructHolder m_descHolder;
     InternalRefPtr<Sampler> m_sampler;
     NativeHandle m_sharedHandle;
+    // Set by creation that skipped the initial transition; the first command buffer to track the texture clears it.
+    std::atomic<bool> m_initialTransitionPending = false;
 
 protected:
     // Called at the start of each backend destructor, before releasing native storage.

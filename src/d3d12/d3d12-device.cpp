@@ -1575,6 +1575,8 @@ Result DeviceImpl::createTexture(const TextureDesc& desc_, const SubresourceData
     TextureDesc desc = fixupTextureDesc(desc_);
     if (desc.memoryType != MemoryType::DeviceLocal)
         return SLANG_E_NOT_AVAILABLE;
+    if (desc.deferInitialTransition && (initData || desc.heap))
+        return SLANG_E_INVALID_ARG;
     // COMMON is a legal boundary state for graphics, compute and copy queues.
     if (desc.sharingMode == SharingMode::Concurrent)
         desc.defaultState = ResourceState::General;
@@ -1636,15 +1638,18 @@ Result DeviceImpl::createTexture(const TextureDesc& desc_, const SubresourceData
         }
         else
         {
+            // A deferred texture starts in COMMON, the one state a copy queue accepts, and its first command buffer
+            // takes it from there.
             SLANG_RETURN_ON_FAIL(texture->m_resource.initCommitted(
                 m_device,
                 heapProps,
                 flags,
                 resourceDesc,
-                texture->m_defaultState,
+                desc.deferInitialTransition ? D3D12_RESOURCE_STATE_COMMON : texture->m_defaultState,
                 clearValuePtr,
                 m_allocator
             ));
+            texture->m_initialTransitionPending = desc.deferInitialTransition;
         }
 
         if (desc.label)

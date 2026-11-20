@@ -1813,11 +1813,12 @@ void CommandRecorder::cmdAcquireBufferFromQueue(const commands::AcquireBufferFro
 
 void CommandRecorder::cmdAcquireTextureFromQueue(const commands::AcquireTextureFromQueue& cmd)
 {
-    m_stateTracking.setTextureState(
-        checked_cast<TextureImpl*>(cmd.texture),
-        cmd.subresourceRange,
-        cmd.desiredState
-    );
+    TextureImpl* texture = checked_cast<TextureImpl*>(cmd.texture);
+    // A copy queue only accepts textures in COMMON, and the ones it uses decay back there when its command list
+    // completes.
+    if (cmd.srcQueue == QueueType::Transfer)
+        m_stateTracking.resetTextureState(texture);
+    m_stateTracking.setTextureState(texture, cmd.subresourceRange, cmd.desiredState);
 }
 
 void CommandRecorder::cmdPushDebugGroup(const commands::PushDebugGroup& cmd)

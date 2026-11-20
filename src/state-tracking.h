@@ -617,7 +617,8 @@ private:
         auto it = m_textureStates.find(texture);
         if (it != m_textureStates.end())
             return &it->second;
-        m_textureStates[texture] = {texture->m_desc.defaultState};
+        bool initialTransitionPending = texture->m_initialTransitionPending.exchange(false, std::memory_order_relaxed);
+        m_textureStates[texture] = {initialTransitionPending ? ResourceState::Undefined : texture->m_desc.defaultState};
         return &m_textureStates[texture];
     }
 };

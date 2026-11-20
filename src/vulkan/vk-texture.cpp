@@ -345,6 +345,8 @@ Result DeviceImpl::createTexture(const TextureDesc& desc_, const SubresourceData
     TextureDesc desc = fixupTextureDesc(desc_);
     if (desc.sharingMode != SharingMode::Exclusive && desc.sharingMode != SharingMode::Concurrent)
         return SLANG_E_INVALID_ARG;
+    if (desc.deferInitialTransition && (initData || desc.heap))
+        return SLANG_E_INVALID_ARG;
 
     if (desc.heap)
         SLANG_RETURN_ON_FAIL(checkTexturePlacementSupported(desc));
@@ -441,7 +443,11 @@ Result DeviceImpl::createTexture(const TextureDesc& desc_, const SubresourceData
 
     _labelObject((uint64_t)texture->m_image, VK_OBJECT_TYPE_IMAGE, desc.label);
 
-    if (!desc.heap || initData)
+    if (desc.deferInitialTransition)
+    {
+        texture->m_initialTransitionPending = true;
+    }
+    else if (!desc.heap || initData)
     {
         auto defaultLayout = getImageLayoutFromState(desc.defaultState);
         if (defaultLayout != VK_IMAGE_LAYOUT_UNDEFINED)
